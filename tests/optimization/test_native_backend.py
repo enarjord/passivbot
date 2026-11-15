@@ -70,7 +70,12 @@ class FakeService(GpuBacktestService):
         kwargs.pop("interrupt_check")
         kwargs.pop("tuning_mode")
         kwargs.pop("auto_request_capacity")
+        kwargs.pop("auto_batch_size_limit", None)
+        kwargs.pop("max_cohort_width", None)
         super().__init__(**kwargs)
+
+    cohort_width = None
+    accepted_cohort_width = None
 
     def register_dataset(self, dataset_id, dataset):
         assert dataset.candle_coins == ("COIN00", "COIN01", "COIN02")
@@ -214,6 +219,124 @@ def test_native_ask_tell_evolution_records_results_and_resumes_without_cpu(monke
         base.config["optimize"]["iters"] = 12
         execute(base, recorder, checkpoint, resume=True)
         assert len(records) == 12
+
+
+@pytest.mark.parametrize("authored", [False, True])
+def test_cuda_max_widens_search_without_growing_survivors(monkeypatch, tmp_path, authored):
+    import optimization.backends.gpu_backend as backend
+
+    guard_cpu(monkeypatch)
+    phases = []
+    evaluate = backend._Search.evaluate_population
+
+    def observe(self):
+        phases.append((self.state["phase"], len(self.state["population"]), self.session.max_candidates))
+        return evaluate(self)
+
+    monkeypatch.setattr(backend._Search, "evaluate_population", observe)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base.config["optimize"]["iters"] = 21
+        base.config["optimize"]["gpu"].update(tuning_mode="max", batch_size=8)
+        vector = optimize.config_to_individual(base.config, base.bounds, optimization_shape=base.optimization_shape)
+        starts = [vector] if authored else []
+        checkpoint = tmp_path / "checkpoint.pkl"
+        records = []
+        recorder = SimpleNamespace(record=records.append)
+
+        execute(base, recorder, checkpoint, starts=starts)
+        state = load_checkpoint(checkpoint, base.config)
+        assert state["max_search_allocated"] == 21
+        assert len(state["algorithm"].pop) == base.config["optimize"]["population_size"] == 4
+        assert phases[:3] == [("seeds", 8, 8), ("generation", 4, 8), ("generation", 8, 8)]
+        assert phases[3:] == [("generation", 6 if authored else 5, 6 if authored else 5)]
+        assert len(records) == 21 + authored
+        assert len(FakeService.rows) == len(records)
+
+        execute(base, recorder, checkpoint, resume=True)
+        assert len(records) == 21 + authored
+        base.config["optimize"]["iters"] = 20
+        with pytest.raises(ValueError, match="iters below already allocated search attempts"):
+            execute(base, recorder, checkpoint, resume=True)
+        assert len(records) == 21 + authored
+        base.config["optimize"]["iters"] = 24
+        execute(base, recorder, checkpoint, resume=True)
+        assert phases[-1] == ("generation", 3, 3)
+        assert len(records) == 24 + authored
+
+
+def test_cuda_max_resume_keeps_pending_trial_vectors_and_restarts_from_accepted_width(monkeypatch, tmp_path):
+    import optimization.backends.gpu_backend as backend
+    import optimization.gpu.native as native
+
+    guard_cpu(monkeypatch)
+    monkeypatch.setattr(native, "cuda_initial_candidate_width", lambda: 8)
+    requested_baselines = []
+
+    class Service(FakeService):
+        def __init__(self, *, max_cohort_width, **kwargs):
+            requested_baselines.append(max_cohort_width)
+            self.accepted_cohort_width = self.cohort_width = max_cohort_width
+            kwargs["batch_size"] = 8
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(native, "NativeBacktestService", Service)
+    evaluate = backend._Search.evaluate_population
+    cohorts = []
+
+    def observed_population(self):
+        population = self.state["population"].get("X").copy()
+        cohorts.append(population)
+        if len(cohorts) == 3:
+            assert len(population) == 16
+            self.checkpoint(force=True)
+            raise KeyboardInterrupt
+        evaluate(self)
+        if len(cohorts) == 1:
+            self.session.service.accepted_cohort_width = 12
+            self.session.service.cohort_width = 16
+
+    monkeypatch.setattr(backend._Search, "evaluate_population", observed_population)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base.config["optimize"]["iters"] = 40
+        base.config["optimize"]["gpu"].update(tuning_mode="max", batch_size=None)
+        checkpoint = tmp_path / "checkpoint.pkl"
+        records = []
+        recorder = SimpleNamespace(record=records.append)
+
+        with pytest.raises(KeyboardInterrupt):
+            execute(base, recorder, checkpoint)
+        paused = load_checkpoint(checkpoint, base.config)
+        assert paused["phase"] == "generation" and paused["max_search_allocated"] == 24
+        assert paused["max_search_budget"].target_width == 12
+        np.testing.assert_array_equal(paused["population"].get("X"), cohorts[2])
+
+        execute(base, recorder, checkpoint, resume=True)
+        done = load_checkpoint(checkpoint, base.config)
+        assert requested_baselines == [8, 12]
+        np.testing.assert_array_equal(cohorts[3], cohorts[2])
+        assert [len(cohort) for cohort in cohorts[4:]] == [12, 4]
+        assert done["phase"] == "idle" and done["max_search_allocated"] == 40
+        assert done["max_search_budget"].target_width == 12
+        assert len(records) == 40 and len(done["algorithm"].pop) == 4
+
+
+def test_cuda_max_tiny_budget_never_pads_evaluated_parents(monkeypatch, tmp_path):
+    guard_cpu(monkeypatch)
+    with managed_arrays() as manager:
+        base = inputs(manager)
+        base.config["optimize"]["iters"] = 1
+        base.config["optimize"]["gpu"].update(tuning_mode="max", batch_size=8)
+        checkpoint = tmp_path / "checkpoint.pkl"
+        records = []
+        recorder = SimpleNamespace(record=records.append)
+        execute(base, recorder, checkpoint)
+        assert len(records) == len(FakeService.rows) == 1
+        state = load_checkpoint(checkpoint, base.config)
+        assert len(state["algorithm"].pop) == state["max_search_allocated"] == 1
+        execute(base, recorder, checkpoint, resume=True)
+        assert len(records) == 1
 
 
 def test_cohort_diagnostics_exclude_restored_attempts_and_preserve_result_lineage(monkeypatch, tmp_path, caplog):
@@ -557,9 +680,11 @@ def test_normal_window_submits_ready_rows_before_sealing_with_backpressure(monke
         assert load_checkpoint(checkpoint, base.config)["completed"] == 4
 
 
-@pytest.mark.parametrize("seed_count,expected_window", [(12, 12), (1100, 1024)])
+@pytest.mark.parametrize("tuning_mode,seed_count,expected_window", [
+    ("conservative", 12, 12), ("conservative", 1100, 1024), ("max", 1100, 1100),
+])
 def test_seed_admission_uses_available_cohort_on_fresh_and_resumed_runs(
-    monkeypatch, tmp_path, seed_count, expected_window,
+    monkeypatch, tmp_path, tuning_mode, seed_count, expected_window,
 ):
     import optimization.backends.gpu_backend as backend
 
@@ -575,6 +700,7 @@ def test_seed_admission_uses_available_cohort_on_fresh_and_resumed_runs(
 
     with managed_arrays() as manager:
         base = inputs(manager)
+        base.config["optimize"]["gpu"]["tuning_mode"] = tuning_mode
         vector = optimize.config_to_individual(
             base.config, base.bounds, optimization_shape=base.optimization_shape,
         )

@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from .gpu import GPU_SCREENING_DEFAULTS
+from .gpu import GPU_SCREENING_DEFAULTS, GPU_TUNING_DEFAULT
 from .prefilter import PREFILTER_DEFAULTS
 from .optimize_bounds import get_optimize_bounds_defaults
 from .bot_defaults import get_common_bot_defaults
@@ -241,7 +241,7 @@ def _build_template_config():
                     "population_size": 128,
                     "seed": None,
                     "gpu": {
-                        "tuning_mode": "auto",
+                        "tuning_mode": GPU_TUNING_DEFAULT,
                         "batch_size": None,
                         "max_dispatch_candidate_bars": None,
                         "checkpoint_interval_seconds": 5.0,

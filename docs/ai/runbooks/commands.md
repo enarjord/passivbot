@@ -84,7 +84,8 @@ seed/anchor values outside `optimize.bounds` are clamped with aggregated source/
 CPU optimizers evaluate every deduplicated `--start` config with Rust CPU backtests.
 The native GPU optimizer fully evaluates every deduplicated seed through its GPU service
 before population trimming, without CPU validation. Seed evaluations are additional to
-`optimize.iters`; suite scenario screening applies only to later offspring.
+`optimize.iters`. CUDA `max` can add bounded seed mutations or random initial
+candidates within the attempt budget. Suite scenario screening applies only to later offspring.
 Explicitly enabled config prefilters may complete seeds or offspring with penalty-only evaluations
 before replay. See `../../config_prefilter.md`; all checks are disabled by default.
 

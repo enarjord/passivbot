@@ -1,0 +1,44 @@
+"""Nominal search slots for max-mode CUDA cohorts and their checkpoints."""
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class CudaMaxSearchBudget:
+    """Freeze cohort sizing independently of mutable device admission limits.
+
+    The backend owns allocation accounting and persists this plan with its
+    search state. The iteration budget may be extended on resume.
+    """
+
+    population_size: int
+    target_width: int
+
+    def __post_init__(self):
+        if type(self.population_size) is not int or self.population_size < 1:
+            raise ValueError("CUDA max population size must be a positive integer")
+        if type(self.target_width) is not int or self.target_width < 1:
+            raise ValueError("CUDA max cohort target width must be a positive integer")
+
+    @property
+    def cohort_width(self) -> int:
+        return max(self.population_size, self.target_width)
+
+    @staticmethod
+    def remaining(*, iters: int, allocated: int) -> int:
+        if type(iters) is not int or iters < 1:
+            raise ValueError("optimize.iters must be a positive integer in CUDA max mode")
+        if type(allocated) is not int or allocated < 0:
+            raise ValueError("allocated CUDA max search slots must be a nonnegative integer")
+        return max(0, iters - allocated)
+
+    def bootstrap_size(self, *, iters: int, authored_seed_count: int, allocated: int = 0) -> int:
+        """Return additional generated slots, keeping all authored seeds free."""
+        if type(authored_seed_count) is not int or authored_seed_count < 0:
+            raise ValueError("authored CUDA max seed count must be a nonnegative integer")
+        return min(self.remaining(iters=iters, allocated=allocated),
+                   max(0, self.cohort_width - authored_seed_count))
+
+    def offspring_size(self, *, iters: int, allocated: int) -> int:
+        """Reserve attempts before duplicate elimination and scenario screening."""
+        return min(self.cohort_width, self.remaining(iters=iters, allocated=allocated))

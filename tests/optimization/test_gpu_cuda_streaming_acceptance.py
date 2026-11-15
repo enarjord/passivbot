@@ -14,6 +14,22 @@ from test_gpu_metal_tick_windows import (
 )
 
 
+def _cuda_tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale", *, bars=2737):
+    # A tail longer than one day forces the delisted coin's remaining positions
+    # closed on its last valid candle. Keep the original non-hour-aligned start.
+    return _tick_window_fixture(sides, hsl, strategy_kind, bars=bars)
+
+
+def test_cuda_tick_window_fixture_has_a_delisting_tail():
+    _config, candles, markets, _btc, timestamps = _cuda_tick_window_fixture("both", "coin")
+    market = markets["COIN01"]
+    assert market["first_valid_index"] == 103 and np.isnan(candles[:103, 1]).all()
+    last = market["last_valid_index"]
+    assert np.isfinite(candles[last, 1]).all() and np.isnan(candles[last + 1:, 1]).all()
+    assert int(timestamps[-1] - timestamps[last]) > 24 * 60 * 60_000
+    assert int(timestamps[0] // 60_000 % 60) == 23
+
+
 @pytest.fixture
 def cuda_streaming_runtime(monkeypatch):
     torch = pytest.importorskip("torch")
@@ -34,6 +50,80 @@ def cuda_streaming_runtime(monkeypatch):
     return torch
 
 
+@pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
+@pytest.mark.parametrize("sides,hsl,block_size", [
+    ("long", "disabled", 1),
+    ("short", "coin", 1),
+    ("both", "portfolio", 1),
+    ("both", "portfolio", 8),
+])
+def test_cuda_global_replay_preserves_candidate_packets_and_reuse(
+    cuda_streaming_runtime, monkeypatch, strategy, sides, hsl, block_size,
+):
+    from optimization.gpu import mps_kernel, residency, service
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import CudaBacktestService
+    from tools.gpu_parity import _native_dataset
+
+    torch = cuda_streaming_runtime
+    construct_runner = service.SharedAccountReplay._construct_runner
+    run = mps_kernel._MulticoinReplayRunner.run
+    use_global = False
+    captures = []
+
+    def construct(replay, *args, **kwargs):
+        runner = construct_runner(replay, *args, **kwargs)
+        assert runner.cuda_global_replay_side_state
+        runner.cuda_global_replay_side_state = use_global
+        runner.cuda_global_replay_block_size = block_size
+        return runner
+
+    def capture(runner, *args, **kwargs):
+        assert runner.bars.device.type == "cuda"
+        raw = run(runner, *args, **kwargs)
+        assert runner._last_temporal_dispatch["dispatch_count"] > 1
+        assert runner._last_temporal_dispatch["threads_per_threadgroup"] == (block_size if use_global else 1)
+        captures.append({key: (value.detach().cpu().clone() if isinstance(value, torch.Tensor)
+                               else deepcopy(value)) for key, value in raw.items()})
+        return raw
+
+    monkeypatch.setattr(residency, "prefer_streamed_ticks", lambda *args, **kwargs: False)
+    monkeypatch.setattr(service.SharedAccountReplay, "_construct_runner", construct)
+    monkeypatch.setattr(mps_kernel._MulticoinReplayRunner, "run", capture)
+    inputs = _cuda_tick_window_fixture(sides, hsl, strategy)
+    width = 9  # Exercise more than one block and a partially populated block.
+    sides_count = 2 if sides == "both" else 1
+    param_side = "short" if sides == "short" else "long"
+    quantity = "base_qty_fraction" if strategy == "ema_anchor" else "entry_initial_qty_fraction"
+    results = []
+    with _native_dataset(inputs, "binance", TICK_WINDOW_METRICS) as dataset:
+        for use_global in (False, True):
+            with CudaBacktestService(
+                batch_size=width, max_pending=width, tuning_mode="max", max_batch_delay=1,
+                max_dispatch_candidate_bars=61 * width * 2 * sides_count,
+            ) as worker:
+                worker.register_dataset("market", dataset)
+                for cycle in range(2):
+                    requests = [BacktestRequest(
+                        f"{cycle}-{i}", "market", {f"{param_side}_{quantity}": .04 + i * .004},
+                    ) for i in range(width)]
+                    futures = [worker.submit(request) for request in requests]
+                    outcomes = [future.result(timeout=180) for future in futures]
+                    assert [(row.request_id, row.dataset_id) for row in outcomes] == [
+                        (request.request_id, request.dataset_id) for request in requests
+                    ]
+                    results.append([(row.metrics, row.liquidated, row.metadata) for row in outcomes])
+
+    assert len(captures) == 4
+    for raw in captures[1:]:
+        _assert_tick_window_output_exact(torch, captures[0], raw)
+        for key, value in captures[0].items():
+            if isinstance(value, torch.Tensor):
+                assert value.contiguous().numpy().tobytes() == raw[key].contiguous().numpy().tobytes(), key
+    for other in results[1:]:
+        assert other == results[0]
+
+
 @pytest.mark.parametrize("strategy,sides,hsl,chunk_bars", [
     ("trailing_martingale", "long", "disabled", 17),
     ("trailing_martingale", "short", "disabled", 61),
@@ -46,8 +136,9 @@ def cuda_streaming_runtime(monkeypatch):
     ("ema_anchor", "short", "coin", 61),
     ("ema_anchor", "both", "portfolio", 17),
 ])
+@pytest.mark.parametrize("tuning_mode", ["off", "max"])
 def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
-    cuda_streaming_runtime, monkeypatch, strategy, sides, hsl, chunk_bars,
+    cuda_streaming_runtime, monkeypatch, strategy, sides, hsl, chunk_bars, tuning_mode,
 ):
     from optimization.gpu import mps_kernel, residency, service as replay_module
     from optimization.gpu.executor import BacktestRequest
@@ -55,7 +146,7 @@ def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
     from tools.gpu_parity import _native_dataset
 
     torch = cuda_streaming_runtime
-    inputs = _tick_window_fixture(sides, hsl, strategy)
+    inputs = _cuda_tick_window_fixture(sides, hsl, strategy)
     assert int(inputs[4][0] // 60_000 % 60) != 0
     snapshots = [array.copy() for array in (inputs[1], inputs[3], inputs[4])]
     original_prepare = replay_module._prepared_multicoin_data
@@ -100,7 +191,7 @@ def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
         for streamed in (False, True):
             mode["streamed"] = streamed
             with CudaBacktestService(
-                batch_size=1, max_pending=1, tuning_mode="off",
+                batch_size=1, max_pending=1, tuning_mode=tuning_mode,
                 max_dispatch_candidate_bars=chunk_bars * 2 * sides_count,
             ) as worker:
                 worker.register_dataset("market", dataset)
@@ -133,8 +224,75 @@ def test_cuda_streamed_ticks_and_compact_hours_preserve_every_output_and_reset(
     assert all(not Path(directory).exists() for directory in spill_directories)
 
 
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("hsl", ["disabled", "coin"])
+def test_cuda_max_pressure_reuses_dense_packing_and_preserves_replay(
+    cuda_streaming_runtime, monkeypatch, strategy, hsl,
+):
+    from optimization.gpu import mps_kernel, residency, service
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import CudaBacktestService
+    from tools.gpu_parity import _native_dataset
+
+    torch = cuda_streaming_runtime
+    original_mem_info = torch.cuda.mem_get_info
+    original_prepare = service._prepared_multicoin_data
+    original_run = mps_kernel._MulticoinReplayRunner.run
+    captures, packed = [], []
+    pressure = False
+    pressure_reads = 0
+
+    def mem_get_info(*args, **kwargs):
+        nonlocal pressure_reads
+        free, total = original_mem_info(*args, **kwargs)
+        if pressure and len(captures) == 1:
+            owner = residency.current_cuda_residency()
+            entry = owner._active
+            if entry is not None and not entry["data"]["stream_tick_inputs"]:
+                pressure_reads += 1
+                return 0, total
+        return free, total
+
+    def prepare(*args, **kwargs):
+        data = original_prepare(*args, **kwargs)
+        packed.append(data)
+        assert not data["stream_tick_inputs"] and not data["compact_hourly_ranges"]
+        return data
+
+    def capture(runner, *args, **kwargs):
+        raw = original_run(runner, *args, **kwargs)
+        captures.append((bool(runner._streamed_tick_paths), runner.compact_hourly_ranges,
+                         {key: (value.detach().cpu().clone() if isinstance(value, torch.Tensor)
+                                else deepcopy(value)) for key, value in raw.items()}))
+        return raw
+
+    monkeypatch.setattr(torch.cuda, "mem_get_info", mem_get_info)
+    monkeypatch.setattr(residency, "prefer_streamed_ticks", lambda *args, **kwargs: False)
+    monkeypatch.setattr(service, "_prepared_multicoin_data", prepare)
+    monkeypatch.setattr(mps_kernel._MulticoinReplayRunner, "run", capture)
+    # A shorter history cannot release tick-input capacity because the maximum
+    # streamed window already covers it. Retain the non-hour phase and delist.
+    inputs = _cuda_tick_window_fixture("both", hsl, strategy, bars=9_217)
+    with _native_dataset(inputs, "binance", TICK_WINDOW_METRICS) as dataset:
+        with CudaBacktestService(batch_size=1, max_pending=1, tuning_mode="max",
+                                 max_dispatch_candidate_bars=128 * 2 * 2) as worker:
+            worker.register_dataset("market", dataset)
+            first = worker.submit(BacktestRequest("resident", "market", {})).result(timeout=180)
+            pressure = True
+            second = worker.submit(BacktestRequest("pressure", "market", {})).result(timeout=180)
+            third = worker.submit(BacktestRequest("sticky", "market", {})).result(timeout=180)
+
+    assert pressure_reads >= 1 and len(packed) == 1
+    assert [(streamed, compact) for streamed, compact, _ in captures] == [(False, False), (True, False), (True, False)]
+    for result, (_, _, raw) in zip((second, third), captures[1:], strict=True):
+        _assert_tick_window_output_exact(torch, captures[0][2], raw)
+        assert result.metrics == first.metrics
+        assert result.liquidated is first.liquidated and result.metadata == first.metadata
+
+
+@pytest.mark.parametrize("tuning_mode", ["off", "max"])
 def test_cuda_streaming_interruption_preserves_completed_result_and_releases_owner(
-    cuda_streaming_runtime, monkeypatch,
+    cuda_streaming_runtime, monkeypatch, tuning_mode,
 ):
     from optimization.gpu import mps_kernel, residency
     from optimization.gpu.executor import BacktestRequest
@@ -162,11 +320,11 @@ def test_cuda_streaming_interruption_preserves_completed_result_and_releases_own
 
     monkeypatch.setattr(residency, "prefer_streamed_ticks", lambda *args, **kwargs: True)
     monkeypatch.setattr(mps_kernel, "record_replay_chunk", observe)
-    inputs = _tick_window_fixture("both", "portfolio")
+    inputs = _cuda_tick_window_fixture("both", "portfolio")
     snapshots = [array.copy() for array in (inputs[1], inputs[3], inputs[4])]
     with _native_dataset(inputs, "binance", TICK_WINDOW_METRICS) as dataset:
         worker = CudaBacktestService(
-            batch_size=1, max_pending=1, tuning_mode="off", max_batch_delay=0,
+            batch_size=1, max_pending=1, tuning_mode=tuning_mode, max_batch_delay=0,
             max_dispatch_candidate_bars=17 * 2 * 2, interrupt_check=interrupt_check,
         )
         try:

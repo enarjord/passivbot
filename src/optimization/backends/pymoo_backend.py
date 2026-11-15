@@ -136,6 +136,7 @@ def _reduce_starting_population(
     population_size: int,
     bounds,
     rng_seed: int | None,
+    pad_sampling: bool = True,
 ) -> np.ndarray:
     if not starting_individuals:
         return _build_random_sampling(bounds, population_size)
@@ -152,7 +153,7 @@ def _reduce_starting_population(
             payloads,
             has_constraints=bool(problem.n_ieq_constr),
         )
-        return _extend_sampling_to_size(pop, bounds, population_size)
+        return _extend_sampling_to_size(pop, bounds, population_size) if pad_sampling else pop
 
     pop = _population_from_payloads(
         seed_vectors,
@@ -171,7 +172,8 @@ def _reduce_starting_population(
         algorithm.__class__.__name__.lower(),
         len(reduced),
     )
-    return _extend_sampling_to_size(_mark_population_evaluated(reduced), bounds, population_size)
+    reduced = _mark_population_evaluated(reduced)
+    return _extend_sampling_to_size(reduced, bounds, population_size) if pad_sampling else reduced
 
 
 def _evaluate_starting_individuals(
@@ -449,6 +451,7 @@ def _build_algorithm(
     bounds,
     sig_digits: int | None,
     population_plan: dict[str, Any],
+    bounded_duplicates: bool = False,
 ):
     if NSGA2 is None:  # pragma: no cover
         raise ModuleNotFoundError("pymoo is required for the pymoo optimizer backend")
@@ -465,6 +468,10 @@ def _build_algorithm(
         eta=float(shared["mutation_distribution_index"]),
     )
     eliminate_duplicates = bool(shared["eliminate_duplicates"])
+    if eliminate_duplicates and bounded_duplicates:
+        from optimization.gpu.duplicate_elimination import BoundedDuplicateElimination
+
+        eliminate_duplicates = BoundedDuplicateElimination()
 
     algorithm_name = population_plan["algorithm_name"]
     requested_population_size = population_plan["requested_population_size"]

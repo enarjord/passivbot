@@ -62,6 +62,7 @@ def test_temporal_host_split_keeps_dispatches_waits_and_tuner_samples(monkeypatc
     runner.bars = SimpleNamespace(device=SimpleNamespace(type="mps"))
     runner.temporal_chunk_bar_limit = 3
     runner.max_dispatch_candidate_bars = 100_000
+    runner.n = 8
     runner.n_coins = runner.replay_sides = 1
     runner._history_batch_bytes = lambda _: 0
     runner.hsl_scratch_budget_bytes = 1024

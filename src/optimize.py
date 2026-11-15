@@ -85,6 +85,7 @@ from config import (
 )
 from config.overrides import parse_overrides
 from config.access import get_optional_config_value, require_config_value
+from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_tuning_mode
 from config.universe import require_side_universe_sources, set_side_universe_sources
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
 from config.param_paths import resolve_bound_selectors, require_existing_config_path
@@ -936,6 +937,9 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
 
 def _canonicalize_resume_optimize(section: dict) -> dict:
     normalized = deepcopy(section)
+    gpu = normalized.get("gpu")
+    if isinstance(gpu, dict) and "tuning_mode" in gpu:
+        gpu["tuning_mode"] = resolve_gpu_tuning_mode(gpu["tuning_mode"])
     if "scoring" in normalized:
         normalized["scoring"] = [
             spec.to_config() for spec in extract_objective_specs(normalized["scoring"])
@@ -3443,13 +3447,13 @@ def _gpu_cached_input_preflight(path, shape, dtype, *, strategy_kind=None, input
     import torch
     from optimization.gpu.runtime import gpu_device
     from optimization.gpu.residency import (
-        check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_resident_bytes,
+        CudaReplayMemoryPressure, check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_resident_bytes,
         prefer_streamed_ticks, supports_streamed_ticks,
     )
     device = gpu_device(torch)
+    can_stream = supports_streamed_ticks(strategy_kind, device)
     stream_tick_inputs = (
-        input_memory_budget is not None
-        and supports_streamed_ticks(strategy_kind, device)
+        input_memory_budget is not None and can_stream
         and prefer_streamed_ticks(shape[0], shape[1], input_memory_budget,
                                   interval_ms=60_000, device=device)
     )
@@ -3458,9 +3462,17 @@ def _gpu_cached_input_preflight(path, shape, dtype, *, strategy_kind=None, input
         compact_hourly_ranges=stream_tick_inputs)
     if device == "mps":
         check_mps_invariant_memory(torch, required)
-    else:
-        check_cuda_invariant_memory(torch, required, working_set=(
-            None if input_memory_budget is None else input_memory_budget.initial_free_bytes))
+        return
+    try:
+        check_cuda_invariant_memory(torch, required, input_memory_budget=input_memory_budget)
+    except CudaReplayMemoryPressure:
+        if stream_tick_inputs or not can_stream:
+            raise
+        streamed = multicoin_resident_bytes(shape[0], shape[1], device=device, stream_tick_inputs=True)
+        if streamed >= required:
+            raise
+        # Only the replay owner can choose transport after releasing old inputs.
+        check_cuda_invariant_memory(torch, streamed, input_memory_budget=input_memory_budget)
 
 
 def _materialize_resolved_suite_dates(
@@ -3979,9 +3991,17 @@ async def main():
                 capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
             )
             # Freeze a run-level preference before file-cache pages are read.
-            capture = (capture_mps_input_memory_budget if gpu_device(torch) == "mps"
-                       else capture_cuda_input_memory_budget)
-            gpu_input_memory_budget = capture(torch)
+            tuning_mode = resolve_gpu_tuning_mode(
+                config["optimize"].get("gpu", {}).get("tuning_mode", GPU_TUNING_DEFAULT)
+            )
+            if gpu_device(torch) == "cuda":
+                gpu_input_memory_budget = capture_cuda_input_memory_budget(
+                    torch, max_throughput=tuning_mode == "max",
+                )
+            elif tuning_mode == "max":
+                raise ValueError("optimize.gpu.tuning_mode='max' requires NVIDIA CUDA")
+            else:
+                gpu_input_memory_budget = capture_mps_input_memory_budget(torch)
 
         # A header describes the actual replay only for unsliced, unaggregated
         # ordinary caches. Suites and explicit dataset overrides admit after

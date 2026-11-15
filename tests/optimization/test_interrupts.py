@@ -5,6 +5,7 @@ import pytest
 from optimization.interrupts import (
     OptimizerBackendInterrupted,
     OptimizerInterruptLatch,
+    OptimizerInterruptRequested,
 )
 
 
@@ -15,7 +16,7 @@ def test_sigint_latch_survives_native_dispatch_boundary():
     latch._handle_sigint(signal.SIGINT, None)
 
     assert latch.requested is True
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(OptimizerInterruptRequested):
         latch.raise_if_requested()
 
 

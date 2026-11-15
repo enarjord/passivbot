@@ -13,7 +13,7 @@ existing screening replay does not make its results authoritative.
 
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable, Mapping
 from concurrent.futures import Future
 from contextlib import ExitStack, nullcontext
@@ -27,6 +27,7 @@ from typing import ContextManager, Protocol
 
 from optimization.gpu.coalescing import BatchCoalescer
 from optimization.gpu.autotune import collect_compilation
+from optimization.interrupts import OptimizerInterruptRequested
 
 
 class BatchReplay(Protocol):
@@ -68,6 +69,12 @@ class _Pending:
     future: Future
 
 
+def _remove_dataset_count(counts: Counter[str], dataset_id: str) -> None:
+    counts[dataset_id] -= 1
+    if counts[dataset_id] == 0:
+        del counts[dataset_id]
+
+
 class GpuBacktestService:
     """One owning execution thread; backend-specific replay handles stay internal.
 
@@ -86,12 +93,15 @@ class GpuBacktestService:
     ``max_batch_delay=None`` adapts accumulation from successful warm replay cost
     and observed submission bursts, with bounded absolute and idle-tail deadlines.
     A numeric delay keeps the fixed accumulation policy.
+    ``accumulate_after_preparation`` can finish the first adaptive accumulation
+    after the factory discovers its width, within the original producer deadline.
     """
 
     def __init__(
         self, *, batch_size: int = 64, max_pending: int = 1024, max_batch_delay: float | None = 0.005,
         worker_context: Callable[[], ContextManager] | None = None,
         batch_policy=None,
+        accumulate_after_preparation: bool = False,
         diagnostics: bool = False,
     ):
         if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
@@ -110,11 +120,16 @@ class GpuBacktestService:
         self.max_pending = max_pending
         self.max_batch_delay = None if max_batch_delay is None else float(max_batch_delay)
         self._coalescing = BatchCoalescer() if max_batch_delay is None else None
+        self._accumulate_after_preparation = accumulate_after_preparation and self._coalescing is not None
         self._condition = Condition()
         self._replays: dict[str, BatchReplay] = {}
         self._factories: dict[str, Callable[[], ContextManager[BatchReplay]]] = {}
         self._queue: deque[_Pending] = deque()
         self._outstanding: dict[str, _Pending] = {}
+        # Maintain demand under the admission lock. Queue order still owns
+        # dataset selection; claimed work is outstanding but no longer queued.
+        self._queued_by_dataset: Counter[str] = Counter()
+        self._outstanding_by_dataset: Counter[str] = Counter()
         self._closing = False
         self._failure: BaseException | None = None
         self._cleanup_failure: BaseException | None = None
@@ -235,13 +250,14 @@ class GpuBacktestService:
             if len(self._outstanding) >= self.max_pending:
                 raise BacktestQueueFull("GPU backtest request capacity exhausted")
             if self._coalescing is not None:
-                active = any(item.request.dataset_id == snapshot.dataset_id
-                             for item in self._outstanding.values())
+                active = snapshot.dataset_id in self._outstanding_by_dataset
                 self._coalescing.arrived(snapshot.dataset_id, time.monotonic(), active=active)
             future: Future[BacktestResult] = Future()
             entry = _Pending(snapshot, future)
             self._outstanding[snapshot.request_id] = entry
+            self._outstanding_by_dataset[snapshot.dataset_id] += 1
             self._queue.append(entry)
+            self._queued_by_dataset[snapshot.dataset_id] += 1
             future.add_done_callback(
                 lambda completed, request_id=snapshot.request_id: self._finished(request_id, completed)
             )
@@ -250,8 +266,8 @@ class GpuBacktestService:
                     worker = Thread(target=self._run, name="gpu-backtests", daemon=False)
                     worker.start()
                 except BaseException:
-                    self._queue.remove(entry)
-                    del self._outstanding[snapshot.request_id]
+                    self._remove_queued(entry)
+                    self._remove_outstanding(entry)
                     future.cancel()
                     future.set_running_or_notify_cancel()
                     raise
@@ -265,16 +281,24 @@ class GpuBacktestService:
         if self._closing:
             raise RuntimeError("GPU backtest service is closed")
 
+    def _remove_queued(self, entry: _Pending) -> None:
+        self._queue.remove(entry)
+        _remove_dataset_count(self._queued_by_dataset, entry.request.dataset_id)
+
+    def _remove_outstanding(self, entry: _Pending) -> None:
+        del self._outstanding[entry.request.request_id]
+        _remove_dataset_count(self._outstanding_by_dataset, entry.request.dataset_id)
+
     def _finished(self, request_id: str, future: Future) -> None:
         with self._condition:
             entry = self._outstanding.get(request_id)
             if entry is None or entry.future is not future:
                 return
-            del self._outstanding[request_id]
+            self._remove_outstanding(entry)
             if future.cancelled():
                 # Remove cancelled payloads immediately, even during a long dispatch.
                 try:
-                    self._queue.remove(entry)
+                    self._remove_queued(entry)
                 except ValueError:
                     pass  # Already claimed by the owning execution thread.
                 else:
@@ -287,7 +311,7 @@ class GpuBacktestService:
         # Complete admission bookkeeping before future completion wakes consumers.
         with self._condition:
             if self._outstanding.get(entry.request.request_id) is entry:
-                del self._outstanding[entry.request.request_id]
+                self._remove_outstanding(entry)
             self._condition.notify_all()
 
     def _batch_width(self, dataset_id):
@@ -304,51 +328,54 @@ class GpuBacktestService:
             entry = self._queue.popleft()
             if entry.request.dataset_id != dataset_id or len(batch) >= width:
                 remaining_queue.append(entry)
-            elif entry.future.set_running_or_notify_cancel():
+                continue
+            _remove_dataset_count(self._queued_by_dataset, dataset_id)
+            if entry.future.set_running_or_notify_cancel():
                 batch.append(entry)
         self._queue = remaining_queue
 
-    def _next_batch(self) -> list[_Pending]:
+    def _await_batch(self, dataset_id, width, started, *, claimed=0):
+        """Wait under the admission condition for compatible requests or a deadline."""
+        while not self._closing:
+            compatible = self._queued_by_dataset[dataset_id]
+            if (claimed + compatible >= width or claimed + len(self._queue) >= self.max_pending
+                    or (compatible == 0 and claimed == 0)):
+                break
+            if self._coalescing is None:
+                until = started + self.max_batch_delay
+            elif self._preparing is None:
+                until = self._coalescing.deadline(dataset_id, started)
+            elif dataset_id not in self._preparing:
+                break  # The producer finished or needs completions first.
+            elif not self._queued_by_dataset.keys() <= self._preparing:
+                # An unrelated ready dataset must not wait through the active
+                # producer's longer accumulation allowance.
+                until = self._coalescing.deadline(dataset_id, started)
+            else:
+                until = self._coalescing.preparing_deadline(dataset_id, started)
+            remaining = until - time.monotonic()
+            if remaining <= 0:
+                break
+            self._condition.wait(remaining)
+
+    def _next_batch(self) -> tuple[list[_Pending], float]:
         with self._condition:
             while True:
                 while not self._queue:
                     if self._closing:
-                        return []
+                        return [], 0.0
                     self._condition.wait()
                 dataset_id = self._queue[0].request.dataset_id
                 width = self._batch_width(dataset_id)
                 started = time.monotonic()
-                deadline = (None if self._coalescing is not None
-                            else started + self.max_batch_delay)
                 # The oldest request chooses the dataset, so locality grouping can
                 # never starve another dataset behind newly arriving requests.
-                while not self._closing:
-                    compatible = sum(item.request.dataset_id == dataset_id for item in self._queue)
-                    if not compatible or compatible >= width or len(self._queue) >= self.max_pending:
-                        break
-                    if self._coalescing is None:
-                        until = deadline
-                    elif self._preparing is None:
-                        until = self._coalescing.deadline(dataset_id, started)
-                    elif dataset_id not in self._preparing:
-                        break  # The producer finished or needs completions first.
-                    elif any(item.request.dataset_id not in self._preparing for item in self._queue):
-                        # An unrelated ready dataset must not wait through the
-                        # active producer's longer accumulation allowance.
-                        until = self._coalescing.deadline(dataset_id, started)
-                    else:
-                        until = self._coalescing.preparing_deadline(dataset_id, started)
-                    remaining = until - time.monotonic()
-                    if remaining <= 0:
-                        break
-                    self._condition.wait(remaining)
-                    if not self._queue:
-                        break
+                self._await_batch(dataset_id, width, started)
                 batch = []
                 self._claim_batch(dataset_id, width, batch)
                 if batch:
                     self._diagnostic_duration("accumulation_seconds", started, time.monotonic)
-                    return batch
+                    return batch, started
 
     @staticmethod
     def _results(batch: list[_Pending], rows) -> list[BacktestResult]:
@@ -399,7 +426,7 @@ class GpuBacktestService:
         failure_info = (None, None, None)
         try:
             while True:
-                batch = self._next_batch()
+                batch, accumulation_started = self._next_batch()
                 if not batch:
                     return
                 if self._worker_context is not None and not context_entered:
@@ -414,15 +441,20 @@ class GpuBacktestService:
                     if not callable(getattr(replay, "evaluate", None)):
                         raise TypeError("dataset factory must yield a replay implementing evaluate(candidates)")
                     self._replays[dataset_id] = replay
-                    # Preparation can discover the physical ceiling while more
-                    # requests arrive. Fill this first dispatch from queued work
-                    # instead of simulating the initial ownership claim alone.
+                    # Fill the first dispatch to its newly discovered ceiling.
+                    # An explicit active producer can finish accumulating under
+                    # its original deadline, counting the ownership claim.
                     with self._condition:
                         width = self._batch_width(dataset_id)
                         if width < len(batch):
                             raise ValueError("prepared dispatch ceiling is below claimed work")
-                        self._claim_batch(dataset_id, width, batch)
                         self._diagnostic_duration("preparation_seconds", preparing, time.perf_counter)
+                        if (self._accumulate_after_preparation and self._preparing is not None
+                                and dataset_id in self._preparing and width > len(batch)):
+                            waiting = self._diagnostic_time(time.monotonic)
+                            self._await_batch(dataset_id, width, accumulation_started, claimed=len(batch))
+                            self._diagnostic_duration("accumulation_seconds", waiting, time.monotonic)
+                        self._claim_batch(dataset_id, width, batch)
                 replay = self._replays[dataset_id]
                 timed = self._batch_policy is not None or self._coalescing is not None
                 started = time.perf_counter() if timed else self._diagnostic_time(time.perf_counter)
@@ -439,7 +471,7 @@ class GpuBacktestService:
                         with self._condition:
                             if self._coalescing is not None:
                                 self._coalescing.observe(dataset_id, len(batch), seconds)
-                            backlog = sum(item.request.dataset_id == dataset_id for item in self._queue)
+                            backlog = self._queued_by_dataset[dataset_id]
                             closing = self._closing
                     else:
                         finished = self._diagnostic_time(time.perf_counter)
@@ -482,6 +514,7 @@ class GpuBacktestService:
             self._closing = True
             abandoned = list(self._queue)
             self._queue.clear()
+            self._queued_by_dataset.clear()
             self._condition.notify_all()
         for entry in batch:
             if not entry.future.done():
@@ -502,6 +535,7 @@ class GpuBacktestService:
             # cannot become a running dispatch after close requested cancellation.
             if cancel_pending:
                 self._queue.clear()
+                self._queued_by_dataset.clear()
             self._condition.notify_all()
         # User callbacks run outside the service lock. These detached entries
         # cannot be claimed by the worker, and still need executor notification.
@@ -513,6 +547,8 @@ class GpuBacktestService:
         self._replays.clear()
         self._factories.clear()
         if self._cleanup_failure is not None:
+            if isinstance(self._failure, OptimizerInterruptRequested) and isinstance(self._cleanup_failure, Exception):
+                raise self._cleanup_failure
             raise self._failure
 
     def __enter__(self) -> GpuBacktestService:

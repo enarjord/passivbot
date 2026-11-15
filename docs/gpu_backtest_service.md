@@ -182,10 +182,10 @@ after service attachments close. CPU optimizer transport continues to use shared
 
 For ordinary unsliced one-minute caches, GPU memory admission checks the NumPy header before
 decoding the payload. Suites, explicit dataset slices and aggregated histories are checked after
-their effective dimensions are known, before price packing. These checks retain the device's
-existing invariant safety budget; they do not guarantee sufficient system RAM or include all
-candidate/driver scratch. Metal and CUDA trailing-martingale replay keep five strict integer tick arrays
-on disk and uploads only each temporal replay range plus previous/next-candle context. The
+their effective dimensions are known, before price packing. Invariant admission covers resident
+dataset inputs. Live VRAM checks also cover candidate scratch in CUDA `max`. The available host
+RAM threshold guides input transport. Streamed CUDA and Metal replay keep strict integer tick
+arrays on disk and upload each temporal replay range plus previous/next-candle context. The
 admitted footprint includes its maximum window. One-minute hourly ranges use lossless compact
 boundary rows with virtual access at their original indices; full bars and clamped
 market-execution prices remain resident for historical access. Other candle intervals retain
@@ -195,13 +195,24 @@ before reading cache pages and passes it to the owner thread. After packing, cle
 raw file pages receive an optional OS reclaim hint in both parent and worker mappings;
 future reads remain valid. Large Metal device uploads copy bounded contiguous slices and
 release completed source pages, avoiding an additional active copy of the packed history.
-Startup upload waits bound source lifetime; normal replay synchronization is unchanged. This preserves
-the existing 45% safety budget. CUDA retains its signed-byte relation table, while
-other tick fields remain int32. Both devices choose resident inputs for smaller
+Startup upload waits bound source lifetime. The default invariant admission allowance is 45% of
+the initial available working set. CUDA `max` uses a larger allowance for resident inputs, a
+higher host-RAM threshold when choosing between resident and streamed inputs, and a smaller
+reserve when sizing candidate scratch. After compiling the selected replay kernel, CUDA
+`max` deducts estimated context stack growth from free VRAM before allocating candidate scratch.
+The estimate uses the compiled kernel's local memory, the context's current per-thread stack
+limit, and the device's maximum resident threads. Trailing Martingale and EMA Anchor in CUDA
+`max` reuse each candidate's persistent replay state for directional workspace across commands.
+This reduces driver stack use and preserves position, risk and metric calculations.
+CUDA retains its signed-byte relation table, while other tick fields remain int32.
+Both devices choose resident inputs for smaller
 histories and streaming when it reduces memory and full inputs exceed the captured
 device or host allowance. The preference is frozen before history preparation and
 reused by cache-header admission and the owning replay worker. CUDA still checks
-actual free VRAM when activating each dataset. Streaming does not split the account
+actual free VRAM when activating each dataset. When live memory pressure prevents
+resident inputs or minimum replay scratch from fitting, CUDA `max` can release
+resident tick tensors and stream the same packed tick files for the rest of the
+run. The existing hourly table stays in its original layout. Streaming does not split the account
 into separate date scenarios: positions, balances, indicators and metric state
 continue across temporal replay chunks. Other strategy layouts are unchanged.
 Validation uses bounded conversion and mask buffers without changing
@@ -236,8 +247,10 @@ and unfinished resumed candidates; it never creates a CPU simulation pool or use
 backtests to validate GPU fitness. CPU preparation still uses the canonical runtime compiler.
 
 The CPU orchestrator reuses pymoo NSGA-II/III variation and survival settings from
-`optimize.pymoo`, with `optimize.population_size` and `optimize.iters` retaining their
-generation-based meaning. Within a cohort it replenishes bounded GPU work, scores completions
+`optimize.pymoo`. CUDA `max` retains the resolved population size and derives wider
+cohorts within its candidate attempt budget. Other modes derive their generation count
+from `optimize.iters` and the resolved population size. Within a cohort the orchestrator
+replenishes bounded GPU work, scores completions
 and writes full candidate records immediately through the existing results/Pareto stores.
 Evolution advances after the cohort's complete evaluations finish. Effective duplicates
 share pending/cached work.
@@ -286,8 +299,8 @@ promotes survivors to full-suite evaluation. Only complete survivors enter evolu
 survival alongside the complete parents. Partial scores never enter fitness, stored results
 or Pareto. Screening must retain explicit objective/limit scenarios. Unknown labels fail
 before the device starts. Selecting every scenario or retaining every offspring bypasses
-the partial stage. Screening reduces full evaluations within the configured generation
-budget; it does not extend `iters` to compensate for rejected offspring.
+the partial stage. Screening uses the original cohort's attempt budget even if only
+some offspring advance to full evaluation.
 
 The CPU session also retains bounded simulator-row evidence by complete effective candidate
 identity, prepared dataset and exact request parameters. Screen-to-full promotion can reuse
@@ -315,20 +328,23 @@ completions from one notification. A small persistence batch therefore does not 
 suite fan-in; ready aliases remain retained until their next CPU consumption call.
 
 The native integration uses `optimize.gpu.batch_size`, `tuning_mode`,
-`max_dispatch_candidate_bars` and `checkpoint_interval_seconds`. An omitted/null or `auto`
-batch setting enables service-owned batch tuning in `auto`/`refresh` mode. A positive
-explicit setting disables width tuning; `tuning_mode: "off"` uses a fixed ceiling of 64
-when no width is supplied. These are dispatch ceilings, also bounded by prepared work
-and history-scratch limits. CPU candidate admission is bounded by its population window,
-independently of GPU widths. With automatic width, the optimizer lets the service admit
-all scenario/exchange requests for that candidate window when they exceed its default
-1,024 queued-plus-running requests. The window includes seed demand and is capped at
-1,024 candidates. A full evaluation has one request per prepared scenario/exchange pair
-regardless of how many execution variants are registered. Dispatch and device-memory
-ceilings apply independently. Fixed width and tuning-off modes use the default request cap.
-Legacy exact-worker, drift-probe, validation and screened-seed controls do not apply.
+`max_dispatch_candidate_bars` and `checkpoint_interval_seconds`. An omitted, null or `auto`
+batch setting enables service-owned batch tuning in `conservative`, `refresh` and CUDA `max`.
+`auto` remains an alias for `conservative` when supplied as a tuning mode. A positive explicit
+batch size fixes its ceiling and disables width tuning. `off` uses a fixed ceiling of 64 when
+no width is supplied. Prepared work and scratch limits can lower the dispatched width in all
+modes. CUDA `max` applies its memory policy with an explicit batch size, too.
 
-Request accumulation adapts independently of width in `auto`/`refresh` mode. The
+CPU candidate admission is bounded by its population window, independently of GPU widths.
+With automatic width, the optimizer lets the service admit all scenario/exchange requests
+for that candidate window when they exceed the ordinary 1,024 queued-plus-running request
+limit. In `conservative` and `refresh` the window includes seed demand and is capped at 1,024
+candidates. CUDA `max` allows wider windows and launches subject to demand and resource
+limits. Each full evaluation has one request per prepared scenario/exchange pair regardless
+of how many execution variants are registered. Dispatch and device-memory ceilings apply
+independently.
+
+Request accumulation adapts independently of width in `conservative`, `refresh` and `max`. The
 service retains the last 32 within-active-work arrival gaps for each dataset, including
 gaps between CPU preparation bursts. A doubled 90th-percentile gap supplies the idle
 tail; successful replay duration supplies the total allowance, capped at 0.5 seconds.
@@ -358,16 +374,17 @@ state is service-local; it changes neither submitted simulations nor saved searc
 
 The first request for an unprepared dataset claims one candidate, then prepares and discovers
 its physical dispatch limit on the GPU owner. Before simulation, the worker fills that
-first dispatch with already queued compatible requests up to the prepared limit. It does
-not wait for more arrivals during this fill; cancelled queued work stays excluded. Subsequent
-batches use that limit. This prevents several serial scratch/work splits from delaying
-the return of an oversized outer batch. Preparation retains no inactive runner references;
-switching datasets can release their tensors and mutable scratch.
+first dispatch with queued compatible requests up to the prepared limit. With CUDA `max`, an
+active producer can keep filling the first dispatch within the original accumulation deadline.
+Cancelled queued work stays excluded. Subsequent batches also respect the prepared limit.
+Preparation retains no inactive runner references, so switching datasets can release their
+tensors and mutable scratch.
 
 Automatic Metal widths start at the replay cap of 1,024 candidates, clamped by the
-prepared memory/history ceiling and service admission limit. CUDA starts at 64. The GPU
-owner selects the device before creating a prepared controller; producer-side construction
-remains device-independent. Explicit widths and
+prepared memory/history ceiling and service admission limit. The default CUDA policy starts
+at 64. CUDA `max` in the optimizer starts near one hardware wave of single-candidate blocks,
+rounded down to a power of two. Prepared memory and dispatch bounds still apply. The GPU
+owner creates a controller for each prepared dataset. Explicit widths and
 tuning-off defaults retain their fixed limits. Separate per-dataset
 controllers measure successful replay, reductions and host results using actual candidate
 counts, including partial request cohorts. Failed work and replays reporting a compiled
@@ -381,8 +398,8 @@ A window requires six successful warm
 observations and three seconds of completed work, or three observations totaling at least
 30 seconds with a median replay duration of at least ten seconds. The median requirement
 prevents an isolated stall from shortening a fast workload's smoothing window. Timing
-samples are grouped by actual candidate count. Each group retains up to six durations;
-the fullest observed shape supplies the decision rate from its median duration. Small
+samples are grouped by actual candidate count. Each group retains up to six durations.
+Outside CUDA `max`, the fullest observed shape supplies the decision rate from its median duration. Small
 startup or cohort-tail batches therefore cannot dilute the measured capacity of a fuller
 batch. Partial-only workloads still provide their largest measured shape; missing full-width
 timings are never extrapolated. Window eligibility still counts all warm observations, so
@@ -390,39 +407,53 @@ the selected shape can have fewer supporting samples than the complete window.
 Diagnostics report the comparison count, retained samples, occurrence frequency and whether
 it filled the configured width. They separately retain the whole-window rate: total actual
 candidates divided by the sum of per-count median durations weighted by warm occurrences.
+CUDA `max` uses this whole-window rate to account for the throughput of partial launches.
 These are conditional replay-capacity estimates, not measured end-to-end optimizer
 throughput or confidence bounds. Execution-width trials must preserve or improve the
-comparison rate in either direction; they do not prefer a slower smaller allocation or
-require a fixed percentage gain to grow. Generic tuning callers retain their own plateau
-and growth thresholds. Existing cooldown and rollback apply. Growth also requires
-observed request demand and device memory headroom. Metal growth also requires available
+comparison rate in either direction. Conservative and refresh accept a wider trial at
+the same comparison rate. Generic tuning callers retain their own plateau and growth
+thresholds. Existing cooldown and rollback apply. Growth also requires
+compatible work and device memory headroom. Metal growth also requires available
 RAM reported by the OS to meet the larger of 256 MiB and 10% of physical RAM. Missing
 or invalid OS telemetry denies a growth trial without failing completed replay work.
-A growth trial is bounded by the largest compatible demand observed in that evidence
-window, so it can try an intermediate
-width when demand is less than twice the current width. The prepared physical ceiling
+A growth trial normally uses the largest compatible demand observed in that evidence
+window, so it can try an intermediate width when demand is less than twice the current
+width. Repeated full-width warm observations in the CUDA `max` optimizer can propose a wider
+cohort to supply the next trial. Growth in this mode requires a three-percent increase
+in measured replay throughput. The prepared physical ceiling
 still applies. The service probes a smaller width only after a warm batch exceeded the
-proposed width. To earn acceptance, the smaller trial must fill its width, or the larger
-trial must dispatch more candidates than the previous width could hold. An underfilled
-trial that cannot demonstrate the width change rolls back and can retry after cooldown.
-Tuning submits no extra simulations and never changes precision
-or search policy. Measurements are run-local; `auto` and `refresh` currently both start
-fresh. Persistent advisory calibration, richer workload classes, residency budgets and
-further CPU/evolution cadence experiments remain development work. This policy does not
-claim a globally optimal width or a representative optimizer speedup.
+proposed width. The existing conservative evidence rule requires a smaller trial to fill
+its width or a larger trial to exceed the previous width. CUDA `max` requires at least two
+warm completed replays at the trial width. An underfilled trial rolls back and can retry
+after cooldown. CUDA `max` can use a repeatedly observed intermediate width for its next trial.
+Tuning uses completed production work and preserves simulation precision. CUDA `max`
+can increase the initial and subsequent evaluation cohorts while preserving the selected
+parent population size. The optimizer checkpoints the pending population and the
+last accepted cohort target at search boundaries. An unfinished width trial keeps
+its pending population on resume while new observations start at the accepted target.
+The `conservative`, `refresh` and `max` modes all start with fresh observations.
 
 Native CPU preparation retains canonical policy validation and lowering. Its optional
 static-identity projection compares the same top-level input boundary as the full key,
 excluding bookkeeping metadata while preserving typed activation, universe and bound
-authority. GPU parameter compilation omits only the recording snapshots `_raw`,
+authority. CUDA `max` also uses this guard for multicoin views. Other modes use it
+when every registered variant for a scenario and exchange selects one coin.
+GPU parameter compilation omits only the recording snapshots `_raw`,
 `_raw_effective` and `_transform_log` for ordinary dictionary inputs; execution fields and
 prepared source owners remain intact. Unsupported input shapes use canonical lowering.
-The GPU path still prepares candidates on one CPU producer; `optimize.n_cpus` controls the
-CPU optimizer's pool rather than creating GPU preparation workers.
+CUDA `max` can prepare an eligible cohort in multiple CPU processes. Workers verify the
+same Rust artifact and return canonical candidate plans in order. The optimizer owns
+the pending cohort, scenario admission, scoring and checkpoints. It limits the worker
+pool using usable CPU capacity, available RAM, input packing and the candidate window.
+If headroom falls below the required allowance between cohorts, it retires the pool
+and continues serially. Other GPU modes prepare candidates serially.
+`optimize.n_cpus` controls the CPU optimizer pool.
 
 Native CUDA temporal replay separately adapts history-chunk length from completed command
 durations, targeting one second within existing candle/work/history ceilings. It shrinks
 slow chunks and grows only after repeated fast full chunks; partial tails do not train it.
+CUDA `max` starts with up to 128 candles at widths of 256 or below and reduces the initial
+range for wider launches. Fast warmup commands cannot increase the first trading chunk.
 The controller resets for each physical replay and submits no extra simulations. Replay
 state survives each boundary, and only complete accepted simulations produce results.
 This internal duration control remains active with `tuning_mode: "off"`; that setting fixes
@@ -525,10 +556,10 @@ dependencies. Repeated requests reuse their replay and compatible immutable pack
 The current policy keeps one active dataset's tensors and one replay's scratch on the GPU.
 Other packed inputs and reusable coin subsets live in run-local disk files. Scenario
 switches evict device buffers while keeping reusable immutable packing. Initial invariant
-inputs must fit the existing 45% free-VRAM (CUDA) or remaining recommended working-set
-(Metal) budget; scratch and other allocations can
-still fail and propagate. This is a bounded device-residency foundation, not a complete
-host/disk admission budget or adaptive multi-device scheduler.
+input admission follows the [input memory policy](#input-memory-and-admission).
+The default allowance is 45% of free VRAM on CUDA and 45% of the available
+recommended working set on Metal. CUDA `max` uses a larger allowance while reserving
+scratch and driver headroom. Out-of-budget allocations can still fail and propagate.
 
 Core observations use the declared post-warmup trading boundary, before its first
 fills, and include every supported inactive minute through the factual terminal mark.

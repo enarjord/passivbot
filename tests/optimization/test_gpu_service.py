@@ -2333,3 +2333,158 @@ def test_native_short_replays_have_interrupt_boundaries(strategy, bars):
         strategy, 64, n_bars=bars, n_coins=25, n_sides=2,
         max_candidate_bars=1_000_000_000, device="cuda", factual_hsl=True,
     ) == (True, 64, 128)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_cuda_max_keeps_more_parallel_candidates_inside_temporal_work_budget(strategy):
+    kwargs = dict(n_bars=8192, n_coins=32, n_sides=2, max_candidate_bars=200_000, device="cuda")
+    assert _mps_multicoin_dispatch_plan(strategy, 4096, **kwargs) == (True, 24, 128)
+    assert _mps_multicoin_dispatch_plan(strategy, 4096, max_throughput=True, **kwargs) == (True, 3125, 1)
+
+
+@pytest.mark.parametrize("failure", [None, "device", "still_too_large"])
+def test_max_scratch_rejection_has_one_retry_per_slice_and_atomic_results(monkeypatch, failure):
+    from threading import Event
+
+    from optimization.gpu import service
+    from optimization.gpu.autotune import CudaReplayScratchLimit
+    from optimization.gpu.executor import BacktestRequest, GpuBacktestService
+
+    attempts, reduced = [], []
+    preparing, release = Event(), Event()
+    device_error = MemoryError("device allocation failed")
+    def run(parameters, *, profile):
+        rows = tuple(row[0] for row in parameters)
+        attempts.append(rows)
+        if len(rows) > 3:
+            raise CudaReplayScratchLimit(len(rows), 3)
+        if failure == "still_too_large":
+            raise CudaReplayScratchLimit(len(rows), 2)
+        if rows[0] == 3:
+            preparing.set()
+            assert release.wait(3)
+            if failure == "device":
+                raise device_error
+        return {"core_observations": rows}
+
+    def finalize(packet, metric_names, **_kwargs):
+        assert metric_names == ["value"]
+        reduced.append(packet)
+        return [{"value": row, "liquidated": False} for row in packet]
+
+    replay = object.__new__(SharedAccountReplay)
+    replay._torch = None
+    replay._max_throughput = True
+    replay.batch_size = 7
+    replay.profile_enabled = False
+    replay.sides = ["long"]
+    replay.fused_runner = None
+    replay.runners = {"long": SimpleNamespace(run=run, _refresh_max_mode_scratch_budget=lambda _width: None)}
+    replay.metrics_data = {"ts0": 0, "n": 2}
+    replay.run = SimpleNamespace(interval_ms=60_000)
+    replay.core_ew_half_life_days = 180.0
+    replay.needed_metrics = {"value"}
+    replay._parameter_matrix = lambda chunk, _side: np.asarray([[row["value"]] for row in chunk])
+    replay._core_hsl_configured_enablement = lambda chunk: [False] * len(chunk)
+    monkeypatch.setattr(service, "finalize_observations", finalize)
+
+    executor = GpuBacktestService(batch_size=7, max_pending=7, max_batch_delay=3)
+    executor.register_dataset("market", SimpleNamespace(evaluate=replay.evaluate_results))
+    try:
+        futures = [executor.submit(BacktestRequest(str(row), "market", {"value": row})) for row in range(7)]
+        if failure != "still_too_large":
+            assert preparing.wait(3)
+            assert not any(future.done() for future in futures)
+            assert reduced == [(0, 1, 2)]
+        release.set()
+        if failure == "device":
+            assert all(future.exception(timeout=3) is device_error for future in futures)
+            assert attempts == [tuple(range(7)), (0, 1, 2), (3, 4, 5)]
+        elif failure == "still_too_large":
+            assert all(isinstance(future.exception(timeout=3), CudaReplayScratchLimit) for future in futures)
+            assert attempts == [tuple(range(7)), (0, 1, 2)]
+            assert not reduced
+        else:
+            rows = [future.result(timeout=3) for future in futures]
+            assert [(row.request_id, row.metrics["value"]) for row in rows] == [(str(i), i) for i in range(7)]
+            assert attempts == [tuple(range(7)), (0, 1, 2), (3, 4, 5), (6,)]
+            assert reduced == attempts[1:]
+            assert replay.last_evaluation_split
+    finally:
+        release.set()
+        executor.close(cancel_pending=True)
+
+
+@pytest.mark.parametrize("pressure", ["precheck", "compiled", "streamed_fails", "cold_stack_fails"])
+def test_cuda_max_streaming_pressure_resumes_at_first_unlaunched_slice(monkeypatch, pressure):
+    from optimization.gpu import service
+    from optimization.gpu.residency import CudaReplayMemoryPressure
+
+    attempts, reduced = [], []
+    streamed = False
+    switches = 0
+
+    def refresh(_width):
+        if pressure == "precheck" and not streamed:
+            raise CudaReplayMemoryPressure("dense reserve")
+
+    def run(parameters, *, profile):
+        rows = tuple(row[0] for row in parameters)
+        attempts.append((streamed, rows))
+        if pressure == "cold_stack_fails":
+            transport = "streamed" if streamed else "dense"
+            raise CudaReplayMemoryPressure(f"{transport} additional driver stack")
+        if rows[0] == 2 and (not streamed or pressure == "streamed_fails"):
+            raise CudaReplayMemoryPressure("streamed reserve" if streamed else "dense reserve")
+        return {"core_observations": rows}
+
+    def finalize(packet, metric_names, **_kwargs):
+        assert metric_names == ["value"]
+        reduced.extend(packet)
+        return [{"value": row, "liquidated": False} for row in packet]
+
+    def switch(owner):
+        nonlocal streamed, switches
+        assert not streamed
+        streamed = True
+        switches += 1
+        owner.fused_runner = SimpleNamespace(run=run, _refresh_max_mode_scratch_budget=refresh,
+                                             _history_batch_limit=lambda: 3)
+
+    replay = object.__new__(SharedAccountReplay)
+    replay._cuda_residency = SimpleNamespace(activate=lambda _owner: None,
+                                             can_stream_on_pressure=lambda _owner: not streamed,
+                                             stream_on_pressure=switch)
+    replay._max_throughput = True
+    replay.batch_size = 7
+    replay.profile_enabled = False
+    replay.sides = ["long", "short"]
+    replay.fused_runner = SimpleNamespace(run=run, _refresh_max_mode_scratch_budget=refresh,
+                                         _history_batch_limit=lambda: 2)
+    replay.metrics_data = {"ts0": 0, "n": 2}
+    replay.run = SimpleNamespace(interval_ms=60_000)
+    replay.core_ew_half_life_days = 180.0
+    replay.needed_metrics = {"value"}
+    replay._parameter_matrix = lambda chunk, _side: np.asarray([[row["value"]] for row in chunk])
+    replay._core_hsl_configured_enablement = lambda chunk: [False] * len(chunk)
+    monkeypatch.setattr(service, "finalize_observations", finalize)
+
+    candidates = [{"value": number} for number in range(7)]
+    if pressure == "cold_stack_fails":
+        with pytest.raises(CudaReplayMemoryPressure, match="streamed additional driver stack"):
+            replay.evaluate_results(candidates)
+        assert attempts == [(False, (0, 1)), (True, (0, 1, 2))]
+        assert reduced == []
+    elif pressure == "streamed_fails":
+        with pytest.raises(CudaReplayMemoryPressure, match="streamed reserve"):
+            replay.evaluate_results(candidates)
+        assert attempts == [(False, (0, 1)), (False, (2, 3)), (True, (2, 3, 4))]
+        assert reduced == [0, 1]
+    else:
+        assert [row.metrics["value"] for row in replay.evaluate_results(candidates)] == list(range(7))
+        assert reduced == list(range(7))
+        if pressure == "precheck":
+            assert attempts == [(True, (0, 1, 2)), (True, (3, 4, 5)), (True, (6,))]
+        else:
+            assert attempts == [(False, (0, 1)), (False, (2, 3)), (True, (2, 3, 4)), (True, (5, 6))]
+    assert replay.last_evaluation_split and switches == 1

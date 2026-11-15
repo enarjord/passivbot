@@ -9,6 +9,7 @@ import pytest
 from config import prepare_config
 from config.schema import get_expanded_config_prototype
 from optimization.gpu.executor import BacktestRequest, BacktestResult, BacktestQueueFull
+from optimization.interrupts import OptimizerInterruptRequested
 from optimization.native_planning import CandidatePlan
 from optimization.native_results import CanonicalResultScorer, ResultSlot
 from optimization.native_session import CandidateQueueFull, NativeEvaluationSession
@@ -126,6 +127,35 @@ def test_bounded_admission_refills_service_and_scores_on_cpu_poller(monkeypatch)
     assert session.pending_request_count == 0
 
 
+def test_request_ids_are_reserved_until_collection_and_not_by_whole_plan_reuse():
+    service = Service(capacity=1)
+    session = NativeEvaluationSession(service, scorer())
+    original = plan(0)
+    alias = plan(1, key=original.effective_key)
+    colliding = replace(original, candidate_id="collision", effective_key="collision")
+    session.admit(original)
+    session.admit(alias)
+    session.admit(replace(alias, candidate_id="alias-ids-free", effective_key="different"))
+    # Check the original plan first with both requests queued, then with the
+    # service owning one row while the other remains queued under backpressure.
+    with pytest.raises(ValueError, match="request identities collide"):
+        session.admit(colliding)
+    session.submit_ready()
+    assert set(service.requests) == {"0:binance"}
+    with pytest.raises(ValueError, match="request identities collide"):
+        session.admit(colliding)
+    service.complete("0:binance")
+    # A completed future still owns its ID until its notification is collected.
+    with pytest.raises(ValueError, match="request identities collide"):
+        session.admit(colliding)
+    assert session.poll(max_results=1) == []
+    service.complete("0:bybit")
+    assert [row.candidate_id for row in session.poll(max_results=1, max_completions=2)] == ["0", "1"]
+    session.admit(colliding)
+    assert session.active_candidate_ids == ("alias-ids-free", "collision")
+    session.stop_admission()
+
+
 def test_effective_duplicates_share_pending_work_and_bounded_snapshot_cache():
     service = Service()
     session = NativeEvaluationSession(service, scorer(), cache_size=1)
@@ -209,6 +239,78 @@ def test_stop_cancels_waiting_work_and_preserves_completed_candidates():
     assert session.active_candidate_ids == ("1",)
     with pytest.raises(RuntimeError, match="stopped"):
         session.admit(plan(2))
+
+
+@pytest.mark.parametrize("already_stopping", [False, True])
+def test_latched_replay_interrupt_preserves_successful_notifications(already_stopping):
+    service = Service(capacity=4)
+    session = NativeEvaluationSession(service, scorer())
+    session.admit(plan(0))
+    session.admit(plan(1))
+    session.submit_ready()
+    for future in service.futures.values():
+        assert future.set_running_or_notify_cancel()
+    if already_stopping:
+        session.stop_admission()
+    interruption = OptimizerInterruptRequested()
+    service.complete("0:binance", interruption)
+    service.complete("1:binance")
+    service.complete("1:bybit")
+    service.complete("0:bybit", interruption)
+    if not already_stopping:
+        with pytest.raises(OptimizerInterruptRequested) as raised:
+            session.poll()
+        assert raised.value is interruption
+    assert [row.candidate_id for row in session.poll()] == ["1"]
+    assert session.poll() == []
+    assert session.pending_request_count == 0
+    assert session.active_candidate_ids == ("0",)
+    assert session.diagnostics_snapshot()["replay_rows"] == 2
+    with pytest.raises(RuntimeError, match="stopped"):
+        session.admit(plan(2))
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("bad replay"), KeyboardInterrupt()])
+def test_stopping_does_not_suppress_unrelated_replay_failure(failure):
+    service = Service()
+    session = NativeEvaluationSession(service, scorer())
+    session.admit(plan(0))
+    session.submit_ready()
+    assert service.futures["0:binance"].set_running_or_notify_cancel()
+    session.stop_admission()
+    service.complete("0:binance", failure)
+    with pytest.raises(type(failure)) as raised:
+        session.poll()
+    assert raised.value is failure
+
+
+@pytest.mark.parametrize("already_stopping", [False, True])
+def test_submission_wrapper_for_latched_interrupt_does_not_poison_drain(already_stopping):
+    interruption = OptimizerInterruptRequested()
+
+    class InterruptedService(Service):
+        def submit(self, request):
+            if len(self.requests) == 2:
+                raise RuntimeError("GPU backtest service failed") from interruption
+            return super().submit(request)
+
+    service = InterruptedService()
+    session = NativeEvaluationSession(service, scorer())
+    session.admit(plan(0))
+    session.admit(plan(1))
+    session.submit_ready()
+    if already_stopping:
+        session.stop_admission()
+    assert session.pending_request_count == (2 if already_stopping else 4)
+    if not already_stopping:
+        service.complete("0:binance")
+        service.complete("0:bybit")
+        assert [row.candidate_id for row in session.poll()] == ["0"]
+        with pytest.raises(OptimizerInterruptRequested) as raised:
+            session.poll()
+        assert raised.value is interruption
+    assert session.poll() == []
+    assert session.pending_request_count == 0
 
 
 def test_producer_failure_stops_new_admission_and_cancels_other_work():

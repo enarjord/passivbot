@@ -1615,15 +1615,18 @@ def apply_scenario(
     for field, value in (("approved_coins", scenario.coins), ("ignored_coins", scenario.ignored_coins)):
         if value is not None:
             replacement_paths.extend(("bot", side, "universe", field) for side in ("long", "short"))
+    # These columns define the available-members ceiling persisted in optimizer
+    # checkpoints. Keep their order stable across fresh Python processes.
+    columns = tuple(filtered_coins)
     if prepared_universe is None:
         _materialize_scenario_universe(
             cfg, prepared_base, available_coins=available_coins,
-            exchanges=scenario_exchanges, columns=set(filtered_coins), replacement_paths=replacement_paths,
+            exchanges=scenario_exchanges, columns=columns, replacement_paths=replacement_paths,
         )
     else:
         _install_prepared_scenario_universe(
             cfg, prepared_universe, available_coins=available_coins,
-            exchanges=scenario_exchanges, columns=set(filtered_coins),
+            exchanges=scenario_exchanges, columns=columns,
         )
     validate_suite_side_coin_lists(cfg, scenario_exchanges)
 

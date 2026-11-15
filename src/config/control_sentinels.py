@@ -17,14 +17,18 @@ WARMUP_CAP_PATH = ("bot", "portfolio", "warmup", "max_minutes")
 WARMUP_CONCURRENCY_PATH = ("live", "startup", "warmup_concurrency")
 
 
-def forced_mode_input_pattern():
-    """Portable JSON Schema pattern for the existing strip/lower input domain."""
+def case_insensitive_control_pattern(choices):
+    """Portable JSON Schema pattern for strip/lower control names."""
     # Python strip includes these Unicode whitespace characters. Spell them
     # explicitly because JavaScript and Python disagree on what \s includes.
     whitespace = r"[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*"
     alternatives = ["".join(f"[{char}{char.upper()}]" if char.isalpha() else char
-                            for char in alias) for alias in MODE_ALIASES]
+                            for char in choice) for choice in choices]
     return "^" + whitespace + "(?:" + "|".join(alternatives) + ")" + whitespace + "$"
+
+
+def forced_mode_input_pattern():
+    return case_insensitive_control_pattern(MODE_ALIASES)
 
 
 def optional_forced_mode(value, *, path):

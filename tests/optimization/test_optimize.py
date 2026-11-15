@@ -5507,6 +5507,21 @@ def test_resume_config_mismatches_rejects_changed_backend():
     assert any("optimize.backend" in mismatch for mismatch in mismatches)
 
 
+def test_resume_config_mismatches_treats_gpu_auto_and_conservative_as_equivalent():
+    entry = _resume_validation_entry()
+    entry["optimize"]["backend"] = "gpu"
+    entry["optimize"]["gpu"]["tuning_mode"] = "auto"
+    entry[optimize.CONTRACT_KEY] = optimize.build_evaluation_contract(entry)
+    config = deepcopy(entry)
+    config["optimize"]["gpu"]["tuning_mode"] = "conservative"
+
+    assert optimize._resume_config_mismatches(entry, config) == []
+
+    config["optimize"]["gpu"]["tuning_mode"] = "max"
+    assert any("optimize.gpu" in mismatch
+               for mismatch in optimize._resume_config_mismatches(entry, config))
+
+
 def test_resume_config_mismatches_rejects_adding_objective_scenario_to_old_result():
     entry = _resume_validation_entry()
     config = deepcopy(entry)

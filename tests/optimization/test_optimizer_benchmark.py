@@ -21,7 +21,7 @@ from tools.optimizer_benchmark.catalogue import (Case, PAIRWISE_FLAGS, catalogue
     declared_gpu_support, pairwise_rows, select_cases)
 from tools.optimizer_benchmark.workloads import array_digest, digest, freeze, load_manifest
 from tools.optimizer_benchmark.report import numerical_comparison, summary, tuning_comparison, validate_policies
-from tools.optimizer_benchmark.__main__ import modes, read_worker_report
+from tools.optimizer_benchmark.__main__ import gpu_tuning_overrides, modes, read_worker_report
 from tools.optimizer_benchmark.worker import strict_json, instrument_replay, cohort_digest
 from tools.optimizer_benchmark import worker
 
@@ -314,6 +314,13 @@ def test_invalid_execution_modes_are_rejected(invalid):
         modes(invalid)
 
 
+@pytest.mark.parametrize("overrides", [[("old", "bad")], [("missing", "max")],
+                                      [("new", "off"), ("new", "max")]])
+def test_invalid_gpu_tuning_overrides_are_rejected(overrides):
+    with pytest.raises(ValueError, match="GPU tuning"):
+        gpu_tuning_overrides(overrides, {"old", "new"})
+
+
 def test_nonfinite_json_evidence_is_retained():
     result = strict_json(dict(nan=float("nan"), positive=float("inf"), negative=-float("inf")))
     assert json.loads(json.dumps(result, allow_nan=False)) == dict(nan="NaN", positive="Infinity", negative="-Infinity")
@@ -546,7 +553,7 @@ def test_gpu_instrumentation_hooks_are_restored_after_failed_setup(monkeypatch):
     from optimization.gpu.autotune import BatchController
     from optimization.gpu.service import SharedAccountReplay
     original_observe, original_init = BatchController.observe, SharedAccountReplay.__init__
-    def failing(*_args):
+    def failing(*_args, **_kwargs):
         BatchController.observe = object()
         SharedAccountReplay.__init__ = object()
         raise RuntimeError("setup failed")
@@ -583,6 +590,8 @@ def test_tuning_and_cohort_clocks_exclude_the_same_setup(monkeypatch, tmp_path):
     monkeypatch.setattr(datasets, "PreparedGpuDataset", lambda **kwargs: kwargs)
     class Service:
         def __init__(self, **kwargs):
+            assert kwargs["tuning_mode"] == "max"
+            assert kwargs["batch_size"] is None
             clock[0] += 200.0
             self._batch_tuner = SimpleNamespace(controllers={"fixture": controller})
         def __enter__(self): return self
@@ -598,7 +607,8 @@ def test_tuning_and_cohort_clocks_exclude_the_same_setup(monkeypatch, tmp_path):
     arrays = (np.zeros((2, 1, 4)), np.ones(2), np.arange(2))
     config = {"optimize": {"gpu": {}}, "backtest": {"coins": {"fake": ["BTC"]}}}
     entry = dict(id="fixture", configs=[config], metrics=["cagr_fraction_strategy_equity"], markets={}, exchange="fake")
-    report = worker.gpu_runs(entry, arrays, "auto", 1, 0, 0, 100)
+    report = worker.gpu_runs(entry, arrays, "auto", 1, 0, 0, 100, tuning_mode="max")
+    assert report["tuning_mode"] == "max"
     assert report["parameter_seconds"] == 100.0
     assert report["setup_seconds"] == 200.0
     assert report["first_tuning_window_seconds"] == 2.0
@@ -713,11 +723,14 @@ def test_search_matches_backend_signature_and_prepares_recording_contract(frozen
     def inspect_call(**kwargs):
         inspect.signature(runner).bind(**kwargs)
         assert kwargs["config"][optimize.CONTRACT_CACHE_KEY] is prepared[0]
+        assert kwargs["config"]["optimize"]["gpu"]["tuning_mode"] == ("max" if engine == "search-gpu" else "off")
         assert kwargs["ignore_sigint_in_worker"] is worker.initialize_optimizer_worker
         assert not {"constraint_fitness_cls", "record_individual_result", "run_evolution"} & kwargs.keys()
         raise BackendReached
     monkeypatch.setattr(backends, "get_backend_runner", lambda _name: inspect_call)
     args = SimpleNamespace(engine=engine, workers=1, search_iters=8, width="8", dispatch_budget=100000)
+    if engine == "search-gpu":
+        args.gpu_tuning_mode = "max"
     with pytest.raises(BackendReached):
         worker.search_run(entry, arrays, args)
 
@@ -806,7 +819,8 @@ def test_seed_filtered_run_preserves_frozen_population(tmp_path, real_runtime, m
     monkeypatch.setattr(cli.subprocess, "check_output", check_output)
 
     def bounded(command, **kwargs):
-        dispatched.append(command[command.index("--entry") + 1])
+        dispatched.append((command[command.index("--entry") + 1],
+                           command[command.index("--gpu-tuning-mode") + 1]))
         output = Path(command[command.index("--output") + 1])
         output.write_text(json.dumps(dict(status="unsupported", reason="test worker")))
         return dict(exit_code=0, termination_reason=None, wall_seconds=0.0)
@@ -816,7 +830,8 @@ def test_seed_filtered_run_preserves_frozen_population(tmp_path, real_runtime, m
     command = ["run", "--workload", str(directory), "--seed", str(selected_seed),
                "--backend", "before", str(tmp_path), sys.executable,
                "--backend", "after", str(tmp_path), sys.executable,
-               "--modes", "cpu:1", "--output", str(destination)]
+               "--gpu-tuning-mode", "before", "auto", "--gpu-tuning-mode", "after", "max",
+               "--modes", "gpu:auto", "--output", str(destination)]
     if expected_status == 0:
         assert cli.main(command) == 0
     else:
@@ -826,12 +841,13 @@ def test_seed_filtered_run_preserves_frozen_population(tmp_path, real_runtime, m
     assert (directory / "manifest.json").read_bytes() == original
     expected_ids = [entry["id"] for entry in manifest["entries"]
                     if entry["seed"] == selected_seed]
-    assert dispatched == [identity for identity in expected_ids for _ in range(2)]
+    assert dispatched == [(identity, mode) for identity in expected_ids for mode in ("auto", "max")]
     if expected_status == 0:
         report = json.loads((destination / "report.json").read_text())
         assert report["workload_sha256"] == manifest["sha256"]
         assert report["selection"]["entry_ids"] == expected_ids
         assert report["selection"]["seeds"] == [selected_seed]
+        assert report["gpu_tuning_overrides"] == {"before": "auto", "after": "max"}
     else:
         assert not destination.exists()
 

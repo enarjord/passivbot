@@ -179,16 +179,44 @@ def _cleanup_after_failure(cleanup, *args, **kwargs):
         logging.exception("GPU suite cleanup failed while handling an earlier exception")
 
 
-def check_cuda_invariant_memory(torch, invariant_bytes, *, working_set=None, require_free=True):
-    free = int(torch.cuda.mem_get_info()[0]) if require_free or working_set is None else None
+def cuda_max_vram_reserve_bytes(total):
+    """Leave room for CUDA allocations outside Passivbot's replay estimates."""
+    return max(512 * 2**20, int(total * 0.10))
+
+
+class CudaReplayMemoryPressure(MemoryError):
+    """Live max-mode admission failed before candidate replay or allocations."""
+
+
+def check_cuda_invariant_memory(
+    torch, invariant_bytes, *, working_set=None, require_free=True, input_memory_budget=None,
+):
+    max_throughput = input_memory_budget is not None and input_memory_budget.max_throughput
+    if input_memory_budget is not None:
+        working_set = input_memory_budget.initial_free_bytes
+    if require_free or working_set is None:
+        free, total = map(int, torch.cuda.mem_get_info())
     budget = free if working_set is None else working_set
-    if invariant_bytes > int(budget * 0.45):
+    allowance = input_memory_budget.device_bytes if max_throughput else int(budget * 0.45)
+    if invariant_bytes > allowance:
+        if max_throughput:
+            raise MemoryError(
+                f"CUDA multicoin invariant tensors require {invariant_bytes / 2**30:.2f} GiB, "
+                f"above the max-mode input budget of {allowance / 2**30:.2f} GiB"
+            )
         raise MemoryError(
             f"CUDA multicoin invariant tensors would consume {invariant_bytes / 2**30:.2f} "
             f"GiB, above the 45% safety limit of {budget / 2**30:.2f} GiB "
             f"{'free VRAM' if working_set is None else 'initial free VRAM'}"
         )
-    if require_free and invariant_bytes > free:
+    if require_free and max_throughput:
+        reserve = cuda_max_vram_reserve_bytes(total)
+        if invariant_bytes > free - reserve:
+            raise CudaReplayMemoryPressure(
+                f"CUDA multicoin invariant tensors require {invariant_bytes / 2**30:.2f} GiB "
+                f"with {free / 2**30:.2f} GiB currently free and a {reserve / 2**30:.2f} GiB reserve"
+            )
+    elif require_free and invariant_bytes > free:
         raise MemoryError(
             f"CUDA multicoin invariant tensors require {invariant_bytes / 2**30:.2f} GiB "
             f"but only {free / 2**30:.2f} GiB VRAM is currently free"
@@ -281,14 +309,20 @@ class CudaInputMemoryBudget:
     device_bytes: int
     host_bytes: int
     initial_free_bytes: int
+    max_throughput: bool = False
 
 
-def capture_cuda_input_memory_budget(torch):
+def capture_cuda_input_memory_budget(torch, *, max_throughput=False):
     """Capture CUDA and host headroom before history preparation touches pages."""
     import psutil
 
-    free = int(torch.cuda.mem_get_info()[0])
+    free, total = map(int, torch.cuda.mem_get_info())
     available = int(psutil.virtual_memory().available)
+    if max_throughput:
+        # The rest is available for replay state, workspaces and upload staging.
+        device_bytes = max(0, min(int(free * 0.70), free - cuda_max_vram_reserve_bytes(total) - 512 * 2**20))
+        host_bytes = max(0, min(int(available * 0.85), available - 512 * 2**20))
+        return CudaInputMemoryBudget(device_bytes, host_bytes, free, max_throughput=True)
     return CudaInputMemoryBudget(
         device_bytes=int(free * 0.45),
         host_bytes=max(0, min(int(available * 0.7), available - 2**30)),
@@ -391,12 +425,13 @@ class CudaSuiteResidency:
         # device. Activation releases it before checking live availability.
         check_cuda_invariant_memory(
             torch, invariant_bytes, working_set=self._initial_working_set(torch),
-            require_free=False,
+            require_free=False, input_memory_budget=self._input_memory_budget,
         )
 
     def _check_memory(self, torch, invariant_bytes):
         check_cuda_invariant_memory(
             torch, invariant_bytes, working_set=self._initial_working_set(torch),
+            input_memory_budget=self._input_memory_budget,
         )
 
     def _synchronize(self, torch):
@@ -412,6 +447,7 @@ class CudaSuiteResidency:
         self._entries = {}
         self._active = None
         self._active_owner = None
+        self._input_memory_budget = input_memory_budget
         self._working_set = (None if input_memory_budget is None
                              else input_memory_budget.initial_free_bytes)
         self._subset_arrays = []
@@ -456,9 +492,45 @@ class CudaSuiteResidency:
     def owns(self, data):
         return any(entry["data"] is data for entry in self._entries.values())
 
+    def _entry(self, proxy):
+        return next(entry for entry in self._entries.values() if entry["data"] is proxy.data)
+
     def register(self, proxy):
-        entry = next(entry for entry in self._entries.values() if entry["data"] is proxy.data)
-        entry["owners"].append(weakref.ref(proxy))
+        self._entry(proxy)["owners"].append(weakref.ref(proxy))
+
+    def _streamed_fallback_bytes(self, proxy):
+        data = proxy.data
+        if (self.device != "cuda" or not getattr(proxy, "_max_throughput", False)
+                or not proxy.temporal_chunking or not supports_streamed_ticks(proxy.strategy_kind, self.device)
+                or data["stream_tick_inputs"]):
+            return None
+        entry = self._entry(proxy)
+        if not METAL_STREAMED_TICK_FIELDS <= entry["files"].keys():
+            return None
+        streamed = multicoin_resident_bytes(data["n"], data["n_coins"], device=self.device,
+                                           stream_tick_inputs=True)
+        return streamed if streamed < data["resident_bytes"] else None
+
+    def can_stream_on_pressure(self, proxy):
+        return self._streamed_fallback_bytes(proxy) is not None
+
+    def stream_on_pressure(self, proxy):
+        """Switch packed tick files to windowed inputs after a live admission failure."""
+        import torch
+
+        streamed = self._streamed_fallback_bytes(proxy)
+        if streamed is None:
+            raise RuntimeError("CUDA packed input cannot switch to streamed ticks")
+        if self._active is self._entry(proxy):
+            self._release(torch)
+        data = proxy.data
+        logging.info("GPU max input pressure | transport=streamed_ticks coins=%d bars=%d "
+                     "previous_mib=%.1f resident_mib=%.1f", data["n_coins"], data["n"],
+                     data["resident_bytes"] / 2**20, streamed / 2**20)
+        # Dense and streamed packers write identical tick files. Keep the
+        # existing dense hourly table and cache identity for every owner.
+        data.update(stream_tick_inputs=True, resident_bytes=streamed)
+        self._activate(proxy, torch)
 
     @staticmethod
     def _clear_runners(entry):
@@ -486,11 +558,21 @@ class CudaSuiteResidency:
     def activate(self, proxy):
         import torch
 
-        entry = next(entry for entry in self._entries.values() if entry["data"] is proxy.data)
+        try:
+            self._activate(proxy, torch)
+        except CudaReplayMemoryPressure:
+            if not self.can_stream_on_pressure(proxy):
+                raise
+        else:
+            return
+        self.stream_on_pressure(proxy)
+
+    def _activate(self, proxy, torch):
+        entry = self._entry(proxy)
         if self._active is not entry:
             self._release(torch)
-            # CUDA driver/kernel workspace can remain resident after tensors are
-            # released. It belongs to the reserved 55%, not a shrinking budget.
+            # Driver and kernel allocations can remain resident after tensors
+            # are released. Keep the original allowance and check live free space.
             self._check_memory(torch, entry["data"].get("resident_bytes", entry["data"]["invariant_bytes"]))
             self._active = entry
             try:
@@ -514,6 +596,12 @@ class CudaSuiteResidency:
         if not proxy.runners and proxy.fused_runner is None:
             try:
                 proxy._create_runners()
+            except CudaReplayMemoryPressure:
+                if not self.can_stream_on_pressure(proxy):
+                    _cleanup_after_failure(self._release, torch)
+                # The fallback releases this entry after the failed constructor
+                # and its device references have left the traceback.
+                raise
             except BaseException:
                 _cleanup_after_failure(self._release, torch)
                 raise

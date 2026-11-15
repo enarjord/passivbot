@@ -264,6 +264,21 @@ def test_collect_union_keeps_base_approved_with_explicit_scenario_subsets():
     assert master == ["BTC", "ETH", "OM", "SOL"]
 
 
+def test_scenario_available_members_follow_stable_candle_column_order():
+    config = get_expanded_config_prototype()
+    set_side_universe_sources(config, "approved_coins", ["SOL", "ETH", "BTC", "AVAX"])
+    scenario = SuiteScenario(label="subset", start_date=None, end_date=None, coins=["SOL", "BTC", "ETH"],
+                             ignored_coins=None)
+    available = {"SOL", "ETH", "BTC", "AVAX"}
+    prepared, coins = apply_scenario(
+        config, scenario, master_coins=sorted(available), master_ignored=[],
+        available_exchanges=["binance"], available_coins=available,
+    )
+    assert coins == ["BTC", "ETH", "SOL"]
+    approvals = require_side_universe_sources(prepared, "approved_coins")
+    assert all(approvals[side].available_members == tuple(coins) for side in ("long", "short"))
+
+
 def test_apply_scenario_records_transform_log():
     base_config = {
         "backtest": {

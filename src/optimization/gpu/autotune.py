@@ -61,28 +61,38 @@ class ReplayDurationController:
     invalid timing samples do not train the controller. No extra replay is run.
     """
 
-    def __init__(self, ceiling, *, target_seconds=1.0):
+    def __init__(self, ceiling, *, target_seconds=1.0, initial_bars=None):
         if type(ceiling) is not int or ceiling < 1:
             raise ValueError("replay chunk ceiling must be a positive integer")
         if not math.isfinite(target_seconds) or target_seconds <= 0:
             raise ValueError("replay duration target must be positive and finite")
-        self.ceiling = self.bars = ceiling
+        if initial_bars is not None and (type(initial_bars) is not int or not 1 <= initial_bars <= ceiling):
+            raise ValueError("initial replay chunk must be within its safety ceiling")
+        self.ceiling = ceiling
+        self.bars = ceiling if initial_bars is None else initial_bars
         self.target_seconds = target_seconds
         self.fast_chunks = 0
 
-    def observe(self, bars, seconds):
+    def observe(self, bars, seconds, *, allow_growth=True):
         if bars != self.bars or not math.isfinite(seconds) or seconds <= 0:
             return
         if seconds > self.target_seconds * 1.25:
             self.bars = max(1, int(bars * self.target_seconds * 0.9 / seconds))
             self.fast_chunks = 0
-        elif seconds < self.target_seconds * 0.5:
+        elif allow_growth and seconds < self.target_seconds * 0.5:
             self.fast_chunks += 1
             if self.fast_chunks >= 3:
                 self.bars = min(self.ceiling, self.bars * 2)
                 self.fast_chunks = 0
         else:
             self.fast_chunks = 0
+
+
+def cuda_max_initial_chunk_bars(ceiling, startup_bars, width):
+    """Keep the first launch's candidate-bar work within the startup reference."""
+    from optimization.gpu.model import CUDA_MAX_INITIAL_BATCH_CANDIDATES
+
+    return min(ceiling, startup_bars, max(1, startup_bars * CUDA_MAX_INITIAL_BATCH_CANDIDATES // width))
 
 
 class ReplayEvidence(deque):
@@ -115,7 +125,8 @@ class BatchController:
     A long window can finish with fewer sustained, expensive observations;
     callers that omit it retain the normal sample and duration requirements.
     Largest-count comparisons require a measured change in dispatch capacity
-    before accepting a new width.
+    before accepting a new width. Repeatable-width trials require at least two
+    warm observations at their proposed width.
     """
 
     def __init__(
@@ -135,6 +146,7 @@ class BatchController:
         long_window_seconds=None,
         shrink_min_rate_ratio=0.98,
         growth_min_rate_ratio=1.05,
+        require_repeatable_width=False,
     ):
         window_samples = WINDOW if window_samples is None else window_samples
         min_seconds = MIN_SECONDS if min_seconds is None else min_seconds
@@ -145,6 +157,8 @@ class BatchController:
             raise ValueError("batch evidence duration must be finite and non-negative")
         if not isinstance(rate_aggregation, str) or rate_aggregation not in {"median", "per_count", "largest_count"}:
             raise ValueError("batch rate aggregation must be median, per_count or largest_count")
+        if require_repeatable_width and rate_aggregation != "per_count":
+            raise ValueError("repeatable batch widths require per-count rate aggregation")
         for ratio in (shrink_min_rate_ratio, growth_min_rate_ratio):
             if (isinstance(ratio, bool) or not isinstance(ratio, (int, float))
                     or not math.isfinite(ratio) or ratio <= 0):
@@ -172,6 +186,7 @@ class BatchController:
         self.window_samples = window_samples
         self.min_seconds = min_seconds
         self.rate_aggregation = rate_aggregation
+        self.require_repeatable_width = require_repeatable_width
         self.shrink_min_rate_ratio = float(shrink_min_rate_ratio)
         self.growth_min_rate_ratio = float(growth_min_rate_ratio)
         self.long_window_samples = long_window_samples
@@ -190,14 +205,15 @@ class BatchController:
         self.seconds = 0.0
         self.seen = set()
         self.baseline = None
+        self._retry_growth_width = None
         self.direction = -1 if self.width == self.ceiling else 1
         self.cooldown = 0
 
     def _comparison_tokens(self, prefix=""):
-        if self.rate_aggregation != "largest_count":
+        if self.rate_aggregation != "largest_count" and not self.require_repeatable_width:
             return []
         return [
-            "rate_aggregation=largest_count",
+            f"rate_aggregation={self.rate_aggregation}",
             f"{prefix}comparison_count={self.last_comparison_count}",
             f"{prefix}comparison_samples={self.last_comparison_samples}",
             f"{prefix}comparison_frequency={self.last_comparison_frequency}",
@@ -244,14 +260,13 @@ class BatchController:
                                  for count, frequency in self._count_frequencies.items())
             actual_rate = candidates / duration
             rate = actual_rate
-            if self.rate_aggregation == "largest_count":
-                # Compare the fullest shape that actually ran. A configured
-                # ceiling is not the throughput of a mix of startup/tail fills.
-                # Partial-only workloads still supply a measured shape; no
-                # missing full-width timing is extrapolated or manufactured.
+            if self.rate_aggregation == "largest_count" or self.require_repeatable_width:
+                # Keep the fullest actual shape visible even when the decision
+                # rate combines the measured counts across the window.
                 count = max(self._durations_by_count)
                 durations = self._durations_by_count[count]
-                rate = count / statistics.median(durations)
+                if self.rate_aggregation == "largest_count":
+                    rate = count / statistics.median(durations)
                 self.last_comparison_count = count
                 self.last_comparison_samples = len(durations)
                 self.last_comparison_frequency = self._count_frequencies[count]
@@ -260,10 +275,11 @@ class BatchController:
         self.last_window_rate = rate
         self.last_window_actual_rate = actual_rate
         evidence_seconds = self.seconds
+        count_frequencies = self._count_frequencies
         self.samples.clear()
         self._replay_durations.clear()
         self._durations_by_count.clear()
-        self._count_frequencies.clear()
+        self._count_frequencies = {}
         self.seconds = 0.0
         if self.baseline is not None:
             old_width, old_rate = self.baseline
@@ -273,7 +289,17 @@ class BatchController:
             # generic tuning retains its legacy plateau/growth thresholds.
             ratio = self.shrink_min_rate_ratio if shrinking else self.growth_min_rate_ratio
             effective = True
-            if self.rate_aggregation == "largest_count":
+            if self.require_repeatable_width:
+                effective = count_frequencies.get(self.width, 0) >= 2
+                if not effective and not shrinking:
+                    # An underfilled trial can identify a feasible intermediate
+                    # probe. Accept it only after it has its own warm window.
+                    self._retry_growth_width = max(
+                        (count for count, frequency in count_frequencies.items()
+                         if old_width < count < self.width and frequency >= 2),
+                        default=None,
+                    )
+            elif self.rate_aggregation == "largest_count":
                 # A narrower trial must actually reach its new cap. A wider
                 # trial must dispatch more rows than the old cap allowed.
                 effective = (self.last_comparison_count == self.width if shrinking
@@ -310,6 +336,8 @@ class BatchController:
         trial = (
             min(self.ceiling, self.width * 2) if self.direction > 0 else max(1, self.width // 2)
         )
+        if trial > self.width and self._retry_growth_width is not None:
+            trial = min(trial, self._retry_growth_width)
         if trial == self.width:
             self.direction *= -1
             self.cooldown = 1
@@ -329,7 +357,7 @@ class BatchController:
             # A bounded producer may never queue enough work for growth. Try a
             # smaller allocation using subsequent real requests instead.
             trial = max(1, self.width // 2)
-        if (self.rate_aggregation == "largest_count"
+        if ((self.rate_aggregation == "largest_count" or self.require_repeatable_width)
                 and self.last_comparison_count <= trial < self.width):
             # Wait for a warm batch that the narrower width would split.
             # Below the ceiling, give returning demand a chance to grow.
@@ -338,12 +366,23 @@ class BatchController:
         self.direction = -1 if trial < self.width else 1
         self.baseline = (self.width, rate)
         self.width = trial
+        self._retry_growth_width = None
         log_tokens("GPU auto-tune trial |", [
             f"batch={trial}", f"previous={self.baseline[0]}",
             f"rolling_candidates/s={rate:.3f}", "reason=throughput_probe",
             *self._comparison_tokens("baseline_"),
         ])
         return True
+
+
+class CudaReplayScratchLimit(MemoryError):
+    """An admitted shape can be narrowed before candidate allocation or replay."""
+
+    def __init__(self, attempted, limit):
+        self.limit = limit
+        super().__init__(
+            f"CUDA replay scratch admits {limit} of {attempted} candidates after compilation"
+        )
 
 
 def history_dispatch_ceiling(proxy, ceiling):
@@ -364,16 +403,28 @@ def history_dispatch_ceiling(proxy, ceiling):
     return ceiling
 
 
-def cuda_history_budget(runner, free, total, *, owners=1):
+def cuda_history_budget(runner, free, total, *, owners=1, max_throughput=False):
     """Bound one new replay owner's histories and shared reduction workspace.
 
     Immutable market tensors are already resident when free VRAM is sampled.
     Directional owners share the allowance because both can retain scratch.
     """
-    reserve = max(1024**3, int(total * 0.2))
+    if max_throughput:
+        from optimization.gpu.residency import CudaReplayMemoryPressure, cuda_max_vram_reserve_bytes
+
+        reserve = cuda_max_vram_reserve_bytes(total)
+    else:
+        reserve = max(1024**3, int(total * 0.2))
     minimum = runner._history_batch_bytes(1)
     if minimum == 0:
         return runner.hsl_scratch_budget_bytes
+    if max_throughput:
+        allowance = (free - reserve) // owners
+        if minimum > allowance:
+            raise CudaReplayMemoryPressure(
+                "CUDA replay history and workspace exceed available VRAM above the max-mode reserve"
+            )
+        return allowance
     if minimum > free // owners:
         raise MemoryError("CUDA replay history and workspace exceed available VRAM")
     allowance = (free - reserve if free - reserve >= minimum * owners

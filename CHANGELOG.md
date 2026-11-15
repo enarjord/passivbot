@@ -5,6 +5,14 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Add opt-in `optimize.gpu.tuning_mode = "max"` for unattended CUDA optimizations.
+  It uses wider GPU batches, larger seed and offspring cohorts, and more available
+  RAM and VRAM. It prepares candidates in parallel when host capacity allows.
+  The default is now `"conservative"`,
+  and existing `"auto"` configs still work.
+
+- Keep prepared suite membership in a stable order across optimizer restarts.
+
 - Let dedicated live HSL protection cancel resting entries and submit reduce-only
   panic closes while fill history settles. A protective batch can share one fresh
   account read, with current permission checked at each submission.

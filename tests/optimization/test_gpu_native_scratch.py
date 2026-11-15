@@ -77,6 +77,15 @@ def test_empty_history_does_not_reduce_dispatch_width():
     assert cuda_history_budget(value, GIB, 12 * GIB) == 512 * MIB
 
 
+def test_max_can_use_more_scratch_but_keeps_its_reserve_under_pressure():
+    value = runner(row=2**20, workspace=0)
+    assert cuda_history_budget(value, 2 * GIB, 8 * GIB, max_throughput=True) == (
+        2 * GIB - int(8 * GIB * 0.10)
+    )
+    with pytest.raises(MemoryError, match="max-mode reserve"):
+        cuda_history_budget(value, 512 * MIB, 8 * GIB, max_throughput=True)
+
+
 @pytest.mark.parametrize("automatic,device", [(True, "cuda"), (False, "cuda"), (True, "mps")])
 @pytest.mark.parametrize("fused", [False, True])
 def test_new_owner_policy_preserves_fixed_and_metal_and_ignores_retired_facts(automatic, device, fused):
@@ -139,6 +148,60 @@ def test_memory_query_failure_propagates_without_fallback():
         proxy._construct_runner("long", lambda *_args, **_kwargs: runner(), {})
 
 
+@pytest.mark.parametrize("existing_stack,expected", [
+    (1024, (78_144 - 1024) * 46 * 1536),
+    (55_552, (78_144 - 55_552) * 46 * 1536),
+    (78_144, 0),
+    (78_160, 0),
+])
+def test_pending_stack_uses_selected_symbol_and_current_device_context(existing_stack, expected):
+    from contextlib import contextmanager
+    from optimization.gpu.cuda_kernel import CudaShaderLibrary
+
+    active_devices = []
+
+    @contextmanager
+    def device(index):
+        assert index == 1
+        active_devices.append(index)
+        try:
+            yield
+        finally:
+            active_devices.pop()
+
+    class Device:
+        def __init__(self, index):
+            self.context = device(index)
+
+        def __enter__(self):
+            self.context.__enter__()
+
+        def __exit__(self, *args):
+            self.context.__exit__(*args)
+
+        @property
+        def attributes(self):
+            assert active_devices == [1]
+            assert expected
+            return {"MultiProcessorCount": 46, "MaxThreadsPerMultiProcessor": 1536}
+
+    def get_limit(limit):
+        assert limit == 0 and active_devices == [1]
+        return existing_stack
+
+    def get_function(name):
+        assert name == "fused_replay" and active_devices == [1]
+        return SimpleNamespace(attributes={"local_size_bytes": 78_144})
+
+    library = object.__new__(CudaShaderLibrary)
+    library._module = SimpleNamespace(get_function=get_function)
+    library._cupy = SimpleNamespace(cuda=SimpleNamespace(
+        Device=Device, runtime=SimpleNamespace(deviceGetLimit=get_limit),
+    ))
+    assert library.pending_stack_bytes("fused_replay", 1) == expected
+    assert not active_devices
+
+
 @pytest.fixture
 def torch_runtime():
     return pytest.importorskip("torch")
@@ -160,6 +223,154 @@ def scratch_runner():
     for name in SCRATCH_CACHES:
         setattr(value, name, {})
     return value
+
+
+@pytest.mark.usefixtures("torch_runtime")
+def test_live_max_pressure_counts_reclaimable_scratch_and_preserves_saved_ceiling(monkeypatch):
+    from optimization.gpu import mps_kernel
+
+    value = scratch_runner()
+    value._core_buffers = {5: SimpleNamespace(nbytes=64 * MIB)}
+    value._buffers = {5: (SimpleNamespace(nbytes=64 * MIB),)}
+    value._max_mode_scratch_ceiling_bytes = value.hsl_scratch_budget_bytes = 2 * GIB
+    value._history_batch_bytes = lambda width: width * 64 * MIB + 64 * MIB
+    value.bars = SimpleNamespace(device="cuda")
+    free_bytes = GIB
+    unused = 0
+    queries = []
+    def mem_get_info(device):
+        assert device == "cuda"
+        return free_bytes, 8 * GIB
+    def empty_cache():
+        queries.append(True)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "mem_get_info", mem_get_info)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "empty_cache", empty_cache)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_reserved", lambda _device: unused)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_allocated", lambda _device: 0)
+    value._refresh_max_mode_scratch_budget(7)
+    assert value.hsl_scratch_budget_bytes == GIB - int(8 * GIB * .10) + 128 * MIB
+    free_bytes = 7 * GIB
+    value._refresh_max_mode_scratch_budget(7)
+    assert value.hsl_scratch_budget_bytes == 2 * GIB
+    unused = 64 * MIB
+    free_bytes = 256 * MIB
+    with pytest.raises(MemoryError, match="fell below the max-mode replay reserve"):
+        value._refresh_max_mode_scratch_budget(1)
+    assert queries == [True]
+
+
+@pytest.mark.usefixtures("torch_runtime")
+def test_live_max_pressure_reclaims_allocator_reservations_before_reducing_width(monkeypatch):
+    from optimization.gpu import mps_kernel
+
+    value = scratch_runner()
+    value._core_buffers = {}
+    value._max_mode_scratch_ceiling_bytes = value.hsl_scratch_budget_bytes = 2 * GIB
+    value._history_batch_bytes = lambda width: width * 64 * MIB + 64 * MIB
+    value.bars = SimpleNamespace(device="cuda")
+    free_bytes = GIB
+    calls = []
+    def mem_get_info(_device):
+        calls.append(free_bytes)
+        return free_bytes, 8 * GIB
+    def empty_cache():
+        nonlocal free_bytes
+        free_bytes += 512 * MIB
+    monkeypatch.setattr(mps_kernel.torch.cuda, "mem_get_info", mem_get_info)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "empty_cache", empty_cache)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_reserved", lambda _device: 768 * MIB)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_allocated", lambda _device: 256 * MIB)
+    value._refresh_max_mode_scratch_budget(7)
+    assert calls == [GIB, GIB + 512 * MIB]
+    assert value.hsl_scratch_budget_bytes >= value._history_batch_bytes(7)
+
+
+@pytest.mark.usefixtures("torch_runtime")
+def test_pending_stack_is_subtracted_after_allocator_reclaim_and_can_reduce_width(monkeypatch):
+    from optimization.gpu import mps_kernel
+
+    value = scratch_runner()
+    value._core_buffers = {}
+    value._max_mode_scratch_ceiling_bytes = value.hsl_scratch_budget_bytes = 2 * GIB
+    value._history_batch_bytes = lambda width: width * 64 * MIB + 64 * MIB
+    value.bars = SimpleNamespace(device="cuda")
+    free = 6 * GIB
+    calls = []
+
+    def mem_get_info(_device):
+        calls.append(free)
+        return free, 8 * GIB
+
+    def empty_cache():
+        nonlocal free
+        free += 256 * MIB
+
+    monkeypatch.setattr(mps_kernel.torch.cuda, "mem_get_info", mem_get_info)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "empty_cache", empty_cache)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_reserved", lambda _device: 256 * MIB)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_allocated", lambda _device: 0)
+    pending = (78_144 - 1024) * 46 * 1536
+    value._refresh_max_mode_scratch_budget(7, pending_stack_bytes=pending)
+    assert calls == [6 * GIB, 6 * GIB + 256 * MIB]
+    assert value.hsl_scratch_budget_bytes == free - int(8 * GIB * .1) - pending
+    assert value._history_batch_bytes(5) <= value.hsl_scratch_budget_bytes < value._history_batch_bytes(6)
+
+
+@pytest.mark.usefixtures("torch_runtime")
+def test_pending_stack_does_not_credit_torch_scratch_that_cannot_be_reclaimed(monkeypatch):
+    from optimization.gpu import mps_kernel
+    from optimization.gpu.residency import CudaReplayMemoryPressure
+
+    value = scratch_runner()
+    value.cuda_max_scratch_policy = True
+    value._core_buffers = {}
+    value._replay_states = {5: SimpleNamespace(nbytes=256 * MIB)}
+    value._max_mode_scratch_ceiling_bytes = value.hsl_scratch_budget_bytes = 2 * GIB
+    value._history_batch_bytes = lambda width: width * 128 * MIB
+    value.bars = SimpleNamespace(device="cuda")
+    free = 2 * GIB
+    calls = []
+
+    def empty_cache():
+        assert not value._replay_states
+        calls.append(free)
+
+    monkeypatch.setattr(mps_kernel.torch.cuda, "mem_get_info", lambda _: (free, 8 * GIB))
+    monkeypatch.setattr(mps_kernel.torch.cuda, "empty_cache", empty_cache)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_reserved", lambda _: 256 * MIB)
+    monkeypatch.setattr(mps_kernel.torch.cuda, "memory_allocated", lambda _: 256 * MIB)
+    with pytest.raises(CudaReplayMemoryPressure, match="additional driver stack"):
+        value._refresh_max_mode_scratch_budget(1, pending_stack_bytes=1152 * MIB)
+    assert calls == [free]
+
+
+@pytest.mark.usefixtures("torch_runtime")
+def test_live_max_pressure_drops_old_scratch_if_needed_to_restore_reserve(monkeypatch):
+    from optimization.gpu import mps_kernel
+
+    value = scratch_runner()
+    old_output = SimpleNamespace(nbytes=128 * MIB)
+    value._core_output = old_output
+    value._core_buffers = {5: old_output}
+    value._replay_states = {5: SimpleNamespace(nbytes=128 * MIB)}
+    value._scratch_shape = (5, 0, 0, 16)
+    value.cuda_max_scratch_policy = True
+    value._max_mode_scratch_ceiling_bytes = value.hsl_scratch_budget_bytes = 2 * GIB
+    value._history_batch_bytes = lambda width: width * 64 * MIB
+    value.bars = SimpleNamespace(device="cuda")
+    free_bytes = 768 * MIB
+    def empty_cache():
+        nonlocal free_bytes
+        assert not value._replay_states and not value._core_buffers
+        assert value._scratch_shape is value._core_output is None
+        free_bytes += 256 * MIB
+    monkeypatch.setattr(mps_kernel.torch.cuda, "mem_get_info", lambda _device: (free_bytes, 8 * GIB))
+    monkeypatch.setattr(mps_kernel.torch.cuda, "empty_cache", empty_cache)
+    for name in ("memory_reserved", "memory_allocated"):
+        monkeypatch.setattr(mps_kernel.torch.cuda, name, lambda _device: 256 * MIB)
+    value._refresh_max_mode_scratch_budget(5)
+    assert free_bytes == GIB
+    assert value.hsl_scratch_budget_bytes == GIB - int(8 * GIB * .10)
 
 
 @pytest.mark.parametrize("change", ["grow", "shrink", "state"])
@@ -197,14 +408,16 @@ def test_shape_changes_release_all_retained_scratch_and_reuse_unchanged_shapes(c
     assert market() is value.bars
 
 
+@pytest.mark.parametrize("policy", ["conservative", "cold_max"])
 @pytest.mark.usefixtures("torch_runtime")
-def test_physical_attempt_releases_scratch_before_first_device_allocation(monkeypatch):
+def test_physical_attempt_checks_scratch_before_first_device_allocation(monkeypatch, policy):
     import numpy as np
     import weakref
     from optimization.gpu import mps_kernel as kernel
+    from optimization.gpu.residency import CudaReplayMemoryPressure
 
     class Buffer:
-        pass
+        nbytes = 0
 
     class AllocationReached(Exception):
         pass
@@ -213,9 +426,11 @@ def test_physical_attempt_releases_scratch_before_first_device_allocation(monkey
     value._prepare_scratch_shape(64)
     refs = []
     for name in SCRATCH_CACHES:
+        buffer = Buffer()
         buffers = getattr(value, name)
-        buffers[64] = Buffer()
-        refs.append(weakref.ref(buffers[64]))
+        buffers[64] = (buffer,) if name in {"_buffers", "_hsl_scratch_buffers"} else buffer
+        refs.append(weakref.ref(buffer))
+    del buffer
     value._pack_params = np.asarray
     value._bootstrap_coin_overrides = ()
     value.interval_minutes = 1
@@ -229,6 +444,7 @@ def test_physical_attempt_releases_scratch_before_first_device_allocation(monkey
     monkeypatch.setattr(kernel, "validate_hourly_bootstrap_inputs", lambda *_, **__: None)
     value.parameter_keys = ("unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes")
     value.replay_sides = 1
+    value.replay_kernel_name = "actual_fused_kernel"
     value._use_disabled_hsl_specialization = lambda _: False
     value._unstuck_ema_required = value._unstuck_required = lambda _: False
     value._library_cache_call = lambda: (None, ())
@@ -238,15 +454,39 @@ def test_physical_attempt_releases_scratch_before_first_device_allocation(monkey
     value.hsl_capacity = 0
     value.settings = [0.0] * 16
     value.settings[14] = 1.0  # Original gate activation survives factual control writes.
-    monkeypatch.setattr(kernel, "_cached_library_with_miss", lambda *_: (None, False))
+    value.cuda_max_scratch_policy = policy == "cold_max"
+    value.bars = SimpleNamespace(device=SimpleNamespace(index=1))
+    value._core_buffers = {}
+    value._max_mode_scratch_ceiling_bytes = 2 * GIB
+    value._history_batch_bytes = lambda width: (width + 1) * 32 * MIB
+    called = []
+
+    def pending_stack(name, device):
+        called.append((name, device))
+        return (78_128 - 1024) * 46 * 1536
+
+    library = SimpleNamespace(pending_stack_bytes=pending_stack)
+    monkeypatch.setattr(kernel, "_cached_library_with_miss", lambda *_: (library, False))
     monkeypatch.setattr(kernel, "gpu_device", lambda: "cuda")
+    monkeypatch.setattr(kernel.torch.cuda, "mem_get_info", lambda _: (4941 * MIB, 8 * GIB))
+    monkeypatch.setattr(kernel.torch.cuda, "memory_reserved", lambda _: 0)
+    monkeypatch.setattr(kernel.torch.cuda, "memory_allocated", lambda _: 0)
     def allocate(*_, **__):
+        assert policy == "conservative", "replay allocations reached with insufficient driver stack backing"
         assert all(ref() is None for ref in refs)
         assert value.settings[14] == 1
         raise AllocationReached
+
     monkeypatch.setattr(kernel.torch, "as_tensor", allocate)
-    with pytest.raises(AllocationReached):
-        value._run_factual_attempt(np.full((117, 2), 1440.0))
+    if policy == "cold_max":
+        with pytest.raises(CudaReplayMemoryPressure, match="additional driver stack"):
+            value._run_factual_attempt(np.full((117, 2), 1440.0))
+        assert called == [("actual_fused_kernel", 1)]
+        assert all(ref() is not None for ref in refs)
+    else:
+        with pytest.raises(AllocationReached):
+            value._run_factual_attempt(np.full((117, 2), 1440.0))
+        assert not called
 
 
 @pytest.mark.parametrize("automatic", [False, True])

@@ -98,6 +98,137 @@ def test_cuda_preparation_uses_original_budget_while_activation_checks_live_free
         manager.check_preparation_memory(torch, 4 * 2**30)
 
 
+def test_max_resident_ceiling_threads_through_header_preflight_and_activation(monkeypatch):
+    gib = 2**30
+    torch, observations = _cuda(monkeypatch, free=7 * gib, available=8 * gib)
+    conservative = residency.capture_cuda_input_memory_budget(torch)
+    maximum = residency.capture_cuda_input_memory_budget(torch, max_throughput=True)
+    assert maximum.device_bytes == int(7 * gib * 0.70)
+    assert maximum.host_bytes == int(8 * gib * 0.85)
+    shape = (2_000_000, 40, 4)  # 3.95 GiB dense, inside the new resident limit.
+    assert residency.prefer_streamed_ticks(*shape[:2], conservative, device="cuda")
+    assert not residency.prefer_streamed_ticks(*shape[:2], maximum, device="cuda")
+    _gpu_cached_input_preflight(None, shape, np.float64, input_memory_budget=maximum)
+    resident = residency.multicoin_resident_bytes(*shape[:2], device="cuda")
+    manager = residency.CudaSuiteResidency(input_memory_budget=maximum)
+    observations["free"] = 4 * gib
+    manager.check_preparation_memory(torch, resident)
+    with pytest.raises(MemoryError, match="currently free.*reserve"):
+        manager._check_memory(torch, resident)
+    with pytest.raises(MemoryError, match="max-mode input budget"):
+        manager.check_preparation_memory(torch, 5 * gib)
+
+
+def test_max_cannot_spend_vram_needed_by_the_reserve_and_replay(monkeypatch):
+    torch, _ = _cuda(monkeypatch, free=2**30, available=2**28)
+    budget = residency.capture_cuda_input_memory_budget(torch, max_throughput=True)
+    assert budget.device_bytes == budget.host_bytes == 0
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_max_header_preflight_keeps_streamable_dense_input_under_live_pressure(monkeypatch, strategy):
+    gib = 2**30
+    torch, observations = _cuda(monkeypatch, free=7 * gib)
+    budget = residency.capture_cuda_input_memory_budget(torch, max_throughput=True)
+    shape = (2_300_000, 40, 4)
+    assert not residency.prefer_streamed_ticks(*shape[:2], budget, device="cuda")
+    observations["free"] = 4 * gib
+    _gpu_cached_input_preflight(None, shape, np.float64, strategy_kind=strategy, input_memory_budget=budget)
+    with pytest.raises(residency.CudaReplayMemoryPressure, match="currently free"):
+        _gpu_cached_input_preflight(None, shape, np.float64, input_memory_budget=budget)
+    observations["free"] = 2 * gib
+    with pytest.raises(residency.CudaReplayMemoryPressure, match="currently free"):
+        _gpu_cached_input_preflight(None, shape, np.float64, strategy_kind=strategy, input_memory_budget=budget)
+
+
+@pytest.mark.parametrize("pressure", ["upload_admission", "first_runner", "after_replay", "streamed_fails", "untyped"])
+def test_max_falls_back_once_using_same_packed_tick_files(monkeypatch, pressure):
+    from weakref import ref
+
+    gib = 2**30
+    torch, observations = _cuda(monkeypatch, free=7 * gib)
+    budget = residency.capture_cuda_input_memory_budget(torch, max_throughput=True)
+    torch.cuda.synchronize = lambda: None
+    torch.cuda.empty_cache = lambda: None
+    manager = residency.CudaSuiteResidency(input_memory_budget=budget)
+    uploads, created = [], []
+    tick_fields = residency.METAL_STREAMED_TICK_FIELDS
+    invariant = residency.multicoin_invariant_bytes(2_300_000, 40, device="cuda")
+
+    class Tensor:
+        pass
+
+    def upload(_torch, path):
+        uploads.append(path.stem)
+        return Tensor()
+
+    monkeypatch.setattr(manager, "_upload_file", upload)
+    dense_tensors = []
+
+    class Owner:
+        _max_throughput = True
+        temporal_chunking = True
+        strategy_kind = "ema_anchor"
+
+        def __init__(self, data):
+            self.data, self.runners, self.fused_runner = data, {}, None
+
+        def _create_runners(self):
+            stream = self.data["stream_tick_inputs"]
+            created.append(stream)
+            if stream:
+                assert all(tensor() is None for tensor in dense_tensors)
+                assert all(isinstance(self.data[name], Path) for name in tick_fields)
+                if pressure == "streamed_fails":
+                    raise residency.CudaReplayMemoryPressure("cannot admit streamed runner")
+            else:
+                dense_tensors.extend(ref(self.data[name]) for name in tick_fields)
+                if pressure == "untyped":
+                    raise MemoryError("actual CUDA allocation failed")
+                if pressure in {"first_runner", "streamed_fails"}:
+                    dense_reference = self.data[next(iter(tick_fields))]
+                    assert isinstance(dense_reference, Tensor)
+                    raise residency.CudaReplayMemoryPressure("cannot admit dense runner")
+            self.fused_runner = Tensor()
+
+    def build(directory):
+        names = (*tick_fields, "bars", "market_execution_ticks", "hour_log_ranges")
+        return dict(n=2_300_000, n_coins=40, stream_tick_inputs=False, compact_hourly_ranges=False,
+                    invariant_bytes=invariant, resident_bytes=invariant,
+                    **{name: directory / (name + ".npy") for name in names})
+
+    try:
+        data = manager.prepare("history", build)
+        owner = Owner(data)
+        manager.register(owner)
+        if pressure == "upload_admission":
+            observations["free"] = 4 * gib
+        if pressure == "untyped":
+            with pytest.raises(MemoryError, match="actual CUDA allocation failed"):
+                manager.activate(owner)
+            assert created == [False] and not data["stream_tick_inputs"]
+            return
+        if pressure == "streamed_fails":
+            with pytest.raises(residency.CudaReplayMemoryPressure, match="cannot admit streamed runner"):
+                manager.activate(owner)
+            assert created == [False, True] and manager._active is None
+            return
+        manager.activate(owner)
+        if pressure == "after_replay":
+            manager.stream_on_pressure(owner)
+        assert created == ([True] if pressure == "upload_admission" else [False, True])
+        assert not data["compact_hourly_ranges"]
+        assert data["resident_bytes"] == residency.multicoin_resident_bytes(
+            2_300_000, 40, device="cuda", stream_tick_inputs=True,
+        )
+        assert data["invariant_bytes"] == invariant
+        assert not manager.can_stream_on_pressure(owner)
+        assert len(manager._entries) == 1 and manager.prepare("history", build) is data
+        assert set(uploads[-3:]) == {"bars", "market_execution_ticks", "hour_log_ranges"}
+    finally:
+        manager.close()
+
+
 def test_cuda_compact_packing_preserves_dense_inputs_and_int8_relation(monkeypatch, tmp_path):
     _cuda(monkeypatch)
     n, coins, minute = 185, 3, 23

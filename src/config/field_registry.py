@@ -206,7 +206,6 @@ _FIELDS_BY_TYPE = {
         "logging": "dir",
         "monitor": "root_dir",
         "optimize": "backend",
-        "optimize.gpu": "tuning_mode",
         "optimize.pymoo": "algorithm",
         "optimize.pymoo.algorithms.nsga3.ref_dirs": "method",
         "bot.portfolio.hsl": "scope",
@@ -284,6 +283,8 @@ def _template_value(template, path):
 
 def get_field_registry() -> FieldRegistry:
     """Return a fresh registry; returned defaults never mutate schema defaults."""
+    from .control_sentinels import case_insensitive_control_pattern
+    from .gpu import GPU_TUNING_INPUTS
     from .schema import get_expanded_config_prototype
     from .strategy_spec import get_strategy_spec, get_supported_strategy_kinds
 
@@ -326,6 +327,10 @@ def get_field_registry() -> FieldRegistry:
     add("backtest.acquisition_mode", FieldType.STRING,
         domain=FieldDomain(choices=("auto", "rest")),
         description="Public simulation candle transport; does not replace offline policy.")
+    add("optimize.gpu.tuning_mode", FieldType.STRING,
+        domain=FieldDomain(choices=GPU_TUNING_INPUTS,
+                           string_pattern=case_insensitive_control_pattern(GPU_TUNING_INPUTS)),
+        description="GPU resource tuning policy. Max is CUDA-only. Auto aliases conservative.")
     for kind, paths in _NULLABLE_FIELDS.items():
         for path in paths:
             add(path, kind, nullable=True)
