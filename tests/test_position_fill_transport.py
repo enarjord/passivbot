@@ -12,8 +12,9 @@ from test_fake_exchange import _scenario
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["create", "cancel"])
 @pytest.mark.parametrize("transport", ["ccxt", "fake", "bitunix"])
+@pytest.mark.parametrize("blocker", ["position_fill_settling", "stale_plan"])
 async def test_change_during_connector_queue_defers_at_transport(
-    action, transport, monkeypatch
+    action, transport, blocker, monkeypatch
 ):
     key = ("BTC/USDT:USDT", "long")
     sync = syncmod.PositionFillSync(lambda: 0.0)
@@ -80,9 +81,13 @@ async def test_change_during_connector_queue_defers_at_transport(
         config={"bot": {"portfolio": {'hsl': {'scope': 'coin'}}}},
     )
 
-    owner = SimpleNamespace(_write_lock=asyncio.Lock(), admit=lambda order: True)
+    plan_is_current = True
+    owner = SimpleNamespace(
+        _write_lock=asyncio.Lock(), admit=lambda order: plan_is_current
+    )
     monkeypatch.setattr(hsl_live, "owner", lambda bot: owner)
-    bot._request_authoritative_confirmation = lambda scopes: None
+    confirmations = []
+    bot._request_authoritative_confirmation = confirmations.append
     ownership, cancellations, events = [], [], []
     bot.add_to_recent_order_cancellations = cancellations.append
     bot.log_order_action = lambda *a, **kw: None
@@ -104,7 +109,10 @@ async def test_change_during_connector_queue_defers_at_transport(
 
     task = asyncio.create_task(write(bot, dict(symbol=key[0], position_side=key[1])))
     await asyncio.wait_for(entered.wait(), 1.0)
-    sync.observe({key: (1.0, 100.0)})
+    if blocker == "position_fill_settling":
+        sync.observe({key: (1.0, 100.0)})
+    else:
+        plan_is_current = False
     if transport == "ccxt":
         # The ContextVar must not gate unrelated reads on the same client.
         await client.fetch("offline read")
@@ -122,6 +130,7 @@ async def test_change_during_connector_queue_defers_at_transport(
     )
     assert not sent
     assert not ownership and not cancellations and not events
+    assert not confirmations
     assert syncmod._write_context.get() is None
     if transport == "fake":
         after = client.export_state()
