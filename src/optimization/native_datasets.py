@@ -6,6 +6,7 @@ here and reused by content. Close the service before closing this registry.
 
 import json
 import logging
+import time
 from itertools import product
 
 import numpy as np
@@ -97,7 +98,9 @@ class NativeDatasetRegistry:
             self.bindings = self._execution_variants(base, evaluator, bindings, vector, overrides)
             self.planner = NativeCandidatePlanner(evaluator, self.bindings, overrides_list=overrides)
             # Metric surface and effective static inputs must be valid before registration.
+            started = time.perf_counter()
             plan = self.planner.prepare("preparation", vector)
+            self.serial_preparation_seconds = time.perf_counter() - started
             self.requests_per_candidate = len(plan.requests)
         except BaseException:
             try:

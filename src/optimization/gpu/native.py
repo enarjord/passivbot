@@ -67,7 +67,8 @@ class NativeBacktestService:
     def __init__(self, *, batch_size=_DEFAULT, max_pending=_DEFAULT, max_batch_delay=None,
                  max_dispatch_candidate_bars=500_000_000, interrupt_check=None,
                  tuning_mode=GPU_TUNING_DEFAULT, input_memory_budget=None, on_inputs_prepared=None,
-                 auto_request_capacity=None, auto_batch_size_limit=None, max_cohort_width=None):
+                 auto_request_capacity=None, auto_batch_size_limit=None, max_cohort_width=None,
+                 host_preparation=None):
         from optimization.gpu.autotune import is_auto
         from optimization.gpu.execution_tuning import ExecutionBatchTuner
         from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES, CUDA_MAX_INITIAL_BATCH_CANDIDATES
@@ -91,6 +92,7 @@ class NativeBacktestService:
                 diagnostics=diagnostics,
                 expandable_producer=max_cohort_width is not None,
                 max_throughput=self._max_throughput,
+                host_preparation=host_preparation,
             ) if automatic else None
         )
         requested_width = max_pending if automatic else (64 if is_auto(batch_size) else batch_size)

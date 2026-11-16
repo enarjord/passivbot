@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Start automatic CUDA max with an admission window that preserves parallel
+  candidate preparation when host memory allows. Use 16-thread blocks
+  for intermediate single-sided EMA Anchor dispatches that can fill enough blocks.
+
 - Start automatic CUDA max optimization with wider demand for packed replay blocks and
   adapt warmup chunk lengths separately from active trading.
 

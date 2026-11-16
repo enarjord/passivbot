@@ -1197,6 +1197,7 @@ class _MulticoinReplayRunner:
     cuda_whole_group_size = None
     cuda_global_replay_side_state = False
     cuda_global_replay_block_size = None
+    cuda_dense_replay_block_size = None
     temporal_chunk_bar_limit = MPS_TM_MULTICOIN_CHUNK_BARS
     decimal_coin_overrides = False
     specialize_metal_coin_capacity = False
@@ -1854,7 +1855,15 @@ class _MulticoinReplayRunner:
         # Packed blocks improve lane use. Keep enough blocks to cover the
         # device with two waves before choosing a wider block.
         sm_count = torch.cuda.get_device_properties(self.bars.device).multi_processor_count
-        max_block_size = batch_size // max(128, 2 * sm_count)
+        min_blocks = max(128, 2 * sm_count)
+        dense_block_size = self.cuda_dense_replay_block_size
+        if dense_block_size is not None and self.replay_sides == 1:
+            # Denser directional blocks are useful once enough can run in
+            # parallel, with narrower packs for larger or smaller grids.
+            dense_blocks = batch_size // dense_block_size
+            if 2 * min_blocks <= dense_blocks < 4 * min_blocks:
+                return dense_block_size
+        max_block_size = batch_size // min_blocks
         if max_block_size >= CUDA_MAX_PACKED_REPLAY_THREADS:
             return CUDA_MAX_PACKED_REPLAY_THREADS
         return 4 if max_block_size >= 4 else 1
@@ -2278,6 +2287,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
         )
 
     replay_kernel_name = "passivbot_ema_anchor_multicoin"
+    cuda_dense_replay_block_size = 16
     replay_state_size_kernel_name = "passivbot_ema_multicoin_replay_state_bytes"
 
     def _temporal_replay_enabled(self):

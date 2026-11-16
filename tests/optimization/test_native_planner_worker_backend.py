@@ -50,8 +50,9 @@ def test_cuda_worker_selection_is_bounded_and_keeps_serial_fallback(
     assert len(rows) == iters
 
 
+@pytest.mark.parametrize("hardware_width,initial_width", [(512, 512), (8192, 2048)])
 def test_large_search_budget_does_not_inflate_cpu_preparation_headroom(
-    monkeypatch, tmp_path, file_backed_planner,
+    monkeypatch, tmp_path, file_backed_planner, hardware_width, initial_width,
 ):
     from optimization import native_planner_capacity as capacity
     from optimization.gpu import native
@@ -62,9 +63,17 @@ def test_large_search_budget_does_not_inflate_cpu_preparation_headroom(
     base = file_backed_planner
     base.config["optimize"]["iters"] = 65536
     base.config["optimize"]["gpu"].update(tuning_mode="max", batch_size=None)
-    monkeypatch.setattr(native, "cuda_initial_candidate_width", lambda: 512)
-    monkeypatch.setattr(native, "NativeBacktestService",
-                        lambda **kwargs: FakeService(**{**kwargs, "batch_size": 512}))
+    monkeypatch.setattr(native, "cuda_initial_candidate_width", lambda: hardware_width)
+
+    def service(**kwargs):
+        assert kwargs["auto_request_capacity"] == 8192
+        window, serial_seconds = kwargs["host_preparation"]
+        assert window == 2048
+        assert serial_seconds > 0
+        assert kwargs["max_cohort_width"] == initial_width
+        return FakeService(**{**kwargs, "batch_size": initial_width})
+
+    monkeypatch.setattr(native, "NativeBacktestService", service)
 
     # The registered metadata is small, so each candidate reserves 256 KiB.
     # The live allocation admits at least four workers for 512 plans, but
@@ -73,7 +82,7 @@ def test_large_search_budget_does_not_inflate_cpu_preparation_headroom(
     select_count = capacity.cuda_plan_worker_count
 
     def stop_after_selection(planner, *, admission_slots, available_rows):
-        assert admission_slots == available_rows == 512
+        assert admission_slots == available_rows == initial_width
         assert select_count(planner, admission_slots=8192, available_rows=available_rows) == 0
         assert select_count(planner, admission_slots=admission_slots, available_rows=available_rows) == 4
         raise WorkersCanStart
@@ -86,7 +95,7 @@ def test_large_search_budget_does_not_inflate_cpu_preparation_headroom(
     state = load_checkpoint(checkpoint, base.config)
     assert state["phase"] == "seeds"
     assert state["completed"] == 0
-    assert state["max_search_allocated"] == len(state["population"]) == 512
+    assert state["max_search_allocated"] == len(state["population"]) == initial_width
 
 
 def test_existing_worker_pool_is_reused_and_tiny_tail_stays_serial(monkeypatch):

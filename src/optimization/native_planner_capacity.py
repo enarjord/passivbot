@@ -17,6 +17,7 @@ _MIB = 2**20
 _CPU_RESERVE = 2
 _WORKER_COUNTS = (8, 4)
 _MINIMUM_CANDIDATES_PER_WORKER = 16
+_MINIMUM_PARALLEL_WINDOW = min(_WORKER_COUNTS) * _MINIMUM_CANDIDATES_PER_WORKER
 
 
 def _mount_path(value):
@@ -118,7 +119,8 @@ def cuda_plan_preparation_memory(planner, admission_slots):
     # Input packing is owned by one CUDA worker. Use the largest input span,
     # including its source pages and full packed view, across registered datasets.
     packing = 0
-    dataset_metadata = 0
+    config_metadata = 0
+    market_metadata = 0
     for binding in planner.bindings:
         dataset = binding.dataset
         rows = dataset.time_range[1] - dataset.time_range[0]
@@ -126,20 +128,20 @@ def cuda_plan_preparation_memory(planner, admission_slots):
         source = rows * prod(dataset.hlcvs.shape[1:]) * np.dtype(dataset.hlcvs.dtype).itemsize
         packed = multicoin_invariant_bytes(rows, coins, device="cuda")
         packing = max(packing, source + packed)
-        dataset_metadata += len(dataset.config_json) + len(dataset.markets_json)
+        config_metadata += len(dataset.config_json)
+        market_metadata += len(dataset.markets_json)
     # Account for parent request/config/result objects and each worker's
-    # overlapping wire representations. These are allowances, not allocations.
-    candidate_bytes = max(256 * 1024, dataset_metadata * 2)
-    parent_bytes = packing + admission_slots * candidate_bytes + 1024 * _MIB
-    worker_bytes = 320 * _MIB + dataset_metadata * 8 + candidate_bytes * 4
+    # overlapping wire representations. Candidate requests carry scalar
+    # parameters. The registered market snapshots are shared on the parent.
+    dataset_metadata = config_metadata + market_metadata
+    candidate_bytes = max(256 * 1024, config_metadata * 2)
+    parent_bytes = packing + dataset_metadata + admission_slots * candidate_bytes + 1024 * _MIB
+    worker_plan_bytes = max(256 * 1024, dataset_metadata * 2)
+    worker_bytes = 320 * _MIB + dataset_metadata * 8 + worker_plan_bytes * 4
     return parent_bytes, worker_bytes
 
 
-def cuda_plan_worker_count(planner, *, admission_slots, available_rows):
-    """Admit a measured worker count within current host and scheduler headroom."""
-    if available_rows < min(_WORKER_COUNTS) * _MINIMUM_CANDIDATES_PER_WORKER:
-        return 0
-    capacity = _host_capacity()
+def _worker_count(planner, admission_slots, available_rows, capacity):
     if capacity is None:
         return 0
     cpus, available = capacity
@@ -149,6 +151,30 @@ def cuda_plan_worker_count(planner, *, admission_slots, available_rows):
     demand_workers = available_rows // _MINIMUM_CANDIDATES_PER_WORKER
     feasible = min(memory_workers, cpu_workers, demand_workers)
     return next((workers for workers in _WORKER_COUNTS if workers <= feasible), 0)
+
+
+def cuda_plan_worker_count(planner, *, admission_slots, available_rows):
+    """Admit a measured worker count within current host and scheduler headroom."""
+    if available_rows < _MINIMUM_PARALLEL_WINDOW:
+        return 0
+    return _worker_count(planner, admission_slots, available_rows, _host_capacity())
+
+
+def cuda_plan_parallel_window(planner, maximum):
+    """Find the widest startup window for the largest available preparation pool."""
+    capacity = _host_capacity()
+    if capacity is None:
+        return None
+    upper, selected, largest_pool = maximum, None, 0
+    while upper >= _MINIMUM_PARALLEL_WINDOW:
+        for window in (upper, upper * 3 // 4):
+            workers = _worker_count(planner, window, window, capacity)
+            if workers > largest_pool:
+                selected, largest_pool = window, workers
+                if workers == _WORKER_COUNTS[0]:
+                    return selected
+        upper //= 2
+    return selected
 
 
 def cuda_plan_pool_fits(*, parent_bytes, workers):
