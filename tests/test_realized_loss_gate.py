@@ -1066,7 +1066,7 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
         _, _, _, bp = prep_backtest_args(config, self._make_mss(), "binance")
         assert bp["loss_gate_max_drawdown_fraction"] == pytest.approx(1.0)
         assert bp["loss_gate_memory_ema_span_minutes"] == pytest.approx(43200.0)
-        assert bp["unstuck_memory_ema_span_minutes"] == pytest.approx(96141.557)
+        assert bp["unstuck_memory_ema_span_minutes"] == pytest.approx(85511.137)
         assert "lookback_ema_span_minutes" not in bp
         assert "realized_loss_gate_lookback_minutes" not in bp
 

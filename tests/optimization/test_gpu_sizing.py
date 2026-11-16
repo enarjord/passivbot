@@ -1,14 +1,50 @@
 """Sizing intent survives CLI normalization and reaches native dispatch as integers."""
 
 import argparse
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from config import prepare_config
+from config.schema import get_template_config
 from config.gpu import resolve_gpu_sizing
 from config_utils import add_config_arguments, clean_config, update_config_with_args
 from test_native_backend import execute, guard_cpu, inputs, managed_arrays, FakeService
+
+
+@pytest.mark.parametrize("sm_count,blocks_per_sm,expected", [
+    (12, 16, 2048), (46, 16, 8192), (120, 32, 8192),
+])
+def test_cuda_max_starts_with_packed_replay_demand(monkeypatch, sm_count, blocks_per_sm, expected):
+    from optimization.gpu import native, runtime
+
+    attributes = {"MultiProcessorCount": sm_count, "MaxBlocksPerMultiprocessor": blocks_per_sm}
+
+    def device(index):
+        assert index == 2
+        return SimpleNamespace(attributes=attributes)
+
+    monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace(cuda=SimpleNamespace(Device=device)))
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(cuda=SimpleNamespace(current_device=lambda: 2)))
+    monkeypatch.setattr(runtime, "gpu_device", lambda _torch: "cuda")
+    assert native.cuda_initial_candidate_width() == expected
+
+
+@pytest.mark.parametrize("cli_value,expected", [("128", 128), ("auto", None)])
+def test_cuda_search_cohort_size_parses_from_cli_and_config(cli_value, expected):
+    config = get_template_config()
+    config["optimize"]["gpu"]["tuning_mode"] = "max"
+    parser = argparse.ArgumentParser()
+    allowed = add_config_arguments(parser, config, command="optimize", help_all=True)
+    args = parser.parse_args(["--optimize.gpu.search_cohort_size", cli_value])
+    update_config_with_args(config, args, allowed_keys=allowed)
+    prepared = prepare_config(config, verbose=False)
+    assert prepared["optimize"]["gpu"]["search_cohort_size"] == expected
+    if expected is not None:
+        config["optimize"]["gpu"]["tuning_mode"] = "conservative"
+        with pytest.raises(ValueError, match="search_cohort_size.*requires"):
+            prepare_config(config, verbose=False)
 
 
 @pytest.mark.parametrize("batch", ["64", "64.0", "auto"])

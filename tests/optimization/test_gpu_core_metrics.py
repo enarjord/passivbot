@@ -186,7 +186,8 @@ def test_forced_delist_loss_is_not_an_hsl_execution_episode(strategy):
         base_qty_fraction=.5, ema_span_0_minutes=2., ema_span_1_minutes=3.,
         offset_fraction=.01, inventory_offset_exposure_coefficient=0.,
         entry_qty_exposure_coefficient=0.)
-    count, last_valid = 1410, 6
+    last_valid = 6
+    count = last_valid + 1442
     candles = np.full((count, 1, 4), np.nan)
     candles[:last_valid + 1] = [100., 100., 100., 1.]
     candles[3, 0] = [100., 98., 100., 1.]

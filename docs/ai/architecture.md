@@ -27,6 +27,10 @@ from contract-valid exchange state, but must not reimplement strategy intent.
 
 ## Live Data Flow
 
+Live strategy and shared policy projection into native input dictionaries live in
+`src/live/planner_inputs.py`. Exchange parameters, market evidence, and execution
+admission retain their respective owners.
+
 1. Refresh account and relevant market state.
 2. Build canonical strategy and risk inputs.
 3. Ask Rust for ideal orders.
@@ -85,3 +89,17 @@ should establish the outcome before a retry could duplicate or reverse an exchan
 
 Shutdown and task cancellation must not strand partially classified exchange writes. Exact
 exchange-specific behavior belongs in `features/exchange_integrations.md` and focused tests.
+
+
+## Configuration Ownership
+
+Use the narrowest consumer-owned section. Shared strategy and trading policy lives in
+`config.bot`, including account-wide controls under `bot.portfolio`, shared directional defaults
+under `bot.global`, and side-specific policy under `bot.long` or `bot.short`. Live execution,
+exchange I/O, account and process controls live under `config.live`. Simulation-only behavior
+lives under `config.backtest` and optimizer-only behavior under `config.optimize`. Resolve
+defaults during canonical loading and formatting. Runtime consumers must not reapply them.
+
+The checked-in `schemas/config-v9.schema.json` supports offline schema consumers without a
+native build. Regeneration and runtime config preparation use the Rust strategy and metric
+registries so their defaults and identifiers share the runtime source of truth.

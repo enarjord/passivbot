@@ -130,7 +130,8 @@ def test_forced_delist_liquidation_hsl_duration_reaches_bar_close(strategy, gpu_
     config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = .8
     # The panic limit cannot cross the gap. Forced delisting realizes the loss
     # after Rust's ordinary-fill liquidation check, so reporting reaches close 6.
-    candles = np.repeat(inputs[1][-1:], 1410, axis=0)
+    count = 6 + 1442
+    candles = np.repeat(inputs[1][-1:], count, axis=0)
     candles[:7] = inputs[1]
     candles[4, :, :3] = [100, 99, 99.5]
     candles[5, :, :3] = [93.1, 92.9, 93]
@@ -138,8 +139,8 @@ def test_forced_delist_liquidation_hsl_duration_reaches_bar_close(strategy, gpu_
     candles[7:, :, :3] = np.nan
     inputs[1] = candles
     inputs[2]["BTC"]["last_valid_index"] = 6
-    inputs[3] = np.full(1410, 50_000.0)
-    inputs[4] = inputs[4][0] + np.arange(1410, dtype=np.int64) * 60_000
+    inputs[3] = np.full(count, 50_000.0)
+    inputs[4] = inputs[4][0] + np.arange(count, dtype=np.int64) * 60_000
     metrics = ["hsl_red_time_fraction"]
     report = run_comparison(
         tuple(inputs), "bybit", metrics,

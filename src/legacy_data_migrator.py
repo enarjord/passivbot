@@ -431,7 +431,6 @@ def migrate_legacy_data_for_exchange(
     """
     # Import CANDLE_DTYPE here to avoid circular imports
     from candlestick_manager import CANDLE_DTYPE
-    import time
 
     migrated = 0
     skipped = 0

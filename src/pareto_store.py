@@ -619,7 +619,6 @@ def comma_separated_values_float(x):
 def main():
     import argparse
     import matplotlib.pyplot as plt
-    import numpy as np
     import json
 
     parser = argparse.ArgumentParser(
@@ -749,7 +748,7 @@ def main():
                 return LimitSpec(metric, field, OPERATORS[op_str], float(val.strip()))
         raise ValueError(f"Invalid limit expression: {expr}")
 
-    limit_specs: List[LimitSpec] = []
+    limit_specs: list[LimitSpec] = []
     if args.limits:
         for expr in args.limits:
             try:

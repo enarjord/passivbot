@@ -1428,13 +1428,30 @@ async def test_order_stream_multiplexes_public_klines_and_uses_json_ping(
     btc_rows, eth_rows = await asyncio.gather(btc_waiter, eth_waiter)
     assert btc_rows[0][4] == 102.0
     assert eth_rows[0][4] == 101.0
-    assert "malformed kline update dropped" in caplog.text
+    assert "malformed kline updates dropped" in caplog.text
     assert "reason=inconsistent_ohlc" in caplog.text
 
     await stream.un_watch_ohlcv("BTC/USDT:USDT", "1m")
     await stream.un_watch_ohlcv(eth_symbol, "1m")
     assert socket.closed is True
     await stream.close()
+
+
+def test_malformed_kline_warning_counts_repeats_across_symbols(caplog, monkeypatch):
+    stream = BitunixOrderStream(_prepared_client())
+    now = 100.0
+    monkeypatch.setattr("exchanges.bitunix.time.monotonic", lambda: now)
+    stream._log_malformed_kline("BTC", "inconsistent_ohlc", fallback=False)
+    for symbol in ("ETH", "SOL", "XRP", "ADA"):
+        now += 1
+        stream._log_malformed_kline(symbol, "inconsistent_ohlc", fallback=True)
+    assert len(caplog.records) == 1
+
+    now = 400.0
+    stream._log_malformed_kline("DOGE", "inconsistent_ohlc", fallback=False)
+    assert len(caplog.records) == 2
+    assert "drops=5 fallback_requests=4" in caplog.records[-1].message
+    assert "sample=ETH,SOL,XRP" in caplog.records[-1].message
 
 
 @pytest.mark.asyncio
@@ -2258,6 +2275,24 @@ class _RecordingSession:
     def request(self, *args, **kwargs):
         self.call = (args, kwargs)
         return _ResponseContext(self.response)
+
+
+@pytest.mark.asyncio
+async def test_native_market_discovery_propagates_http_retry_after_without_early_retry():
+    client = BitunixClient({})
+    response = SimpleNamespace(
+        status=429,
+        headers={"retry-after": "45"},
+        text=AsyncMock(return_value="server backpressure"),
+    )
+    client._get_session = AsyncMock(return_value=_RecordingSession(response))
+    client._throttle = AsyncMock()
+
+    with pytest.raises(RateLimitExceeded, match="Bitunix HTTP 429") as error:
+        await client.load_markets()
+
+    assert error.value.retry_after_seconds == 45.0
+    response.text.assert_awaited_once()
 
 
 @pytest.mark.asyncio

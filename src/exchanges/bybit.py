@@ -4,11 +4,11 @@ from uuid import uuid4
 import asyncio
 import math
 import ccxt
-from copy import deepcopy
 from collections import defaultdict
 from utils import symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
 from passivbot_exceptions import FatalBotException
+from live.state_refresh import AuthoritativeSurfaceUnavailable
 from pure_funcs import (
     floatify,
     calc_hash,
@@ -126,57 +126,67 @@ class BybitBot(CCXTBot):
         fetched = await self._do_fetch_open_orders(symbol=symbol)
         return self._normalize_open_orders(fetched)
 
-    async def _do_fetch_positions_paginated(self) -> list:
-        """Bybit: Handle nextPageCursor pagination for raw position capture."""
-        positions = []
-        seen_keys = set()
-        limit = 200
-        fetched = await self.cca.fetch_positions(params={"limit": limit})
-
-        while True:
-            if all(elm["symbol"] + elm["side"] in seen_keys for elm in fetched):
-                break
-            next_page_cursor = None
-            for elm in fetched:
-                key = elm["symbol"] + elm["side"]
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                positions.append(elm)
-                if "nextPageCursor" in elm.get("info", {}):
-                    next_page_cursor = elm["info"]["nextPageCursor"]
-            if len(fetched) < limit or next_page_cursor is None:
-                break
-            fetched = await self.cca.fetch_positions(
-                params={"cursor": next_page_cursor, "limit": limit}
-            )
-        return positions
-
-    def _normalize_positions_snapshot(self, fetched: list) -> list:
-        positions = {}
-        for elm in fetched:
-            key = elm["symbol"] + elm["side"]
-            normalized = {
-                "symbol": elm["symbol"],
-                "position_side": elm.get("side", "long").lower(),
-                "size": float(elm["contracts"]),
-                "price": float(elm["entryPrice"]),
-            }
-            self._preserve_position_timing(elm, normalized)
-            margin_mode = self._extract_live_margin_mode(elm)
-            if margin_mode is not None:
-                normalized["margin_mode"] = margin_mode
-            self._record_live_margin_mode(elm["symbol"], margin_mode)
-            positions[key] = normalized
-        return list(positions.values())
+    def _get_position_side(self, row: dict) -> str:
+        side = super()._get_position_side(row)
+        info = row.get("info")
+        if isinstance(info, dict) and "positionIdx" in info:
+            try:
+                position_idx = self._strict_position_idx(info["positionIdx"])
+            except (ValueError, OverflowError):
+                return ""
+            # CCXT may map an unknown nonzero positionIdx to short. A
+            # provided native hedge index must agree with the normalized side.
+            if (position_idx == 1 and side != "long") or (
+                position_idx == 2 and side != "short"
+            ):
+                return ""
+        return side
 
     async def fetch_positions(self) -> list:
-        fetched = await self._do_fetch_positions_paginated()
-        return self._normalize_positions_snapshot(fetched)
+        _, positions = await self.capture_positions_snapshot()
+        return positions
 
     async def capture_positions_snapshot(self) -> tuple[list, list]:
-        fetched = await self._do_fetch_positions_paginated()
-        return fetched, self._normalize_positions_snapshot(deepcopy(fetched))
+        """Capture Bybit's paginated positions and validate rows before deduplication."""
+        raw_positions = []
+        positions = {}
+        seen_cursors = set()
+        params = {"limit": 200, "paginate": False}
+
+        for _ in range(1000):
+            fetched = await self.cca.fetch_positions(params=params)
+            if not isinstance(fetched, list):
+                raise AuthoritativeSurfaceUnavailable("positions", "invalid_payload")
+            if not fetched:
+                break
+            for row in fetched:
+                normalized = self._normalize_position(row)
+                if normalized is None:
+                    raw_positions.append(row)
+                    continue
+                key = (normalized["symbol"], normalized["position_side"])
+                if key not in positions:
+                    positions[key] = normalized
+                    raw_positions.append(row)
+            # CCXT attaches the page cursor to the first raw row. Position
+            # filtering and deduplication cannot determine page completion.
+            info = fetched[0].get("info")
+            cursor = info.get("nextPageCursor") if isinstance(info, dict) else None
+            if cursor in (None, ""):
+                break
+            if not isinstance(cursor, str) or not cursor.strip():
+                raise AuthoritativeSurfaceUnavailable("positions", "invalid_pagination_cursor")
+            if cursor in seen_cursors:
+                raise AuthoritativeSurfaceUnavailable("positions", "repeated_pagination_cursor")
+            seen_cursors.add(cursor)
+            params = {**params, "cursor": cursor}
+        else:
+            raise AuthoritativeSurfaceUnavailable("positions", "pagination_exhausted")
+
+        for position in positions.values():
+            if "margin_mode" in position:
+                self._record_live_margin_mode(position["symbol"], position["margin_mode"])
+        return raw_positions, list(positions.values())
 
     def _get_balance(self, fetched_balance: dict) -> float:
         """Bybit UTA raw balance is account equity excluding perpetual UPNL."""

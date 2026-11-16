@@ -678,8 +678,8 @@ where
                 let pnl_abs = pnl_if_closed.abs();
                 if pnl_if_closed < 0.0 && pnl_abs > allowance {
                     let scaled_qty = close_qty.abs() * (allowance / pnl_abs);
-                    let scaled_qty = f64::min(size_abs, scaled_qty);
                     let scaled_qty = f64::max(min_entry_qty, round_dn(scaled_qty, input.qty_step));
+                    let scaled_qty = f64::min(size_abs, scaled_qty);
                     close_qty = -scaled_qty;
                 }
                 if close_qty == 0.0 {
@@ -716,8 +716,8 @@ where
                 let pnl_abs = pnl_if_closed.abs();
                 if pnl_if_closed < 0.0 && pnl_abs > allowance {
                     let scaled_qty = close_qty * (allowance / pnl_abs);
-                    let scaled_qty = f64::min(size_abs, scaled_qty);
                     let scaled_qty = f64::max(min_entry_qty, round_dn(scaled_qty, input.qty_step));
+                    let scaled_qty = f64::min(size_abs, scaled_qty);
                     close_qty = scaled_qty;
                 }
                 if close_qty == 0.0 {
@@ -1222,6 +1222,23 @@ mod tests {
         assert!(rows[1].proposed);
         assert_eq!(rows[0].reason, "eligible");
         assert_eq!(rows[1].reason, "eligible");
+    }
+
+    #[test]
+    fn allowance_scaled_unstuck_closes_at_most_the_remaining_position() {
+        for (side, position_size, current_price) in [(LONG, 0.05, 90.0), (SHORT, -0.05, 110.0)] {
+            let mut input = unstuck_diagnostic_input(side);
+            input.position_size = position_size;
+            input.position_price = 100.0;
+            input.current_price = current_price;
+            input.unstuck_ema_gating_enabled = false;
+            input.unstuck_exposure_trigger_ratio = 0.0;
+            input.min_qty = 0.1;
+
+            let (_, _, order) = calc_unstucking_action(1_000.0, 0.1, 0.1, &[input])
+                .expect("allowance-scaled dust close");
+            assert_eq!(order.qty, -position_size);
+        }
     }
 
     #[test]

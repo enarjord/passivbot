@@ -585,15 +585,17 @@ shared source.
 - **bot.<side>.universe.minimum_coin_age_days**: Initial-entry age gate for that side in every
   live, backtest and optimizer selection mode, including static lists and forced-normal selection.
   Default `60.0`; any finite nonnegative fractional number of days is allowed. `0.0` disables
-  the gate. A positive threshold requires known inception and admits the side when elapsed time
-  is at least the threshold. Unknown or future inception remains ineligible. The gate does not
-  stop held-position DCA, exits or protection. Pre-eligibility history may warm indicators;
+  the gate. Age follows the earliest verified price observation for the same asset across venues,
+  including reviewed migrations. Pre-launch prices are excluded. A positive threshold requires known
+  inception and admits the side when elapsed time is at least the threshold. Unknown or future
+  inception remains ineligible. Held-position DCA, exits and protection use their existing gates. Pre-eligibility history may warm indicators;
   there is no added age-plus-warmup waiting period. This is fixed policy, outside optimizer bounds
   and coin overrides; fixed runtime and scenario overrides can set either side independently.
   Automatic shared-data caches retry missing inception facts when any assigned scenario needs
   a positive gate, including a dormant side that an optimizer candidate can activate. This
-  acquisition requirement leaves the configured ages and cache identity unchanged. Explicit
-  dataset overrides remain immutable; unknown inception in them still fails a positive gate.
+  acquisition requirement leaves the configured ages unchanged. Automatic caches can refresh age
+  metadata while reusing candle arrays. Explicit dataset overrides remain immutable. Older
+  inception metadata in an override is unresolved under the current policy.
   Live acquisition requests only approved markets on enabled sides with positive ages. Automatic
   cache rebuilds retain verified known inception for the same market when a fresh lookup is
   unresolved; a fresh positive fact corrects an existing positive fact on publication, even

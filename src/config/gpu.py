@@ -3,7 +3,18 @@
 import json
 import math
 
+GPU_TUNING_DEFAULT = "conservative"
+GPU_TUNING_INPUTS = (GPU_TUNING_DEFAULT, "max", "refresh", "off", "auto")
 GPU_SCREENING_DEFAULTS = {"scenarios": [], "survival_fraction": 0.1, "min_survivors": 64}
+
+
+def resolve_gpu_tuning_mode(value=GPU_TUNING_DEFAULT) -> str:
+    """Resolve the legacy automatic mode to the current conservative policy."""
+    if isinstance(value, str):
+        mode = value.strip().lower()
+        if mode in GPU_TUNING_INPUTS:
+            return GPU_TUNING_DEFAULT if mode == "auto" else mode
+    raise ValueError("optimize.gpu.tuning_mode must be conservative, max, refresh, off, or auto")
 
 
 def resolve_gpu_sizing(value, *, field):
@@ -14,6 +25,13 @@ def resolve_gpu_sizing(value, *, field):
             or not math.isfinite(value) or value < 1 or value != int(value)):
         raise ValueError(f"optimize.gpu.{field} must be a positive integer or auto")
     return int(value)
+
+
+def resolve_gpu_search_cohort_size(value, *, tuning_mode):
+    size = resolve_gpu_sizing(value, field="search_cohort_size")
+    if size is not None and tuning_mode != "max":
+        raise ValueError("optimize.gpu.search_cohort_size requires tuning_mode='max'")
+    return size
 
 
 def resolve_gpu_screening(value=None) -> dict:

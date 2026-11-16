@@ -256,15 +256,16 @@ def handle_staged_execution_precondition_error(
 
 def log_staged_execution_defer(bot, details: dict) -> None:
     """Log a throttled non-trading defer while staged inputs settle."""
-    run_diagnostic_step(
-        "record ordinary planning defer", lambda: observe_ordinary_defer(bot, details)
+    now_ms = _utc_ms()
+    ordinary = run_diagnostic_step(
+        "record ordinary planning defer",
+        lambda: observe_ordinary_defer(bot, details, now_ms),
     )
     missing = tuple(details.get("missing", ()))
     required = tuple(details.get("required", ()))
     context = str(details.get("context") or "planning")
     invalid = details.get("invalid") or {}
     log_key = (context, missing, required, tuple(sorted(invalid)))
-    now_ms = _utc_ms()
     last_log_ms = int(getattr(bot, "_staged_execution_defer_last_log_ms", 0) or 0)
     throttle_ms = 15_000
     if (
@@ -280,7 +281,9 @@ def log_staged_execution_defer(bot, details: dict) -> None:
             "emit planning_unavailable diagnostic",
             lambda: emitter(details),
         )
-    logging.info("[state] %s", bot._format_staged_execution_defer_message(details))
+    level = logging.DEBUG if ordinary else logging.INFO
+    if logging.getLogger().isEnabledFor(level):
+        logging.log(level, "[state] %s", bot._format_staged_execution_defer_message(details))
     if invalid:
         logging.debug("[state] staged execution deferred details | invalid=%s", invalid)
 

@@ -415,7 +415,7 @@ mod tests {
             assert!(!body.contains("balance -= fee"));
             assert!(body.contains(&format!("{helper_prefix}_one_side(")));
             assert!(body.contains(&format!("{helper_prefix}_fused(")));
-            assert!(body.contains("last_valid + 1400 >= timestep_count"));
+            assert!(body.contains("multicoin_tail_indicates_delisting(last_valid, timestep_count, interval_ms)"));
             assert!(body.contains("ordinary_market_fill_price("));
             assert!(body.contains("record_hsl_panic_fill("));
         }

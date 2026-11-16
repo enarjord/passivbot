@@ -381,7 +381,8 @@ async def test_recovery_waits_for_admitted_ordinary_execution(outcome, caplog):
 
 
 @pytest.mark.asyncio
-async def test_restart_budget_and_cooldown_remain_unchanged(caplog, monkeypatch):
+@pytest.mark.parametrize("failure", ["fatal", "restart_budget", "sigterm_startup", "sigterm_active", "sigterm_cooldown"])
+async def test_live_lifecycle_terminal_outcomes(caplog, monkeypatch, failure):
     from unittest.mock import AsyncMock, Mock
 
     config = pb.get_template_config()
@@ -414,16 +415,98 @@ async def test_restart_budget_and_cooldown_remain_unchanged(caplog, monkeypatch)
     monkeypatch.setattr(pb, "compile_runtime_config", lambda config, **kw: config)
     monkeypatch.setattr(pb, "setup_bot", Mock(return_value=bot))
     monkeypatch.setattr(pb, "bot", None, raising=False)
-    sleep = AsyncMock()
+    handlers = {}
+
+    def register_handler(sig, handler):
+        previous = handlers.get(sig, pb.signal.SIG_DFL)
+        handlers[sig] = handler
+        return previous
+
+    monkeypatch.setattr(pb.signal, "signal", register_handler)
+    real_sleep = pb.asyncio.sleep
+
+    async def send_sigterm(*args, **kwargs):
+        handlers[pb.signal.SIGTERM](pb.signal.SIGTERM, None)
+        await real_sleep(0)
+        await real_sleep(0)
+
+    async def cooldown(seconds):
+        if failure == "sigterm_cooldown":
+            await send_sigterm()
+
+    sleep = AsyncMock(side_effect=cooldown)
     monkeypatch.setattr(pb.asyncio, "sleep", sleep)
-    with caplog.at_level(logging.ERROR):
-        await pb._run_live({})
-    assert pb.setup_bot.call_count == 2  # Original len(restarts) > limit policy.
-    assert bot.cleanup_for_restart.await_count == 2
-    assert sleep.await_count == 2 * 61  # Original inclusive 60..0 cooldown.
-    assert "restarts=2 limit=1 window=24h" in caplog.text
+    if failure == "fatal":
+        bot.start_bot.side_effect = pb.FatalBotException("password=RESTART_SECRET")
+
+    if failure == "sigterm_startup":
+        pb.load_markets.side_effect = send_sigterm
+    if failure == "sigterm_active":
+        bot.start_bot.side_effect = send_sigterm
+        bot.shutdown_gracefully = AsyncMock()
+
+    with caplog.at_level(logging.INFO):
+        if failure.startswith("sigterm"):
+            await pb.main()
+        else:
+            with pytest.raises(SystemExit) as exc:
+                await pb.main()
+            assert exc.value.code == 1
+
+    expected_starts = {"restart_budget": 2, "sigterm_startup": 0}.get(failure, 1)
+    assert pb.setup_bot.call_count == expected_starts
+    assert bot.cleanup_for_restart.await_count == expected_starts - (failure == "sigterm_active")
+    if failure == "sigterm_active":
+        bot.shutdown_gracefully.assert_awaited_once()
+    if failure == "fatal":
+        assert "passivbot fatal error" in caplog.text
+    if failure in {"sigterm_cooldown", "restart_budget"}:
+        sleep.assert_awaited_once_with(60)
+    else:
+        sleep.assert_not_awaited()
+    if failure == "restart_budget":
+        assert "restarts=2 limit=1 window=24h" in caplog.text
+    if failure == "sigterm_cooldown":
+        assert "stopped during restart_cooldown" in caplog.text
+    assert handlers[pb.signal.SIGTERM] == pb.signal.SIG_DFL
     assert "RESTART_SECRET" not in caplog.text
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_signal", [pb.signal.SIGINT, pb.signal.SIGTERM])
+async def test_second_shutdown_signal_exits_before_the_event_loop_runs(monkeypatch, second_signal):
+    class ImmediateExit(BaseException):
+        pass
+
+    handlers = {}
+    queued = []
+
+    def register_handler(sig, handler):
+        previous = handlers.get(sig, pb.signal.SIG_DFL)
+        handlers[sig] = handler
+        return previous
+
+    def exit_process(status):
+        raise ImmediateExit(status)
+
+    async def blocked_live(_context):
+        handlers[pb.signal.SIGINT](pb.signal.SIGINT, None)
+        assert len(queued) == 1
+        handlers[second_signal](second_signal, None)
+        pytest.fail("Repeated signal returned while the shutdown callback was queued")
+
+    monkeypatch.setattr(pb.signal, "signal", register_handler)
+    monkeypatch.setattr(
+        pb.asyncio.get_running_loop(), "call_soon_threadsafe", lambda *args: queued.append(args)
+    )
+    monkeypatch.setattr(pb.os, "_exit", exit_process)
+    monkeypatch.setattr(pb, "_run_live", blocked_live)
+    monkeypatch.setattr(pb, "bot", None)
+
+    with pytest.raises(ImmediateExit) as exc:
+        await pb.main()
+    assert exc.value.args == (128 + int(second_signal),)
+    assert len(queued) == 1
 
 
 def test_last_failure_span_restarts_when_signature_changes(caplog, monkeypatch):

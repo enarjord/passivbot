@@ -2571,7 +2571,7 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
 
     entry_k = 7
     last_valid = 10
-    count = last_valid + 1401
+    count = last_valid + 1442
     hlcvs = np.full((count, 2, 4), np.nan, dtype=np.float64)
     hlcvs[: last_valid + 1, 0] = [100.0, 100.0, 100.0, 1.0]
     hlcvs[:, 1] = [200.0, 200.0, 200.0, 1.0]
@@ -2710,7 +2710,7 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
     [
         (12, (0, 0), (6, 7)),
         (12, (0, 9), (6, 11)),
-        (1408, (0, 0), (6, 7)),
+        (1449, (0, 0), (6, 7)),
     ],
     ids=[
         "all-coins-ended-tail",
@@ -2823,7 +2823,7 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
             "position_held_max_days", "position_held_time_weighted_mean_hours",
         },
     )
-    if count < 1400:
+    if count - 1 - last_valid_indices[0] <= 1440:
         with pytest.raises(ValueError, match="held-position valuation"):
             proxy.evaluate([{}])
         with pytest.raises(ValueError, match="held-position valuation"):
@@ -3084,7 +3084,7 @@ def test_ema_disabled_hsl_preserves_optional_fill_counts(
     side, forced_delist, collect_counts, signal_mode
 ):
 
-    count = 1509 if forced_delist else 313
+    count = 1539 if forced_delist else 313
     steps = np.arange(count)
     closes = np.column_stack(
         [
@@ -3136,7 +3136,7 @@ def test_ema_disabled_hsl_preserves_optional_fill_counts(
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_ema_disabled_hsl_mixed_batch_preserves_each_candidate(side):
-    count = 1509
+    count = 1539
     steps = np.arange(count)
     closes = np.column_stack(
         [base * (1.0 + 0.09 * np.sin(steps / 17.0 + coin))
@@ -3708,11 +3708,13 @@ def test_mps_tm_multicoin_aggregated_interval_fused_smoke(interval_minutes):
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("topology", ["long", "short", "fused"])
 @pytest.mark.parametrize("forced_delist", [False, True])
+@pytest.mark.parametrize("interval_minutes", [1, 5])
 def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
-    strategy_kind, topology, forced_delist
+    strategy_kind, topology, forced_delist, interval_minutes
 ):
     last_valid = 6
-    count = last_valid + 1401 if forced_delist else 12
+    count = last_valid + 1 + 1440 // interval_minutes + int(forced_delist)
+    pnl_lookback_bars = 1440 if interval_minutes == 1 else 0
     closes = np.full((count, 2), 100.0)
     # Keep a positive packed mark after the explicit validity window so this
     # exercises the index boundary rather than relying on NaNs becoming zero.
@@ -3746,10 +3748,11 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
         lows=lows,
         last_valid_indices=(last_valid, count - 1),
         return_context=True,
-        core_metrics=['backtest_completion_fraction'],
+        interval_minutes=interval_minutes,
+        core_metrics=("backtest_completion_fraction",) if interval_minutes == 1 else (),
     )
     for key, value in {
-        "hsl_enabled": 1.0,
+        "hsl_enabled": float(interval_minutes == 1),
         "hsl_drawdown_threshold_fraction": 0.9,
         "hsl_drawdown_fraction_ema_span_minutes": 1.0,
         'hsl_cooldown_ms_lo': 0.0,
@@ -3763,13 +3766,15 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
         runner = fused_runner_cls(
             run,
             data,
-            pnl_lookback_bars=1440,
+            pnl_lookback_bars=pnl_lookback_bars,
             long_coin_overrides=overrides,
             short_coin_overrides=overrides,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
             forager_score_hysteresis={"long": 0.0, "short": 0.0},
-            core_metric_mask=_metric_mask(["backtest_completion_fraction"]),
+            core_metric_mask=(
+                _metric_mask(["backtest_completion_fraction"]) if interval_minutes == 1 else 0
+            ),
         )
         short_row = list(row)
         qty_key = (
@@ -3796,9 +3801,11 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
     assert output["balance"].item() < run.starting_balance
     # A forced listing-end close incurs its actual loss/fee without creating HSL loss.
     assert output["hsl_panic_close_loss_sum"].item() == 0.0
-    assert _core_observation(output, "last_equity").item() == pytest.approx(output["balance"].item())
+    if interval_minutes == 1:
+        assert _core_observation(output, "last_equity").item() == pytest.approx(output["balance"].item())
     assert _clock_ms(output, "last_eq").item() > last_valid * run.interval_ms
-    assert output["hsl_tier_samples_total"].item() > last_valid
+    if interval_minutes == 1:
+        assert output["hsl_tier_samples_total"].item() > last_valid
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")

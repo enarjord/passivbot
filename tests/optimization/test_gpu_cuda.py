@@ -37,6 +37,38 @@ def test_unknown_shader_dialect_is_rejected(source):
         cuda_source(source)
 
 
+@pytest.mark.parametrize("strategy", ["TM", "EMA"])
+def test_cuda_global_side_state_disables_shared_storage_only_for_explicit_replay(strategy):
+    source = (
+        "#define PASSIVBOT_HSL_FACTUAL_ONLY 1\n"
+        f"#define PASSIVBOT_{strategy}_MULTICOIN_CHUNKED 1\n"
+        "kernel void replay(uint b [[thread_position_in_grid]]) {}\n"
+    )
+    shared_storage = "PBReplaySideStorage<TYPE, SLOT> NAME##_storage"
+    assert shared_storage in cuda_source(source)
+    assert shared_storage in cuda_source("#define PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE 0\n" + source)
+    assert shared_storage not in cuda_source("#define PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE 1\n" + source)
+
+
+@pytest.mark.parametrize("directives", [
+    (),
+    ("PASSIVBOT_HSL_FACTUAL_ONLY",),
+    ("PASSIVBOT_TM_MULTICOIN_CHUNKED",),
+    ("PASSIVBOT_HSL_FACTUAL_ONLY", "PASSIVBOT_TM_MULTICOIN_CHUNKED", "PASSIVBOT_EMA_MULTICOIN_CHUNKED"),
+    ("PASSIVBOT_HSL_FACTUAL_ONLY", "PASSIVBOT_TM_MULTICOIN_CHUNKED", "PASSIVBOT_HSL_FACTS_ENABLED"),
+    ("PASSIVBOT_HSL_FACTUAL_ONLY", "PASSIVBOT_TM_MULTICOIN_CHUNKED", "PASSIVBOT_HSL_NATIVE_CACHE_ENABLED"),
+    ("PASSIVBOT_HSL_FACTUAL_ONLY", "PASSIVBOT_TM_MULTICOIN_CHUNKED", "PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED"),
+])
+def test_cuda_global_side_state_rejects_incompatible_replay(directives):
+    defines = "".join(f"#define {name} 1\n" for name in directives)
+    source = (
+        "#define PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE 1\n" + defines
+        + "kernel void replay(uint b [[thread_position_in_grid]]) {}\n"
+    )
+    with pytest.raises(ValueError, match="one temporal forward-risk strategy"):
+        cuda_source(source, shared_replay_state=False)
+
+
 @pytest.fixture
 def cuda():
     torch = pytest.importorskip("torch")

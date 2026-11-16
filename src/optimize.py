@@ -85,6 +85,7 @@ from config import (
 )
 from config.overrides import parse_overrides
 from config.access import get_optional_config_value, require_config_value
+from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_search_cohort_size, resolve_gpu_tuning_mode
 from config.universe import require_side_universe_sources, set_side_universe_sources
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
 from config.param_paths import resolve_bound_selectors, require_existing_config_path
@@ -125,7 +126,6 @@ from pure_funcs import (
     calc_hash,
     str2bool,
 )
-from opt_utils import deep_updated
 from utils import (
     date_to_ts,
     ts_to_date,
@@ -593,11 +593,6 @@ logging.basicConfig(
 INVALID_BACKTEST_CANDIDATE_PENALTY = 1e18
 DEFAULT_PARETO_MAX_SIZE = 1000
 OPTIMIZE_PROFILE_ENV = "PASSIVBOT_OPTIMIZE_PROFILE"
-_RECOVERABLE_BACKTEST_PANIC_PATTERNS = (
-    "hard-stop evaluation failed",
-    "equity must be finite and > 0",
-    "peak_strategy_equity must be finite and > 0",
-)
 
 
 def _optimize_profile_enabled() -> bool:
@@ -658,27 +653,6 @@ def _format_available_metric_keys(metrics: dict[str, Any], *, limit: int = 20) -
     if len(keys) > limit:
         rendered += f", ... ({len(keys) - limit} more)"
     return rendered
-
-
-def _is_recoverable_backtest_candidate_error(exc: BaseException) -> bool:
-    name = exc.__class__.__name__
-    message = str(exc)
-    if isinstance(exc, ValueError) and message == "replay has no positive evaluated interval after declared warmup":
-        # This candidate has no scored window; never invent flat observations.
-        return True
-    if name == "PanicException":
-        return any(
-            pattern in message for pattern in _RECOVERABLE_BACKTEST_PANIC_PATTERNS
-        )
-    if isinstance(exc, ValueError):
-        return "hard-stop evaluation failed" in message and any(
-            pattern in message
-            for pattern in (
-                "equity must be finite and > 0",
-                "peak_strategy_equity must be finite and > 0",
-            )
-        )
-    return False
 
 
 def _optimizer_exit_code(*, interrupted: bool, failed: bool) -> int:
@@ -963,6 +937,15 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
 
 def _canonicalize_resume_optimize(section: dict) -> dict:
     normalized = deepcopy(section)
+    gpu = normalized.get("gpu")
+    if isinstance(gpu, dict) and "tuning_mode" in gpu:
+        gpu["tuning_mode"] = resolve_gpu_tuning_mode(gpu["tuning_mode"])
+    if isinstance(gpu, dict) and "search_cohort_size" in gpu:
+        cohort_size = resolve_gpu_search_cohort_size(
+            gpu.pop("search_cohort_size"), tuning_mode=gpu.get("tuning_mode", GPU_TUNING_DEFAULT),
+        )
+        if cohort_size is not None:
+            gpu["search_cohort_size"] = cohort_size
     if "scoring" in normalized:
         normalized["scoring"] = [
             spec.to_config() for spec in extract_objective_specs(normalized["scoring"])
@@ -1754,9 +1737,7 @@ class Evaluator:
             )
             try:
                 fills, equities_array, analysis = execute_backtest(payload, config)
-            except BaseException as exc:
-                if not _is_recoverable_backtest_candidate_error(exc):
-                    raise
+            except pbr.NoEvaluatedIntervalError as exc:
                 error = f"{exc.__class__.__name__}: {exc}"
                 logging.debug(
                     "Optimizer candidate invalid due to recoverable backtest failure | hash=%s | exchange=%s | error=%s",
@@ -2405,9 +2386,7 @@ class SuiteEvaluator:
                                 timings[key] = timings.get(key, 0.0) + float(value)
                             except (TypeError, ValueError):
                                 continue
-                except BaseException as exc:
-                    if not _is_recoverable_backtest_candidate_error(exc):
-                        raise
+                except pbr.NoEvaluatedIntervalError as exc:
                     error = f"{exc.__class__.__name__}: {exc}"
                     logging.debug(
                         "Optimizer suite candidate invalid due to recoverable backtest failure | label=%s | exchange=%s | error=%s",
@@ -3474,13 +3453,13 @@ def _gpu_cached_input_preflight(path, shape, dtype, *, strategy_kind=None, input
     import torch
     from optimization.gpu.runtime import gpu_device
     from optimization.gpu.residency import (
-        check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_resident_bytes,
+        CudaReplayMemoryPressure, check_cuda_invariant_memory, check_mps_invariant_memory, multicoin_resident_bytes,
         prefer_streamed_ticks, supports_streamed_ticks,
     )
     device = gpu_device(torch)
+    can_stream = supports_streamed_ticks(strategy_kind, device)
     stream_tick_inputs = (
-        input_memory_budget is not None
-        and supports_streamed_ticks(strategy_kind, device)
+        input_memory_budget is not None and can_stream
         and prefer_streamed_ticks(shape[0], shape[1], input_memory_budget,
                                   interval_ms=60_000, device=device)
     )
@@ -3488,10 +3467,23 @@ def _gpu_cached_input_preflight(path, shape, dtype, *, strategy_kind=None, input
         stream_tick_inputs=stream_tick_inputs,
         compact_hourly_ranges=stream_tick_inputs)
     if device == "mps":
-        check_mps_invariant_memory(torch, required)
-    else:
-        check_cuda_invariant_memory(torch, required, working_set=(
-            None if input_memory_budget is None else input_memory_budget.initial_free_bytes))
+        if input_memory_budget is not None and input_memory_budget.max_throughput:
+            check_mps_invariant_memory(
+                torch, required, input_memory_budget=input_memory_budget, require_free=False,
+            )
+        else:
+            check_mps_invariant_memory(torch, required)
+        return
+    try:
+        check_cuda_invariant_memory(torch, required, input_memory_budget=input_memory_budget)
+    except CudaReplayMemoryPressure:
+        if stream_tick_inputs or not can_stream:
+            raise
+        streamed = multicoin_resident_bytes(shape[0], shape[1], device=device, stream_tick_inputs=True)
+        if streamed >= required:
+            raise
+        # Only the replay owner can choose transport after releasing old inputs.
+        check_cuda_invariant_memory(torch, streamed, input_memory_budget=input_memory_budget)
 
 
 def _materialize_resolved_suite_dates(
@@ -3797,7 +3789,7 @@ async def main():
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(
-        args.config_path, use_starter=True,
+        args.config_path, allow_result_records=True, use_starter=True,
     )
     existing_limits = deepcopy(
         effective_config_payload(source_config).get("optimize", {}).get("limits")
@@ -4010,9 +4002,17 @@ async def main():
                 capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
             )
             # Freeze a run-level preference before file-cache pages are read.
-            capture = (capture_mps_input_memory_budget if gpu_device(torch) == "mps"
-                       else capture_cuda_input_memory_budget)
-            gpu_input_memory_budget = capture(torch)
+            tuning_mode = resolve_gpu_tuning_mode(
+                config["optimize"].get("gpu", {}).get("tuning_mode", GPU_TUNING_DEFAULT)
+            )
+            if gpu_device(torch) == "cuda":
+                gpu_input_memory_budget = capture_cuda_input_memory_budget(
+                    torch, max_throughput=tuning_mode == "max",
+                )
+            elif tuning_mode == "max":
+                gpu_input_memory_budget = capture_mps_input_memory_budget(torch, max_throughput=True)
+            else:
+                gpu_input_memory_budget = capture_mps_input_memory_budget(torch)
 
         # A header describes the actual replay only for unsliced, unaggregated
         # ordinary caches. Suites and explicit dataset overrides admit after

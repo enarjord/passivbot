@@ -633,64 +633,29 @@ class TestGetPnlFromTrade:
         # Test profit
         assert bot._get_pnl_from_trade({"info": {"profit": "100"}}) == 100.0
 
-    def test_returns_zero_when_no_pnl_field(self):
-        """Should return 0.0 when no PnL field found."""
+    def test_missing_pnl_stays_unavailable(self):
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
-        trade = {"info": {"other_field": "value"}}
-
-        result = bot._get_pnl_from_trade(trade)
-
-        assert result == 0.0
+        assert bot._get_pnl_from_trade({"info": {"other_field": "value"}}) is None
 
 
 class TestGetPositionSideFromTrade:
-    """Test _get_position_side_from_trade() hook."""
-
-    def test_buy_with_zero_pnl_is_long_entry(self):
-        """Buy with 0 PnL = opening long position."""
+    def test_explicit_position_side_controls_break_even_close(self):
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
-        trade = {"side": "buy", "info": {}}
+        trade = {"side": "buy", "info": {"realized_pnl": "0", "positionSide": "SHORT"}}
 
-        result = bot._get_position_side_from_trade(trade)
+        assert bot._get_position_side_from_trade(trade) == "short"
 
-        assert result == "long"
-
-    def test_buy_with_nonzero_pnl_is_short_exit(self):
-        """Buy with PnL != 0 = closing short position."""
+    @pytest.mark.parametrize("pnl_fields", [{}, {"realized_pnl": "0"}, {"realized_pnl": "10"}])
+    def test_pnl_cannot_substitute_for_position_side(self, pnl_fields):
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
-        trade = {"side": "buy", "info": {"realized_pnl": "10.0"}}
-
-        result = bot._get_position_side_from_trade(trade)
-
-        assert result == "short"
-
-    def test_sell_with_zero_pnl_is_short_entry(self):
-        """Sell with 0 PnL = opening short position."""
-        from exchanges.ccxt_bot import CCXTBot
-
-        bot = CCXTBot.__new__(CCXTBot)
-        trade = {"side": "sell", "info": {}}
-
-        result = bot._get_position_side_from_trade(trade)
-
-        assert result == "short"
-
-    def test_sell_with_nonzero_pnl_is_long_exit(self):
-        """Sell with PnL != 0 = closing long position."""
-        from exchanges.ccxt_bot import CCXTBot
-
-        bot = CCXTBot.__new__(CCXTBot)
-        trade = {"side": "sell", "info": {"realized_pnl": "-5.0"}}
-
-        result = bot._get_position_side_from_trade(trade)
-
-        assert result == "long"
+        with pytest.raises(ValueError, match="explicit LONG/SHORT"):
+            bot._get_position_side_from_trade({"side": "buy", "info": pnl_fields})
 
 
 class TestFetchPnls:
@@ -711,14 +676,14 @@ class TestFetchPnls:
                     "timestamp": 1000,
                     "side": "buy",
                     "amount": 1.5,
-                    "info": {"realized_pnl": "0"},
+                    "info": {"realized_pnl": "0", "positionSide": "LONG"},
                 },
                 {
                     "id": "trade2",
                     "timestamp": 2000,
                     "side": "sell",
                     "amount": 1.5,
-                    "info": {"realized_pnl": "25.50"},
+                    "info": {"realized_pnl": "25.50", "positionSide": "LONG"},
                 },
             ]
         )
@@ -726,11 +691,11 @@ class TestFetchPnls:
         result = await bot.fetch_pnls(start_time=500)
 
         assert len(result) == 2
-        # First trade: buy entry (pnl=0 -> long)
+        # First trade has explicit LONG position side.
         assert result[0]["qty"] == 1.5
         assert result[0]["pnl"] == 0.0
         assert result[0]["position_side"] == "long"
-        # Second trade: sell exit (pnl!=0 -> long)
+        # Second trade closes the same position side.
         assert result[1]["qty"] == 1.5
         assert result[1]["pnl"] == 25.50
         assert result[1]["position_side"] == "long"
@@ -861,11 +826,11 @@ class TestFetchPositionsHooks:
         assert bot._get_position_side({"side": "short"}) == "short"
         assert bot._get_position_side({"side": "SHORT"}) == "short"
 
-    def test_get_position_side_defaults_to_long(self, bot_with_mock_cca):
-        """_get_position_side should default to 'long' when missing."""
+    def test_get_position_side_preserves_missing_side(self, bot_with_mock_cca):
+        """The normalization boundary rejects the missing-side sentinel."""
         bot = bot_with_mock_cca
 
-        assert bot._get_position_side({}) == "long"
+        assert bot._get_position_side({}) == ""
 
     def test_normalize_positions_transforms_list(self, bot_with_mock_cca):
         """_normalize_positions should transform to passivbot format."""
@@ -903,6 +868,33 @@ class TestFetchPositionsHooks:
 
         assert len(result) == 1
         assert result[0]["symbol"] == "ETH/USDT:USDT"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("field", "replacement", "reason"),
+        [
+            ("contracts", None, "invalid_contracts"),
+            ("contracts", float("nan"), "invalid_contracts"),
+            ("entryPrice", None, "invalid_entry_price"),
+            ("entryPrice", 0, "invalid_entry_price"),
+            ("side", None, "invalid_position_side"),
+            ("side", "buy", "invalid_position_side"),
+        ],
+    )
+    async def test_capture_rejects_incomplete_position_snapshot(
+        self, bot_with_mock_cca, field, replacement, reason
+    ):
+        from live.state_refresh import AuthoritativeSurfaceUnavailable
+
+        bot = bot_with_mock_cca
+        valid = {"symbol": "BTC/USDT:USDT", "side": "long", "contracts": "1", "entryPrice": "100"}
+        malformed = {**valid, field: replacement}
+        if replacement is None:
+            del malformed[field]
+        bot.cca.fetch_positions = AsyncMock(return_value=[{"contracts": 0}, valid, malformed])
+
+        with pytest.raises(AuthoritativeSurfaceUnavailable, match=reason):
+            await bot.capture_positions_snapshot()
 
     def test_normalize_positions_preserves_ccxt_update_and_raw_timing(
         self, bot_with_mock_cca
@@ -990,25 +982,25 @@ class TestFetchPnlsHooks:
         """_normalize_pnls should add qty, pnl, position_side to each trade."""
         bot = bot_with_mock_cca
         trades = [
-            {"amount": 1.0, "side": "buy", "timestamp": 1000, "info": {"realized_pnl": "0"}},
-            {"amount": 2.0, "side": "sell", "timestamp": 2000, "info": {"realized_pnl": "50"}},
+            {"amount": 1.0, "side": "buy", "timestamp": 1000, "info": {"realized_pnl": "0", "positionSide": "LONG"}},
+            {"amount": 2.0, "side": "sell", "timestamp": 2000, "info": {"realized_pnl": "50", "positionSide": "LONG"}},
         ]
 
         result = bot._normalize_pnls(trades)
 
         assert result[0]["qty"] == 1.0
         assert result[0]["pnl"] == 0.0
-        assert result[0]["position_side"] == "long"  # buy + pnl=0 = entry long
+        assert result[0]["position_side"] == "long"
         assert result[1]["qty"] == 2.0
         assert result[1]["pnl"] == 50.0
-        assert result[1]["position_side"] == "long"  # sell + pnl!=0 = exit long
+        assert result[1]["position_side"] == "long"
 
     def test_normalize_pnls_sorts_by_timestamp(self, bot_with_mock_cca):
         """_normalize_pnls should sort trades by timestamp."""
         bot = bot_with_mock_cca
         trades = [
-            {"amount": 1.0, "side": "buy", "timestamp": 2000, "info": {}},
-            {"amount": 2.0, "side": "sell", "timestamp": 1000, "info": {}},
+            {"amount": 1.0, "side": "buy", "timestamp": 2000, "info": {"positionSide": "LONG"}},
+            {"amount": 2.0, "side": "sell", "timestamp": 1000, "info": {"positionSide": "SHORT"}},
         ]
 
         result = bot._normalize_pnls(trades)
@@ -1022,7 +1014,7 @@ class TestFetchPnlsHooks:
         bot = bot_with_mock_cca
         bot.cca.fetch_my_trades = AsyncMock(
             return_value=[
-                {"amount": 1.0, "side": "buy", "timestamp": 1000, "info": {"realized_pnl": "100"}}
+                {"amount": 1.0, "side": "buy", "timestamp": 1000, "info": {"realized_pnl": "100", "positionSide": "LONG"}}
             ]
         )
 

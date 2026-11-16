@@ -115,8 +115,10 @@ test values on both sides; the console sink must not invent a generic threshold 
 HSL console state includes every scope's identity, action/tier, availability and unavailable
 reason, plus whether estimates are in use. Estimation-reason churn and ordinary numeric/timestamp
 movement remain structured detail. Current-observation freshness, account availability and severity changes print
-immediately; equivalent degraded observations get an event-driven repeat summary at most every
-five minutes. No reminder is generated without a new observation. Presentation state is bounded,
+immediately. Historical expiry or account-generation churn can stay off the console when a fresh
+replacement already represents the same scope state and the prior observation had neither RED nor
+an account outage. Both observations remain durable. Equivalent degraded observations get an
+event-driven repeat summary at most every five minutes. No reminder is generated without a new observation. Presentation state is bounded,
 resets on restart, and advances its delivery checkpoint only after a successful sink write.
 
 ### Incident Projection

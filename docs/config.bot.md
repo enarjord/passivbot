@@ -52,7 +52,11 @@ Throughout:
 Age admission is side-owned at `bot.long.universe.minimum_coin_age_days` and the corresponding
 short path. Both default to `60.0` days. Rust applies this fixed initial-entry gate in static,
 Forager and forced-normal selection. Fractional days are preserved; zero bypasses the gate,
-positive thresholds require factual inception, and equality admits the side. Held-position
+positive thresholds require price evidence, and equality admits the side. Age follows the asset's
+earliest verified price history across venues. A verified migration can inherit earlier history.
+Pre-launch prices and ambiguous ticker matches are excluded. For markets outside the reviewed
+asset catalog, the resolver needs a verified regular-trading boundary and price observation on the
+venue. An unverified market remains age-ineligible until evidence is available. Held-position
 management and indicator warmup are independent of this gate.
 Unresolved inception remains retryable in live operation and automatic prepared caches. Live
 lookup runs in a bounded background task; missing facts block new initial entries without delaying
@@ -60,8 +64,8 @@ held-position planning. Automatic caches request facts only for enabled positive
 their approved, non-ignored markets. Optimizer preparation includes enabled sides whose candidate
 capacity bounds can permit entries. Suite contexts freeze source memberships once and request only their applicable
 coins; a zero-age scenario does not make unrelated coins require inception. A supplied
-dataset override remains an immutable input; missing inception in that dataset keeps positive age
-gates closed.
+dataset override remains immutable. Regenerate its age metadata with the current policy to use
+positive age gates. Missing or older age metadata leaves inception unresolved.
 
 ## Trailing Martingale Entries
 

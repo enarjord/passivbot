@@ -1,13 +1,17 @@
 import json
 import math
+import shlex
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
+from config.limits import normalize_limit_entries
 from config.scoring import ObjectiveSpec
 from metrics_schema import encode_metric_values
-from pareto_explorer import load_candidates
+from pareto_explorer import evaluate_selection, load_candidates
 from tools import pareto_plot
+from tools.pareto_plot_session import PlotSelection
 from passivbot_cli.main import main as cli_main
 
 
@@ -82,6 +86,142 @@ def test_dataset_includes_objectives_and_preserves_members(front):
     assert metrics[METRICS[0]]["goal"] == "max"
     assert metrics[METRICS[1]]["goal"] == "min"
     assert pareto_plot.select_metrics([], data) == METRICS[:2]
+
+
+@pytest.mark.parametrize("method", ["ideal", "knee", "utility", "lexicographic"])
+def test_session_matches_cli_with_inclusive_slider_and_launch_limits(tmp_path, method, capsys):
+    front = tmp_path / "front's results"
+    front.mkdir()
+    for name, values in [
+        ("a", (0.05, 0.4, 1.0)),
+        ("b", (0.04, 0.1, 1.4)),
+        ("c", (0.02, 0.09, 3.0)),
+        ("d", (0.01, 0.09, 4.0)),
+    ]:
+        write_candidate(front / f"{name}.json", values)
+    _, candidates, specs = load_candidates(front)
+    args = pareto_plot.build_parser().parse_args([
+        str(front), "--method", method, "--limit", f"{METRICS[0]}>=0.02",
+    ])
+    initial = evaluate_selection(candidates, specs, args)
+    data = pareto_plot.build_dataset(candidates, specs)
+    session = PlotSelection(front, candidates, specs, args, initial, data["metrics"], tmp_path / "view.html")
+    limits = session.limit_keys([{"key": METRICS[1], "mode": "ceiling", "value": 0.1}])
+    result = session.result(limits, export=True)
+    command = shlex.split(result["selection_command"])
+    assert cli_main([*command[1:], "--json"]) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert result["selected"] == record["selected"]["file"]
+    assert result["objective_count"] == 3
+    assert result["retained"] == [1, 2]
+    directory = Path(result["seed_directory"])
+    assert {path.name: path.read_bytes() for path in directory.iterdir()} == {
+        name: (front / name).read_bytes() for name in ("b.json", "c.json")
+    }
+    optimizer = shlex.split(result["optimize_command"])
+    assert optimizer[:3] == ["passivbot", "optimize", str(front / result["selected"])]
+    assert optimizer[optimizer.index("--start") + 1] == str(directory)
+    assert json.loads(optimizer[optimizer.index("--limits") + 1]) == record["applied_limits"]
+    assert Path(shlex.split(result["backtest_command"])[2]).resolve() == front / result["selected"]
+    with pytest.raises(ValueError, match="No Pareto candidates remained"):
+        session.result(((METRICS[0], "floor", 100),), export=True)
+    (front / "c.json").write_text("{}")
+    with pytest.raises(ValueError, match="changed after loading"):
+        session.result(limits, export=True)
+    assert list(tmp_path.glob("view-seeds-*")) == [directory]
+    assert not list(tmp_path.glob(".pareto-filtered-*"))
+
+
+@pytest.mark.parametrize("method", ["ideal", "reference", "aspiration", "lexicographic"])
+def test_scoring_subset_matches_cli_and_preserves_limit_membership(tmp_path, method, capsys):
+    front = tmp_path / "front"
+    front.mkdir()
+    for name, values in [
+        ("a", (0.05, 0.4, 1.0)),
+        ("b", (0.04, 0.1, 1.4)),
+        ("c", (0.02, 0.09, 3.0)),
+    ]:
+        write_candidate(front / f"{name}.json", values)
+    cagr, pain, sortino = METRICS
+    options = {
+        "ideal": ["--weight", f"{sortino}=2"],
+        "reference": [
+            "--objectives", ",".join(METRICS), "--target", f"{sortino}=2",
+            "--target", f"{cagr}=0.03", "--target", f"{pain}=0.15",
+        ],
+        "aspiration": [
+            "--target", f"{cagr}=0.03", "--target", f"{pain}=0.15", "--target", f"{sortino}=2",
+            "--scale", f"{cagr}=0.01", "--scale", f"{pain}=0.1", "--scale", f"{sortino}=1",
+        ],
+        "lexicographic": ["--priority", f"{sortino},{cagr},{pain}"],
+    }
+    _, candidates, specs = load_candidates(front)
+    args = pareto_plot.build_parser().parse_args([str(front), "--method", method, *options[method]])
+    initial = evaluate_selection(candidates, specs, args)
+    data = pareto_plot.build_dataset(candidates, specs)
+    session = PlotSelection(front, candidates, specs, args, initial, data["metrics"], tmp_path / "plot.html")
+    limits = session.limit_keys([{"key": sortino, "mode": "floor", "value": 1.4}])
+    chosen = session.objective_keys([pain, cagr])
+    assert chosen == (cagr, pain)
+    result = session.result(limits, objectives=chosen, export=True)
+    assert result["objectives"] == [cagr, pain]
+    assert result["retained"] == session.result(limits)["retained"] == [1, 2]
+    assert {path.name for path in Path(result["seed_directory"]).iterdir()} == {"b.json", "c.json"}
+    command = shlex.split(result["selection_command"])
+    flag = "--priority" if method == "lexicographic" else "--objectives"
+    assert command[command.index(flag) + 1] == f"{cagr},{pain}"
+    assert cli_main([*command[1:], "--json"]) == 0
+    record = json.loads(capsys.readouterr().out)
+    assert result["selected"] == record["selected"]["file"]
+    assert [item["metric"] for item in record["objectives"]] == [cagr, pain]
+    for invalid in ([], [cagr, cagr], [cagr, "unknown"], [None], cagr):
+        with pytest.raises(ValueError, match="distinct launch scoring objective"):
+            session.objective_keys(invalid)
+
+
+def test_session_uses_suite_reducer_and_scenario_for_commands(tmp_path, capsys):
+    front = tmp_path / "front"
+    front.mkdir()
+    write_candidate(front / "a.json", (0.02, 0.1, 2), layout="suite")
+    write_candidate(front / "b.json", (0.03, 0.12, 2), layout="suite")
+    _, candidates, specs = load_candidates(front)
+    for scenario in (None, "example"):
+        explicit_suite_limit = {
+            "metric": METRICS[1], "penalize_if": "greater_than", "value": 11,
+            "reducer": "max", "scenario": None,
+        }
+        options = ["--scenario", scenario, "--limit", json.dumps(explicit_suite_limit)] if scenario else []
+        args = pareto_plot.build_parser().parse_args([str(front), *options])
+        initial = evaluate_selection(candidates, specs, args)
+        data = pareto_plot.build_dataset(initial.selection_candidates, specs)
+        session = PlotSelection(front, candidates, specs, args, initial, data["metrics"], tmp_path / "view.html")
+        limit = {
+            "key": f"stats.{METRICS[0]}.{'mean' if scenario else 'max'}",
+            "mode": "floor",
+            "value": 20.025 if scenario else 10.025,
+        }
+        result = session.result(session.limit_keys([limit]), export=True)
+        assert result["retained"] == [1]
+        assert result["selected"] == "b.json"
+        assert cli_main([*shlex.split(result["selection_command"])[1:], "--json"]) == 0
+        applied = json.loads(capsys.readouterr().out)["applied_limits"]
+        optimizer = shlex.split(result["optimize_command"])
+        optimizer_limits = json.loads(optimizer[optimizer.index("--limits") + 1])
+        assert normalize_limit_entries(optimizer_limits) == optimizer_limits
+        if scenario:
+            assert optimizer_limits[0] == explicit_suite_limit
+            assert applied[1]["reducer"] == "mean"
+            assert optimizer_limits[1] == {
+                **{key: value for key, value in applied[1].items() if key != "reducer"},
+                "scenario": scenario,
+            }
+            assert shlex.split(result["backtest_command"])[-2:] == ["--scenarios", scenario]
+        else:
+            assert applied[0]["reducer"] == "max"
+            assert optimizer_limits == applied
+        for invalid in ({"key": "arbitrary"}, {**limit, "value": float("inf")}):
+            with pytest.raises(ValueError, match="finite floor or ceiling"):
+                session.limit_keys([invalid])
 
 
 def test_plot_can_rank_and_minimize_saved_peak_recovery(tmp_path):
@@ -230,8 +370,29 @@ def test_browser_open_is_opt_in(front, tmp_path, monkeypatch):
     args = [str(front), *METRICS[:2]]
     assert pareto_plot.main(args) == 0
     assert not calls
-    assert pareto_plot.main(args + ["--force", "--open"]) == 0
+    assert pareto_plot.main(args + ["--force", "--open", "--offline"]) == 0
     assert calls == [(tmp_path / "pareto_plots" / "run.html").as_uri()]
+
+
+def test_open_launches_filtered_cli_viewer_by_default(front, tmp_path, monkeypatch):
+    from tools import pareto_plot_session
+
+    calls = []
+    url = "http://127.0.0.1:12345/session"
+
+    def serve(selection, render):
+        session = {"endpoint": "/session/selection", "initial": selection.result()}
+        assert read_payload(render(session))["session"] == session
+        server = MagicMock()
+        server.serve_forever.side_effect = lambda: calls.append("serving")
+        return server, url
+
+    monkeypatch.setattr(pareto_plot_session, "selection_server", serve)
+    monkeypatch.setattr(pareto_plot.webbrowser, "open", lambda uri: calls.append(uri) or True)
+    output = tmp_path / "plot.html"
+    assert pareto_plot.main([str(front), "--open", "-o", str(output)]) == 0
+    assert calls == [url, "serving"]
+    assert "session" not in read_payload(output.read_text())
 
 
 def read_payload(page):
@@ -635,9 +796,9 @@ def test_cli_and_plot_share_distinct_labels_without_changing_filenames(tmp_path,
     selected_line = next(line for line in output.splitlines() if "Selected file" in line)
     assert selected_label in selected_line
     assert selected_file not in selected_line
-    assert f"Backtest command: passivbot backtest {front / selected_file}" in output
-    shortlist = output.split("Top candidates:")[1]
-    for filename in filenames:
+    assert f"passivbot backtest {front / selected_file}" in output
+    shortlist = output.split("Ranked alternatives")[1]
+    for filename in filenames[:-1]:
         assert record["candidate_labels"].get(filename, filename) in shortlist
     assert first_legacy not in shortlist
 
@@ -648,6 +809,69 @@ def test_cli_and_plot_share_distinct_labels_without_changing_filenames(tmp_path,
     assert data["selection"]["selected"]["file"] == selected_file
     assert data["selection"]["candidate_labels"] == record["candidate_labels"]
     assert data["selection"]["candidate_set_sha256"] == record["candidate_set_sha256"]
+
+
+def test_cli_browser_command_preserves_selection_and_quotes_single_file(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    front_dir = tmp_path / "-front's results"
+    front_dir.mkdir()
+    candidate = front_dir / "candidate.json"
+    write_candidate(candidate, layout="suite")
+    source = front_dir / "selected candidate.json"
+    source.symlink_to(candidate)
+    write_candidate(front_dir / "unrelated.json", layout="suite")
+    cagr, pain = METRICS[:2]
+    limit = f"{cagr}>0"
+    options = [
+        "-m", "aspiration",
+        "-o", f"{cagr},{pain}",
+        "-l", limit,
+        "--scenario", "example",
+        "--weight", f"{cagr}=2",
+        "--target", f"{cagr}=21",
+        "--target", f"{pain}=19",
+        "--scale", f"{cagr}=1",
+        "--scale", f"{pain}=1",
+        "--sensitivity-weight-fraction", "0.1",
+        "--sensitivity-target-scales", "0.25",
+    ]
+    assert cli_main(["tool", "pareto", str(source), *options, "--json"]) == 0
+    expected = json.loads(capsys.readouterr().out)
+
+    saved = tmp_path / "saved.json"
+    assert cli_main(["tool", "pareto", str(source), *options, "-s", str(saved)]) == 0
+    assert saved.read_bytes() == source.read_bytes()
+    output = capsys.readouterr().out
+    backtest = shlex.split(next(
+        line for line in output.splitlines() if line.startswith("passivbot backtest ")
+    ))
+    assert backtest[:2] == ["passivbot", "backtest"]
+    assert Path(backtest[2]).resolve() == candidate.resolve()
+    assert not backtest[2].startswith("-")
+    assert backtest[3:] == ["--scenarios", "example"]
+    browser = shlex.split(next(
+        line for line in output.splitlines() if line.startswith("passivbot tool pareto-plot ")
+    ))
+    assert browser[:3] == ["passivbot", "tool", "pareto-plot"]
+    assert Path(browser[3]).absolute() == source
+    assert browser[browser.index("--objectives") + 1] == f"{cagr},{pain}"
+    assert "-o" not in browser and "--save-selected" not in browser and "-s" not in browser
+    assert "--open" in browser
+
+    monkeypatch.setattr(pareto_plot.webbrowser, "open", lambda _: True)
+    page = tmp_path / "view.html"
+    assert cli_main([*browser[1:], "--offline", "--output", str(page)]) == 0
+    record = read_payload(page.read_text())["selection"]
+    expected["selected"].pop("path")
+    for row in expected["top_candidates"]:
+        row.pop("path")
+    selection_keys = (
+        "selected", "top_candidates", "settings", "sensitivity",
+        "scenario", "applied_limits", "candidate_set_sha256",
+    )
+    for key in selection_keys:
+        assert record[key] == expected[key]
+    assert record["loaded_count"] == 1
 
 
 def test_scenario_export_uses_values_from_the_selected_scenario(tmp_path):

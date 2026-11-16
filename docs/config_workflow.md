@@ -38,6 +38,13 @@ passivbot optimize configs/private/my_config.json -s BTC -sd 2025 -c 4 --suite n
 passivbot live configs/private/my_config.json
 ```
 
+For EMA Anchor, copy
+[`ema_anchor_long.json`](https://github.com/enarjord/passivbot/blob/v9/configs/examples/ema_anchor_long.json) instead.
+It enables longs with two position slots across the same 40-coin universe. Backtests use a
+rolling end date. Add `--suite y` to run the base case, three coin subsets, and a higher-cost
+scenario. The example includes EMA Anchor search bounds for the CPU `pymoo` optimizer.
+Set a local account alias in your private copy before using it live.
+
 ## Best Practices
 
 Use `passivbot tool clean-config input.json output.json` to produce a full schema-aligned config,

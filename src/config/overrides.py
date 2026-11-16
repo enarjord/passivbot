@@ -785,14 +785,19 @@ def load_override_config(
         return {}
     if config_loader is not None:
         return config_loader(resolved_path)
-    # Validate the document as a configuration, but return its raw explicit values.
+    raw, _ = _load_validated_override_file(config, coin, resolved_path)
+    return raw
+
+
+def _load_validated_override_file(config, coin, resolved_path):
+    """Read an override once and return its raw document and validated patch."""
     try:
-        source, base_config_path, raw_snapshot = load_input_config(
+        source, _, raw_snapshot = load_input_config(
             resolved_path, log_info=False
         )
         if not isinstance(source, dict):
             raise TypeError("configuration root must be an object")
-        _validated_file_patch(
+        patch = _validated_file_patch(
             source, config=config, coin=coin,
             source=f"coin_overrides.{coin}.override_config_path", resolved_path=resolved_path,
         )
@@ -805,7 +810,7 @@ def load_override_config(
         raise ValueError(
             f"coin_overrides.{coin}.override_config_path {resolved_path!r} is invalid: {exc}"
         ) from exc
-    return raw_snapshot
+    return raw_snapshot, patch
 
 
 def parse_old_coin_flags(config) -> dict:
@@ -894,8 +899,7 @@ def parse_overrides(
     symbol_normalizer: Callable[[str], str] | None = None,
     _prepared_inline_validation=False,
 ):
-    if override_loader is None:
-        override_loader = load_override_config
+    default_loader = override_loader is None or override_loader is load_override_config
     if symbol_normalizer is None:
         symbol_normalizer = symbol_to_coin
     result = deepcopy(config)
@@ -921,16 +925,20 @@ def parse_overrides(
     isolated_base_validated = False
     for coin, overrides in result["coin_overrides"].items():
         parsed_overrides = {}
-        loaded = override_loader(result, coin)
-        if loaded:
-            if override_loader is load_override_config:
-                resolved_path = _resolve_override_config_path(result, coin)
-            else:
-                reference = str(overrides.get("override_config_path") or "")
-                base_path = str(live_config.get("base_config_path") or "")
-                resolved_path = (os.path.join(os.path.dirname(base_path), reference)
-                                 if reference and not os.path.isabs(reference) and base_path
-                                 else reference or base_path or os.getcwd())
+        if default_loader:
+            resolved_path = _resolve_override_config_path(result, coin)
+            loaded, parsed_overrides = (
+                _load_validated_override_file(result, coin, resolved_path)
+                if resolved_path is not None else ({}, {})
+            )
+        else:
+            loaded = override_loader(result, coin)
+        if loaded and not default_loader:
+            reference = str(overrides.get("override_config_path") or "")
+            base_path = str(live_config.get("base_config_path") or "")
+            resolved_path = (os.path.join(os.path.dirname(base_path), reference)
+                             if reference and not os.path.isabs(reference) and base_path
+                             else reference or base_path or os.getcwd())
             parsed_overrides = _validated_file_patch(
                 loaded,
                 config=result,
@@ -938,6 +946,7 @@ def parse_overrides(
                 source=f"coin_overrides.{coin}.override_config_path",
                 resolved_path=resolved_path,
             )
+        if loaded:
             _validate_patch_leaf_types(
                 result,
                 parsed_overrides,

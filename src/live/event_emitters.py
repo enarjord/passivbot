@@ -4392,6 +4392,11 @@ def emit_execution_order_event(
     extra: dict | None = None,
 ) -> None:
     try:
+        if status == "succeeded" and reason_code == ReasonCodes.EXCHANGE_ACKNOWLEDGED and event_type in {
+            EventTypes.EXECUTION_CREATE_SUCCEEDED,
+            EventTypes.EXECUTION_CANCEL_SUCCEEDED,
+        }:
+            bot._console_last_order_ack_ms = int(utc_ms())
         order_wave_id, action_id = _execution_event_ids(
             wave, action=action, index=index
         )
@@ -5354,6 +5359,7 @@ def _emit_fills_refresh_summary_event_unchecked(
     coverage_before: dict[str, Any] | None = None,
     coverage_after: dict[str, Any] | None = None,
     overlap_minutes: float | None = None,
+    refresh_work: dict[str, Any] | None = None,
     retry_count: int | None = None,
     next_retry_in_ms: int | None = None,
     start_ms: int | None = None,
@@ -5385,6 +5391,8 @@ def _emit_fills_refresh_summary_event_unchecked(
         "pending_pnl_count": _safe_int(pending_pnl_count),
         "degraded_pnl_count": _safe_int(degraded_pnl_count),
     }
+    if refresh_work is not None:
+        data["refresh_work"] = refresh_work
     if coverage_before_summary:
         data["coverage_before"] = coverage_before_summary
         if "ready" in coverage_before_summary:

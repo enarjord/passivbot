@@ -24,7 +24,7 @@ penalty. Small two-way moves cancel; isolated shocks receive less penalty than
 consistent trends. This is directionality, not absolute price-move magnitude.
 
 `bot.<side>.forager.rms_directionality_ema_span_minutes` is the shared floating-point span,
-defaulting to 2169.1726 minutes. Both consumers on that side use it. The supported range
+defaulting to 2179.8856 minutes. Both consumers on that side use it. The supported range
 is 1–100000.
 For deterministic restart reconstruction, both runtimes use exactly
 `ceil(20 * span)` returns, requiring one more completed close, with exponential

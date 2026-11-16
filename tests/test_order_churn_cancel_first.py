@@ -1,8 +1,15 @@
 from __future__ import annotations
 
-import pytest
+import asyncio
+import json
+from types import SimpleNamespace
 
-from live import executor
+import pytest
+from ccxt.base.errors import NetworkError
+
+from exchanges.bitunix import BitunixClient
+from exchanges.ccxt_bot import CCXTBot
+from live import executor, hsl_live, hsl_runtime
 from live.event_bus import EventTypes, ReasonCodes
 from live.order_churn_gate import OrderChurnGateState
 from passivbot import Passivbot
@@ -102,6 +109,265 @@ def execution_shell(monkeypatch):
     monkeypatch.setattr(Passivbot, "_log_order_wave_summary", lambda *args: None)
     monkeypatch.setattr(Passivbot, "_live_event_console_available", lambda *args: False)
     return wave, events
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario, sent_ids, expected_cancels",
+    [
+        ("capped", ["close-1", "close-2"], ["close-1", "close-2"]),
+        ("ambiguous", ["close-1"], []),
+        ("contradictory_ack", ["close-1", "close-2"], ["close-1"]),
+        ("invalidated_in_limiter", ["close-1"], ["close-1"]),
+        ("position_fill_settling", ["close-1"], ["close-1"]),
+        ("queued_past_deadline", ["close-1"], ["close-1"]),
+        ("queued_past_account_expiry", ["close-1"], ["close-1"]),
+        ("admission_crosses_deadline", ["close-1"], ["close-1"]),
+        ("hsl_enables_in_limiter", ["close-1"], ["close-1"]),
+        ("slow_wire_response", ["close-1", "close-2"], ["close-1", "close-2"]),
+        ("response_count_mismatch", ["close-1", "close-2"], ["close-1"]),
+        ("denied_submitted_retry", ["close-1", "close-2"], ["close-1"]),
+        ("hsl_enabled", ["close-1"], ["close-1"]),
+        ("hsl_override_enabled", ["close-1"], ["close-1"]),
+        ("risk_critical_create", ["close-1"], ["close-1"]),
+        ("forced_panic_create", ["close-1"], ["close-1"]),
+    ],
+)
+async def test_bitunix_ordinary_cancel_wave(
+    execution_shell, monkeypatch, scenario, sent_ids, expected_cancels
+):
+    from test_hsl_runtime import NOW, bot as make_account
+    from live.position_fill_sync import PositionFillSync
+
+    class Bot(_PlanBot):
+        exchange = "bitunix"
+        execute_cancellations_parent = Passivbot.execute_cancellations_parent
+        execute_cancellation = Passivbot.execute_cancellation
+        execute_cancellations = CCXTBot.execute_cancellations
+        execute_order_plan_to_exchange = Passivbot.execute_order_plan_to_exchange
+        did_cancel_order = Passivbot.did_cancel_order
+        _cancel_result_requires_full_authoritative_confirmation = (
+            Passivbot._cancel_result_requires_full_authoritative_confirmation
+        )
+        _ambiguous_cancel_success_result = Passivbot._ambiguous_cancel_success_result
+
+        def _request_authoritative_confirmation(self, surfaces):
+            super()._request_authoritative_confirmation(surfaces)
+            Passivbot._request_authoritative_confirmation(self, surfaces)
+
+        def live_value(self, key):
+            delay_seconds = {
+                "queued_past_deadline": 0.05,
+                "queued_past_account_expiry": 2.0,
+                "slow_wire_response": 0.05,
+            }.get(scenario, 0.25)
+            return {
+                "execution_delay_seconds": delay_seconds,
+                "max_n_cancellations_per_batch": 2 if scenario == "capped" else 3,
+            }[key]
+
+        def remove_order(self, order, **_):
+            self.cancelled.append(order["id"])
+            self.open_orders[order["symbol"]].remove(
+                next(row for row in self.open_orders[order["symbol"]] if row["id"] == order["id"])
+            )
+
+    bot = Bot()
+    vars(bot).update(vars(make_account()))
+    bot.config["bot"]["long"]["hsl"]["enabled"] = scenario == "hsl_enabled"
+    if scenario == "hsl_override_enabled":
+        bot.coin_overrides = {"ALT/USDT:USDT": {"bot": {"long": {"hsl": {"enabled": True}}}}}
+    bot._account_invalidation_generation = 0
+    bot._health_orders_cancelled = 0
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    bot._ensure_freshness_ledger().stamp("open_orders", now_ms=NOW - 100)
+    if scenario == "queued_past_account_expiry":
+        bot._ensure_freshness_ledger().stamp("positions", now_ms=NOW - 9750)
+    bot._emit_execution_connector_call_started_event = lambda **kw: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_order_payload = lambda *args, **kwargs: {}
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._log_order_action_summary = lambda *args, **kwargs: None
+    bot._resolve_pb_order_type = lambda order: order["pb_order_type"]
+    bot.order_matches_bot_cancellation = lambda _: True
+    bot.add_to_recent_order_cancellations = lambda order: recorded.append(order["id"])
+    bot._position_fill_sync = PositionFillSync(lambda: 0.0)
+    symbol = "BTC/USDT:USDT"
+    position_key = (symbol, "long")
+    bot._position_fill_sync.observe({position_key: (0.0, 0.0)})
+    monkeypatch.setattr("utils.utc_ms", lambda: NOW)
+    order_events = []
+    monkeypatch.setattr(
+        Passivbot, "_emit_execution_order_event", lambda *a, **kw: order_events.append(kw)
+    )
+
+    async def handle_failures(failures):
+        if scenario == "denied_submitted_retry" and failures:
+            [(action, order, error)] = failures
+            assert action == "cancel" and order["id"] == "close-2"
+            assert isinstance(error, NetworkError)
+        else:
+            assert not failures
+
+    bot._handle_order_write_failures = handle_failures
+    ordinary = hsl_live.owner(bot)
+    cancels = [
+        dict(_order(name), id=name, reduce_only=name.startswith("close"))
+        for name in ("close-1", "close-2", "entry")
+    ]
+    if scenario == "capped":
+        cancels.reverse()
+        cancels[1], cancels[2] = cancels[2], cancels[1]
+    creates = [dict(_order("unrelated"), symbol="ETH/USDT:USDT")]
+    if scenario == "risk_critical_create":
+        creates[0]["execution_priority"] = "risk_critical"
+    elif scenario == "forced_panic_create":
+        creates[0]["pb_order_type"] = "close_panic_long"
+    bot.open_orders = {symbol: [dict(order) for order in cancels]}
+    wave = hsl_live.Wave(
+        NOW, NOW - 100, (), (), (), hsl_runtime.observe_positions(bot).payload,
+        hsl_runtime.observe_open_orders(bot), bot.get_raw_balance(), 0,
+    )
+    # The real final admission checks account state. This fixture isolates
+    # transport by providing a fixed risk evaluation result.
+    ordinary.capture = lambda **kwargs: wave
+    ordinary.bind(wave, cancels, creates)
+    sent, recorded = [], []
+    second_in_limiter = False
+
+    if scenario == "admission_crosses_deadline":
+        admit = ordinary.admit
+
+        def admit_at_deadline(order):
+            admitted = admit(order)
+            if second_in_limiter:
+                # The event loop has not run the queue timeout yet. The write
+                # guard must detect crossing the deadline during sync admission.
+                ordinary._ordinary_cancel_wave.deadline = asyncio.get_running_loop().time()
+            return admitted
+
+        ordinary.admit = admit_at_deadline
+
+    async def throttle(**_):
+        nonlocal second_in_limiter
+        if len(sent) != 1:
+            return
+        second_in_limiter = True
+        if scenario == "invalidated_in_limiter":
+            bot._account_invalidation_generation += 1
+        elif scenario == "position_fill_settling":
+            bot._position_fill_sync.observe({position_key: (1.0, 100.0)})
+        elif scenario in {"queued_past_deadline", "queued_past_account_expiry"}:
+            await asyncio.Future()
+        elif scenario == "hsl_enables_in_limiter":
+            bot.config["bot"]["long"]["hsl"]["enabled"] = True
+        elif scenario == "capped":
+            echo = dict(symbol=symbol, id="close-1", status="canceled", info={"tradeQty": "0"})
+            assert Passivbot._ws_order_update_is_self_echo(bot, [echo])
+            for unexpected in (
+                dict(echo, id="other-order"),
+                dict(echo, status="open"),
+                dict(echo, info={}),
+                dict(echo, info={"tradeQty": "0.01"}),
+            ):
+                assert not Passivbot._ws_order_update_is_self_echo(bot, [unexpected])
+
+    class Response:
+        status = 200
+
+        def __init__(self, order_id):
+            self.order_id = order_id
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def text(self):
+            if scenario == "slow_wire_response" and self.order_id == "close-2":
+                await asyncio.sleep(0.1)
+            if scenario == "ambiguous":
+                return json.dumps({
+                    "code": 0,
+                    "data": {"failureList": [
+                        {"orderId": self.order_id, "errorCode": "20007", "errorMsg": "order not found"}
+                    ]},
+                })
+            data = {"successList": [{"orderId": self.order_id}]}
+            if scenario == "contradictory_ack" and self.order_id == "close-2":
+                data["failureList"] = [{"orderId": self.order_id, "errorCode": "20007"}]
+            return json.dumps({"code": 0, "data": data})
+
+    class Session:
+        def request(self, method, url, *, data, **_):
+            order_id = json.loads(data)["orderList"][0]["orderId"]
+            sent.append(order_id)
+            return Response(order_id)
+
+    async def session():
+        return Session()
+
+    client = BitunixClient()
+    client.market = lambda _: {"id": "BTCUSDT"}
+    client._signed_headers = lambda *_: {}
+    client._get_session = session
+    client._throttle = throttle
+    bot.cca = client
+
+    if scenario == "denied_submitted_retry":
+        cancel_order = client.cancel_order
+
+        async def cancel_twice(order_id, symbol):
+            result = await cancel_order(order_id, symbol)
+            if order_id == "close-2":
+                bot._account_invalidation_generation += 1
+                return await cancel_order(order_id, symbol)
+            return result
+
+        client.cancel_order = cancel_twice
+    if scenario == "response_count_mismatch":
+        execute_cancellations = bot.execute_cancellations
+
+        async def invalidate_response(orders):
+            result = await execute_cancellations(orders)
+            return [] if orders[0]["id"] == "close-2" else result
+
+        bot.execute_cancellations = invalidate_response
+
+    legacy = scenario in {
+        "hsl_enabled", "hsl_override_enabled", "risk_critical_create", "forced_panic_create"
+    }
+    if legacy:
+        # Keep the legacy case focused on same-scope cancellation deferral.
+        creates[0]["symbol"] = symbol
+    snapshot = SimpleNamespace(account_invalidation_generation=0)
+    result = await asyncio.wait_for(
+        ordinary._service_ordinary(
+            (cancels, creates, snapshot, wave), {"ordinary_execute": 0}, now=NOW
+        ),
+        1.0,
+    )
+
+    assert result is None
+    assert sent == recorded == sent_ids
+    assert bot.cancelled == expected_cancels
+    assert bot.created == []
+    assert hsl_live.active_ordinary_cancel_wave(bot) is None
+    if not legacy:
+        assert bot.confirmations == [{"balance", "positions", "open_orders", "fills"}]
+    if scenario == "response_count_mismatch":
+        assert [
+            event["order"]["id"]
+            for event in order_events
+            if event["reason_code"] == ReasonCodes.LENGTH_MISMATCH
+        ] == ["close-2"]
+    if scenario in {"ambiguous", "contradictory_ack"}:
+        assert [
+            event["order"]["id"]
+            for event in order_events
+            if event["event_type"] == EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL
+        ] == sent_ids[-1:]
 
 
 @pytest.mark.asyncio

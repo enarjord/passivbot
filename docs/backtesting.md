@@ -36,6 +36,12 @@ the run, but they do not mirror those raw daily files into `caches/ohlcvs/`.
 
 For `.npz` files, the archive must contain a `candles` key with a structured NumPy array having fields `ts` (int64 timestamp), `o` (open), `h` (high), `l` (low), `c` (close), `bv` (base volume). Timestamps should be in milliseconds. For `.npy` files, the array should have columns `[timestamp, open, high, low, close, volume]`.
 
+
+If a symbol's final valid candle is more than 24 hours before the dataset ends, the backtest
+treats that tail as a delisting and closes any remaining position on the final valid candle.
+Shorter missing tails still require a valuation candle while a position is held. An internal
+candle gap is an input error.
+
 ## BTC benchmark source
 
 Combined backtests and optimizations try BTC price history from the configured
@@ -230,6 +236,8 @@ The terminal summary aligns canonical metric names and values in a table, using 
 significant digits and `%` for fraction-valued metrics. Ratios retain their raw scale.
 Explicitly disabled sides and HSL omit their zero-valued rows when no activity was observed;
 enabled features still show zero activity, and unknown applicability remains visible.
+The terminal summary omits short profit contribution when either side is explicitly disabled
+and has no fills.
 Infinite, undefined and invalid values retain their distinct statuses, with reasons beside
 the metric. Counts and unfinished recovery tails appear as compact support information.
 This presentation does not round or filter `analysis.json`, or change optimizer metrics.
@@ -582,7 +590,9 @@ When multiple exchanges are configured (`backtest.exchanges` has >1 entry), the 
 }
 ```
 
-Suite scenarios can add more overrides under `coin_sources`; conflicts between scenarios are rejected so every run uses a single consistent exchange assignment.
+Suite scenarios can add more overrides under `coin_sources`. Conflicts between scenarios are
+rejected so every run uses a single consistent exchange assignment. Source overrides apply to
+coins already in the suite's universe.
 
 ## Supported Exchanges
 

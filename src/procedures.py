@@ -14,6 +14,7 @@ import argparse
 import re
 from collections import defaultdict
 from collections.abc import Sized
+from live.diagnostic_safety import bounded_exception_type
 from utils import (
     FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION,
     MarketIdentifierResolutionError,
@@ -23,7 +24,6 @@ from utils import (
     symbol_to_coin,
     make_get_filepath,
     load_markets,
-    get_file_mod_ms,
     get_quote,
     date_to_ts,
     get_first_ohlcv_iteratively,
@@ -51,57 +51,12 @@ except:
 
 from pure_funcs import (
     numpyize,
-    ts_to_date,
     config_pretty_str,
     sort_dict_keys,
     flatten,
 )
 
 _EXCHANGE_ALIAS_MIGRATIONS_LOGGED: set[tuple[str, str, str]] = set()
-
-
-def get_all_eligible_symbols(exchange="binance"):
-    exchange_map = {
-        "bybit": "bybit",
-        "binance": "binanceusdm",
-        "gateio": "gateio",
-        # "bitget": "bitget", TODO
-        # "hyperliquid": "hyperliquid", TODO
-    }
-    quote_map = {k: "USDT" for k in exchange_map}
-    quote_map["hyperliquid"] = "USDC"
-    if exchange not in exchange_map:
-        raise Exception(f"only exchanges {list(exchange_map.values())} are supported for backtesting")
-    filepath = make_get_filepath(f"caches/{exchange}/eligible_symbols.json")
-    loaded_json = None
-    try:
-        loaded_json = json.load(open(filepath))
-        if utc_ms() - get_file_mod_ms(filepath) > 1000 * 60 * 60 * 24:
-            print(f"Eligible_symbols cache more than 24h old. Fetching new.")
-        else:
-            return loaded_json
-    except Exception as e:
-        print(f"failed to load {filepath}. Fetching from {exchange}")
-        pass
-    try:
-        quote = quote_map[exchange]
-        import ccxt
-
-        cc = getattr(ccxt, exchange_map[exchange])()
-        markets = cc.fetch_markets()
-        symbols = [
-            x["symbol"] for x in markets if "symbol" in x and x["symbol"].endswith(f":{quote}")
-        ]
-        eligible_symbols = sorted(set([x.replace(f"/{quote}:", "") for x in symbols]))
-        eligible_symbols = [x for x in eligible_symbols if x]
-        json.dump(eligible_symbols, open(filepath, "w"))
-        return eligible_symbols
-    except Exception as e:
-        print(f"error fetching eligible symbols {e}")
-        if loaded_json:
-            print(f"using cached data")
-            return loaded_json
-        raise Exception("unable to fetch or load from cache")
 
 
 def dump_pretty_json(data: dict, filepath: str):
@@ -280,40 +235,8 @@ def load_broker_code(exchange: str) -> Any:
     return code
 
 
-def print_(args, r=False, n=False):
-    line = ts_to_date(utc_ms())[:19] + "  "
-    # line = ts_to_date(local_time())[:19] + '  '
-    str_args = "{} " * len(args)
-    line += str_args.format(*args)
-    if n:
-        print("\n" + line, end=" ")
-    elif r:
-        print("\r" + line, end=" ")
-    else:
-        print(line)
-    return line
-
-
 def local_time() -> float:
     return datetime.now().astimezone().timestamp() * 1000
-
-
-def print_async_exception(coro):
-    if isinstance(coro, list):
-        for elm in coro:
-            print_async_exception(elm)
-    try:
-        print(f"result: {coro.result()}")
-    except:
-        pass
-    try:
-        print(f"exception: {coro.exception()}")
-    except:
-        pass
-    try:
-        print(f"returned: {coro}")
-    except:
-        pass
 
 
 async def get_first_timestamps_unified(
@@ -589,7 +512,7 @@ async def get_first_timestamps_unified(
         f"listing timestamps for {sorted(missing_coins)} on {exchange or 'unified exchanges'}; "
         f"cache={cache_fpath_exchange_specific}, resolver version={FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION}"
     )
-    print("Missing coins:", sorted(missing_coins))
+    logging.debug("[age] listing timestamps missing | symbols=%d", len(missing_coins))
 
     # Map of exchange -> quote currency
     exchange_map = {
@@ -644,19 +567,20 @@ async def get_first_timestamps_unified(
                 ccxt_clients[ex_name] = load_ccxt_instance(to_ccxt_exchange_id(ex_name))
             owned_clients.append(ccxt_clients[ex_name])
         except Exception as e:
-            print(f"Error loading {ex_name} from ccxt. Skipping. {e}")
+            logging.warning("[age] listing client setup failed | exchange=%s error_type=%s",
+                            ex_name, bounded_exception_type(e))
             del exchange_map[ex_name]
             if ex_name in ccxt_clients:
                 del ccxt_clients[ex_name]
     try:
-        print("Loading markets for each exchange...")
         load_tasks = {}
         for ex_name in sorted(ccxt_clients):
             try:
                 load_tasks[ex_name] = asyncio.create_task(load_markets(ex_name))
                 owned_tasks.add(load_tasks[ex_name])
             except Exception as e:
-                print(f"Error creating task for {ex_name}: {e}")
+                logging.warning("[age] listing market task failed | exchange=%s error_type=%s",
+                                ex_name, bounded_exception_type(e))
                 del ccxt_clients[ex_name]
                 if ex_name in exchange_map:
                     del exchange_map[ex_name]
@@ -672,7 +596,8 @@ async def get_first_timestamps_unified(
                 if res and callable(install_markets):
                     install_markets(res)
             except Exception as e:
-                print(f"Warning: failed to load markets for {ex_name}: {e}")
+                logging.warning("[age] listing market load failed | exchange=%s error_type=%s",
+                                ex_name, bounded_exception_type(e))
                 del ccxt_clients[ex_name]
                 if ex_name in exchange_map:
                     del exchange_map[ex_name]
@@ -682,7 +607,6 @@ async def get_first_timestamps_unified(
 
         for i in range(0, len(missing_coins), BATCH_SIZE):
             batch = missing_coins[i : i + BATCH_SIZE]
-            print(f"\nProcessing batch: {batch}")
 
             # Create tasks for every coin/exchange pair in this batch
             tasks = {}
@@ -730,11 +654,9 @@ async def get_first_timestamps_unified(
                             data = await tasks[coin][ex_name]
                             if data:
                                 batch_results[coin][ex_name] = data
-                                print(
-                                    f"Fetched {ex_name} {coin} => first candle: {data[0] if data else 'no data'}"
-                                )
                         except Exception as e:
-                            print(f"Warning: failed to fetch OHLCV for {coin} on {ex_name}: {e}")
+                            logging.warning("[age] listing candle fetch failed | exchange=%s error_type=%s",
+                                            ex_name, bounded_exception_type(e))
 
             # Every fast child was awaited above; release completed candle rows
             # between batches while retaining ownership of in-flight work.
@@ -760,11 +682,9 @@ async def get_first_timestamps_unified(
                     data = await fetch_ohlcv_with_start("bitget", symbol, ccxt_clients["bitget"])
                     if data:
                         batch_results[coin]["bitget"] = data
-                        print(
-                            f"Fetched bitget {coin} => first candle: {data[0] if data else 'no data'}"
-                        )
                 except Exception as e:
-                    print(f"Warning: failed to fetch OHLCV for {coin} on bitget: {e}")
+                    logging.warning("[age] listing candle fetch failed | exchange=bitget error_type=%s",
+                                    bounded_exception_type(e))
 
             # Process results for each coin in this batch
             for coin in batch:
@@ -820,7 +740,6 @@ async def get_first_timestamps_unified(
                 if earliest_candidates:
                     ftss[coin] = min(earliest_candidates)
                 else:
-                    print(f"No valid first timestamp for coin {coin}")
                     ftss[coin] = 0.0
 
                 # Update the exchange-specific dictionary
@@ -840,7 +759,7 @@ async def get_first_timestamps_unified(
             with open(cache_version_fpath, "w", encoding="utf-8") as f:
                 f.write(str(FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION))
 
-            print(f"Finished batch {batch}. Caches updated.")
+            logging.debug("[age] listing batch cached | symbols=%d", len(batch))
 
         # Close all ccxt client sessions
 

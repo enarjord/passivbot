@@ -2826,13 +2826,14 @@ def test_handle_order_update_logs_summary_and_dedupes(caplog, monkeypatch):
         {"symbol": "BTC/USDC:USDC", "status": "canceled"},
     ]
 
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         bot.handle_order_update(batch)
         bot.handle_order_update(batch)
         now[0] += 5.1
         bot.handle_order_update(batch)
 
     ws_logs = [record.message for record in caplog.records if "[ws]" in record.message]
+    assert all(record.levelno == logging.DEBUG for record in caplog.records if "[ws]" in record.message)
     assert ws_logs == [
         "[ws] account refresh requested cause=replace_hint events=2 symbols=BTC,SOL statuses=canceled,open",
         "[ws] account refresh requested cause=replace_hint events=2 symbols=BTC,SOL statuses=canceled,open",
@@ -3105,41 +3106,6 @@ def test_log_staged_refresh_timings_skips_structured_debug_sample():
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert sink.events == []
     assert bot._live_event_pipeline.close(timeout=2.0) is True
-
-
-def test_order_plan_summary_is_interesting_only_for_large_or_clipped_waves():
-    bot = _unit_bot()
-
-    assert (
-        bot._order_plan_summary_is_interesting(
-            total_pre_cancel=1,
-            total_cancel=1,
-            total_pre_create=1,
-            total_create=1,
-            total_skipped=0,
-        )
-        is False
-    )
-    assert (
-        bot._order_plan_summary_is_interesting(
-            total_pre_cancel=6,
-            total_cancel=3,
-            total_pre_create=5,
-            total_create=2,
-            total_skipped=4,
-        )
-        is True
-    )
-    assert (
-        bot._order_plan_summary_is_interesting(
-            total_pre_cancel=10,
-            total_cancel=0,
-            total_pre_create=10,
-            total_create=0,
-            total_skipped=10,
-        )
-        is False
-    )
 
 
 def test_order_wave_summary_logs_elapsed_lifecycle(monkeypatch, caplog):
@@ -5367,6 +5333,8 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
 
 @pytest.mark.asyncio
 async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven():
+    from fill_events_manager import FillRefreshWork
+
     bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
     now_ms = 1_800_000_000_000
@@ -5446,6 +5414,16 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
         monitor_sinks=[],
     )
     bot._pnls_manager = _with_fill_coverage_api(_Manager(cached_events))
+    bot._pnls_manager.refresh_latest.return_value = FillRefreshWork(
+        received_rows=1,
+        duplicate_rows=1,
+        changed_overlap_rows=0,
+        ignored_overlap_rows=0,
+        pnl_observations=0,
+        duplicate_days_checked=1,
+        day_replacements=0,
+        replay_reused=True,
+    )
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
     bot.get_exchange_time = lambda: now_ms
@@ -5482,6 +5460,17 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
     assert event.data["coverage_ready_after"] is True
     assert event.data["coverage_reason_after"] == "window_covered"
     assert event.data["pending_pnl_count"] == 0
+    assert event.data["refresh_work"] == {
+        "received_rows": 1,
+        "duplicate_rows": 1,
+        "changed_overlap_rows": 0,
+        "ignored_overlap_rows": 0,
+        "pnl_observations": 0,
+        "duplicate_days_checked": 1,
+        "day_replacements": 0,
+        "replay_reused": True,
+    }
+    assert bot.freshness_ledger.surface_signature("fills") is not None
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -7597,6 +7586,21 @@ async def test_update_effective_min_cost_uses_executable_min_qty():
     await bot.update_effective_min_cost()
 
     assert bot.effective_min_cost[symbol] == pytest.approx(88.165)
+
+
+@pytest.mark.asyncio
+async def test_failed_legacy_minimum_cost_refresh_drops_previous_value():
+    symbol = "SOL/USDT:USDT"
+    bot = _unit_bot()
+    bot.effective_min_cost = {symbol: 1.0}
+
+    async def no_prices(symbols, **kwargs):
+        return {}
+
+    bot._get_live_last_prices = no_prices
+    await bot.update_effective_min_cost(symbol)
+
+    assert symbol not in bot.effective_min_cost
 
 
 def test_open_unstuck_order_does_not_gate_live_unstuck_configuration():
@@ -9992,7 +9996,6 @@ async def test_malformed_actual_open_order_blocks_account_wide_creates(caplog):
     bot._hsl_live = SimpleNamespace(bind=lambda *args, **kwargs: None)
     bot._current_planning_snapshot = None
     bot._last_plan_detail = {}
-    bot._order_plan_summary_is_interesting = lambda **kwargs: False
     bot.PB_modes = {"long": {}, "short": {}}
     bot.active_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
 

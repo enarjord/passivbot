@@ -25,7 +25,8 @@ from optimization.gpu.coin_parameters import build_coin_override_parameters
 from config.validate import validate_limit_order_fill_buffer_fraction
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
-from optimization.gpu.autotune import proxy_batches
+from optimization.gpu.autotune import ReplayScratchLimit, history_dispatch_ceiling
+from optimization.gpu.residency import CudaReplayMemoryPressure
 from optimization.gpu.metric_registry import UTILIZATION_METRICS, requested_metric_features
 from optimization.gpu.core_metrics import metric_mask, finalize_observations
 
@@ -54,7 +55,10 @@ from optimization.gpu.model import (
     MPS_TM_MULTICOIN_CHUNK_BARS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATES,
+    MPS_MAX_BATCH_CANDIDATES,
     CUDA_TM_MULTICOIN_CHUNK_CANDIDATES,
+    CUDA_MAX_BATCH_CANDIDATES,
+    CUDA_MAX_INITIAL_CHUNK_BARS,
     CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS,
     ProxyMarket,
     ProxyRun,
@@ -646,23 +650,22 @@ def _mps_multicoin_dispatch_plan(
     max_candidate_bars: int,
     device: str = "mps",
     factual_hsl: bool = True,
+    max_throughput: bool = False,
 ) -> tuple[bool, int, int]:
     if factual_hsl is not True:
         raise ValueError("Retired GPU replay layout; current dispatch requires factual_hsl=True")
     if strategy_kind not in {"ema_anchor", "trailing_martingale"} or device not in {"cuda", "mps"}:
         raise ValueError("Unsupported current GPU replay strategy or device")
     temporal_chunking = True
-    chunk_candidates = (
-        CUDA_TM_MULTICOIN_CHUNK_CANDIDATES
-        if device == "cuda"
-        else MPS_TM_MULTICOIN_CHUNK_CANDIDATES
-    )
+    chunk_candidates = MPS_MAX_BATCH_CANDIDATES if max_throughput else MPS_TM_MULTICOIN_CHUNK_CANDIDATES
+    if device == "cuda":
+        chunk_candidates = CUDA_MAX_BATCH_CANDIDATES if max_throughput else CUDA_TM_MULTICOIN_CHUNK_CANDIDATES
     dispatch_candidates = (
         min(requested_batch_size, chunk_candidates)
         if temporal_chunking
         else requested_batch_size
     )
-    if device == "mps":
+    if device == "mps" or max_throughput:
         # Preserve parallel candidates by shortening each temporal dispatch.
         # Only a one-bar launch can force a smaller physical candidate batch;
         # the runner separately clamps this ceiling to its resident scratch.
@@ -747,7 +750,7 @@ def _multicoin_exposure_eligible_coins(
 
 
 def _require_supported_multicoin_valid_tails(
-    hlcvs, first_valid_indices, last_valid_indices
+    hlcvs, first_valid_indices, last_valid_indices, *, candle_interval_minutes: int = 1
 ) -> None:
     """Validate declared multi-coin coverage and packed candle integrity."""
 
@@ -795,8 +798,9 @@ def _require_supported_multicoin_valid_tails(
     # bars to float32 and replaces non-finite packed values with zero, so a
     # finite-positive float64 value is insufficient if it overflows or
     # underflows during that conversion.
+    one_day_bars = (24 * 60) // candle_interval_minutes
     for coin, last_valid_idx in enumerate(tails):
-        if last_valid_idx + 1400 < candle_count:
+        if candle_count - 1 - last_valid_idx > one_day_bars:
             with np.errstate(over="ignore", under="ignore", invalid="ignore"):
                 packed_hlc = np.asarray(values[last_valid_idx, coin, :3], dtype=np.float32)
             if not np.all(np.isfinite(packed_hlc) & (packed_hlc > 0.0)):
@@ -1079,6 +1083,7 @@ class SharedAccountReplay:
         factual_hsl: bool = True,
         factual_capacity_hints: dict | None = None,
         automatic_scratch_budget: bool = False,
+        max_throughput: bool = False,
         input_memory_budget=None,
         selection=None,
     ):
@@ -1094,8 +1099,7 @@ class SharedAccountReplay:
                 "install Passivbot with `pip install -e '.[full,gpu-mps]'` (Apple) "
                 "or `pip install -e '.[full,gpu-cuda]'` (NVIDIA)"
             ) from exc
-        gpu_device(torch)
-
+        device = gpu_device(torch)
         from optimization.gpu.metrics import validate_gpu_metric_names
 
         self.needed_metrics = set(validate_gpu_metric_names(
@@ -1163,7 +1167,8 @@ class SharedAccountReplay:
                 n_coins=coin_count,
                 n_sides=len(enabled_sides),
                 max_candidate_bars=self.max_dispatch_candidate_bars,
-                device=gpu_device(torch),
+                max_throughput=max_throughput,
+                device=device,
                 factual_hsl=factual_hsl,
             )
         )
@@ -1244,6 +1249,7 @@ class SharedAccountReplay:
             values,
             backtest_params["first_valid_indices"],
             backtest_params["last_valid_indices"],
+            candle_interval_minutes=candle_interval_minutes,
         )
 
         comparable_bot_keys = (
@@ -1451,18 +1457,37 @@ class SharedAccountReplay:
             require_positive_high_low=True,
         )
         from optimization.gpu.residency import (
-            current_gpu_residency, prefer_streamed_ticks, supports_streamed_ticks, discard_readonly_file_pages,
-            capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
+            MpsInputMemoryBudget, MetalSuiteResidency, capture_cuda_input_memory_budget,
+            capture_mps_input_memory_budget, check_mps_invariant_memory, current_gpu_residency,
+            discard_readonly_file_pages, multicoin_invariant_bytes, prefer_streamed_ticks,
+            supports_streamed_ticks,
         )
-        device = gpu_device(torch)
-        if input_memory_budget is None and current_gpu_residency() is not None:
-            capture = (capture_mps_input_memory_budget if device == "mps"
-                       else capture_cuda_input_memory_budget)
-            input_memory_budget = capture(torch)
+        residency = current_gpu_residency()
+        if device == "mps" and max_throughput:
+            if residency is not None and prepared_data_cache is not None:
+                if not isinstance(residency, MetalSuiteResidency):
+                    raise ValueError("Metal max replay requires a Metal residency owner")
+                input_memory_budget = residency.resolve_max_input_memory_budget(torch, input_memory_budget)
+            else:
+                if input_memory_budget is None:
+                    input_memory_budget = capture_mps_input_memory_budget(torch, max_throughput=True)
+                if (not isinstance(input_memory_budget, MpsInputMemoryBudget)
+                        or not input_memory_budget.max_throughput):
+                    raise ValueError("Metal input memory budget does not match the GPU tuning mode")
+                check_mps_invariant_memory(
+                    torch, multicoin_invariant_bytes(len(values), coin_count, device=device),
+                    input_memory_budget=input_memory_budget,
+                )
+        elif input_memory_budget is None and residency is not None:
+            if device == "mps":
+                input_memory_budget = capture_mps_input_memory_budget(torch)
+            elif max_throughput:
+                input_memory_budget = capture_cuda_input_memory_budget(torch, max_throughput=True)
+            else:
+                input_memory_budget = capture_cuda_input_memory_budget(torch)
         stream_tick_inputs = bool(
             supports_streamed_ticks(self.strategy_kind, device) and self.temporal_chunking
-            and current_gpu_residency() is not None
-            and prepared_data_cache is not None
+            and residency is not None and prepared_data_cache is not None
             and prefer_streamed_ticks(len(values), coin_count, input_memory_budget,
                                       interval_ms=runs[0].interval_ms, device=device)
         )
@@ -1480,8 +1505,6 @@ class SharedAccountReplay:
         )
         if stream_tick_inputs:
             discard_readonly_file_pages(values)
-        from optimization.gpu.residency import current_gpu_residency
-        residency = current_gpu_residency()
         self._cuda_residency = residency if residency is not None and residency.owns(self.data) else None
         self.metrics_data = {
             "ts0": self.data["ts0"],
@@ -1495,7 +1518,9 @@ class SharedAccountReplay:
         # Small service-owned estimates outlive residency eviction. This mapping
         # contains integers only, never runners, tensors or checkpoint state.
         self._factual_capacity_hints = factual_capacity_hints
-        self._automatic_scratch_budget = automatic_scratch_budget
+        self._automatic_scratch_budget = automatic_scratch_budget or max_throughput
+        self._max_throughput = max_throughput
+        self._cuda_max_throughput = max_throughput and device == "cuda"
         if selection is None and config["backtest"].get("organillo_csv") is not None:
             from organillo import prepare_selection
             selection = prepare_selection(config, backtest_params["coins"], timestamps)
@@ -1615,11 +1640,28 @@ class SharedAccountReplay:
             from optimization.gpu.autotune import cuda_history_budget
 
             runner.automatic_scratch_budget = True
+            max_throughput = getattr(self, "_max_throughput", False)
+            if max_throughput:
+                runner.initial_cuda_chunk_bars = CUDA_MAX_INITIAL_CHUNK_BARS
+                runner.cuda_max_scratch_policy = True
+                if (getattr(self, "strategy_kind", None) in {"trailing_martingale", "ema_anchor"}
+                        and runner.max_dispatch_candidate_bars is not None):
+                    runner.cuda_global_replay_side_state = True
+                # `_pack_params` can expand the input shape. The runner updates
+                # this floor with the exact packed columns before allocating.
+                runner._max_mode_parameter_cols = len(runner.parameter_keys) * runner.replay_sides
             free, total = map(int, self._torch.cuda.mem_get_info())
             runner.hsl_scratch_budget_bytes = cuda_history_budget(
                 runner, free, total,
                 owners=1 if self.shared_account_fused else len(self.sides),
+                max_throughput=max_throughput,
             )
+            if max_throughput:
+                runner._max_mode_scratch_ceiling_bytes = runner.hsl_scratch_budget_bytes
+        elif getattr(self, "_max_throughput", False) and runner.bars.device.type == "mps":
+            runner.mps_max_scratch_policy = True
+            runner._max_mode_scratch_ceiling_bytes = runner.hsl_scratch_budget_bytes
+            runner._max_mode_parameter_cols = len(runner.parameter_keys) * runner.replay_sides
         return runner
 
     def _remember_factual_capacities(self):
@@ -1745,14 +1787,34 @@ class SharedAccountReplay:
         """Preserve actual simulator terminal status for authoritative consumers."""
         return self._evaluate(candidates, include_status=True)
 
+    def _refresh_dispatch_memory(self, requested_width, residency):
+        try:
+            runner = self.fused_runner or self.runners[self.sides[0]]
+            runner._refresh_max_mode_scratch_budget(requested_width)
+        except CudaReplayMemoryPressure:
+            if residency is None or not residency.can_stream_on_pressure(self):
+                raise
+        else:
+            return
+        # Keep no old runner references or traceback across the release.
+        del runner
+        residency.stream_on_pressure(self)
+        self.last_evaluation_split = True
+
     def _evaluate(self, candidates: list[dict], *, include_status: bool):
         results = []
-        torch = self._torch
-        if getattr(self, "_cuda_residency", None) is not None:
+        self.last_evaluation_split = False
+        residency = getattr(self, "_cuda_residency", None)
+        if residency is not None:
             if not candidates:
                 self.last_profile = {}
                 return results
-            self._cuda_residency.activate(self)
+            residency.activate(self)
+        max_throughput = getattr(self, "_max_throughput", False)
+        dispatch_batch_size = getattr(self, "dispatch_batch_size", self.batch_size)
+        cuda_max = getattr(self, "_cuda_max_throughput", max_throughput)
+        if cuda_max and candidates:
+            self._refresh_dispatch_memory(min(dispatch_batch_size, len(candidates)), residency)
         fused_runner = getattr(self, "fused_runner", None)
         profile_runners = (
             (fused_runner,)
@@ -1774,15 +1836,19 @@ class SharedAccountReplay:
             if self.profile_enabled
             else None
         )
+        del fused_runner, profile_runners
         self.last_profile = {}
-        dispatch_batch_size = getattr(self, "dispatch_batch_size", self.batch_size)
+        width = history_dispatch_ceiling(self, dispatch_batch_size)
         interrupt_check = getattr(self, "interrupt_check", lambda: None)
         progress = _new_gpu_dispatch_progress(
             len(candidates),
             dispatch_batch_size,
-            adaptive=False,
+            adaptive=max_throughput,
         )
-        for start, chunk in proxy_batches(self, candidates, dispatch_batch_size):
+        start = 0
+        narrowing_attempts = 0
+        while start < len(candidates):
+            chunk = candidates[start:start + width]
             chunk_profile_started = (
                 time.perf_counter() if profile is not None else 0.0
             )
@@ -1797,15 +1863,45 @@ class SharedAccountReplay:
                 profile["timings_seconds"]["candidate_materialization"] += (
                     time.perf_counter() - stage_started
                 )
-            if fused_runner is not None:
+            runner = getattr(self, "fused_runner", None)
+            if runner is not None:
                 parameters = np.concatenate((parameter_matrices["long"], parameter_matrices["short"]), axis=1)
-                runner = fused_runner
             else:
                 if len(self.sides) != 1:
                     raise RuntimeError("Core GPU metrics require shared-account fused replay for both sides")
                 runner = self.runners[self.sides[0]]
                 parameters = parameter_matrices[self.sides[0]]
-            raw_output = runner.run(parameters, profile=self.profile_enabled)
+            pressure = False
+            try:
+                raw_output = runner.run(parameters, profile=self.profile_enabled)
+            except ReplayScratchLimit as error:
+                if (not max_throughput or narrowing_attempts >= (1 if cuda_max else 2)
+                        or not 1 <= error.limit < len(chunk)):
+                    raise
+                width = error.limit
+                if narrowing_attempts:
+                    # A second drop indicates moving unified-memory headroom.
+                    # Leave margin on the final attempt.
+                    width = min(width, len(chunk) // 2)
+                logging.info(
+                    "GPU max replay width reduced before allocation | attempted=%d admitted=%d",
+                    len(chunk), width,
+                )
+                narrowing_attempts += 1
+                continue
+            except CudaReplayMemoryPressure:
+                if not max_throughput or residency is None or not residency.can_stream_on_pressure(self):
+                    raise
+                pressure = True
+            if pressure:
+                # No candidate in this slice reached the device. Earlier
+                # slices were already reduced and keep their result offsets.
+                del runner
+                residency.stream_on_pressure(self)
+                self.last_evaluation_split = True
+                width = history_dispatch_ceiling(self, dispatch_batch_size)
+                narrowing_attempts = 0
+                continue
             if profile is not None:
                 _add_gpu_runner_profile(profile, runner, side_count=len(self.sides))
             interrupt_check()
@@ -1840,6 +1936,11 @@ class SharedAccountReplay:
                     results.append(ReplayResult(row, flag, metadata))
             else:
                 results.extend(rows)
+            if max_throughput:
+                del raw_output, packet
+            start += len(chunk)
+            self.last_evaluation_split = start < len(candidates) or self.last_evaluation_split
+            narrowing_attempts = 0
             if profile is not None:
                 profile["timings_seconds"]["result_materialization"] += (
                     time.perf_counter() - stage_started
@@ -1849,10 +1950,12 @@ class SharedAccountReplay:
                 )
             _update_gpu_dispatch_progress(
                 progress,
-                completed_candidates=start + len(chunk),
+                completed_candidates=start,
                 strategy=str(getattr(self, "strategy_kind", "unknown")),
             )
         if profile is not None:
+            if max_throughput:
+                profile["dispatch_chunk_count"] = len(profile["dispatch_chunk_wall_seconds"])
             self.last_profile = _finish_gpu_proxy_profile(profile, profile_started)
         return results
 

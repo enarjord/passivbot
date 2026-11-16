@@ -264,6 +264,21 @@ def test_collect_union_keeps_base_approved_with_explicit_scenario_subsets():
     assert master == ["BTC", "ETH", "OM", "SOL"]
 
 
+def test_scenario_available_members_follow_stable_candle_column_order():
+    config = get_expanded_config_prototype()
+    set_side_universe_sources(config, "approved_coins", ["SOL", "ETH", "BTC", "AVAX"])
+    scenario = SuiteScenario(label="subset", start_date=None, end_date=None, coins=["SOL", "BTC", "ETH"],
+                             ignored_coins=None)
+    available = {"SOL", "ETH", "BTC", "AVAX"}
+    prepared, coins = apply_scenario(
+        config, scenario, master_coins=sorted(available), master_ignored=[],
+        available_exchanges=["binance"], available_coins=available,
+    )
+    assert coins == ["BTC", "ETH", "SOL"]
+    approvals = require_side_universe_sources(prepared, "approved_coins")
+    assert all(approvals[side].available_members == tuple(coins) for side in ("long", "short"))
+
+
 def test_apply_scenario_records_transform_log():
     base_config = {
         "backtest": {
@@ -448,6 +463,26 @@ def test_suite_coin_sources_coalesce_master_aliases_to_forced_key(tmp_path, monk
     assert _coalesce_master_coins(
         ["BTC", "BTCUSDT"], {"BTCUSDT": "bitget"}, ["bitget"]
     ) == ["BTCUSDT"]
+
+
+@pytest.mark.parametrize("source_coin", ["SOL", "UNLISTED/USDT:USDT"])
+def test_suite_coin_sources_do_not_add_unapproved_coins(tmp_path, monkeypatch, source_coin):
+    monkeypatch.chdir(tmp_path)
+    markets = {
+        f"{coin}/USDT:USDT": {
+            "id": f"{coin}USDT",
+            "swap": True,
+            "linear": True,
+            "active": True,
+            "base": coin,
+        }
+        for coin in ("HBAR", "SOL")
+    }
+    assert utils.create_coin_symbol_map_cache("bitget", markets, verbose=False)
+
+    assert _coalesce_master_coins(
+        ["HBAR"], {"HBARUSDT": "bitget", source_coin: "bitget"}, ["bitget"]
+    ) == ["HBARUSDT"]
 
 
 def test_suite_master_coins_coalesce_resolved_aliases_without_forced_source(

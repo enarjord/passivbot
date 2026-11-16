@@ -125,6 +125,42 @@ def test_preparation_keeps_initial_budget_when_more_memory_later_becomes_free(me
         assert manager._working_set == 900
 
 
+def test_max_scope_checks_frozen_preparation_and_rechecks_live_after_release(
+    metal_memory, monkeypatch,
+):
+    _torch, memory, uploads, events = metal_memory
+    budget = residency.MpsInputMemoryBudget(
+        device_bytes=405, host_bytes=405, max_throughput=True,
+    )
+    live_probes = []
+
+    def observe(_torch, *, pending_host_bytes):
+        live_probes.append((memory["used"], pending_host_bytes))
+        return 1_000 - memory["used"]
+
+    monkeypatch.setattr(residency, "mps_max_available_bytes", observe)
+    with residency.metal_residency_scope(input_memory_budget=budget) as manager:
+        first = Owner(manager, manager.prepare("first", build), memory)
+        assert not live_probes
+        manager.activate(first)
+        assert live_probes == [(100, 336)]
+
+        second = Owner(manager, manager.prepare("second", build), memory)
+        assert len(live_probes) == 1
+        manager.activate(second)
+        assert live_probes[-1] == (100, 336)
+        assert not first.runners and events.count("release") == 1
+
+        memory["external"] = 700
+        third = Owner(manager, manager.prepare("third", build), memory)
+        prior_uploads = len(uploads)
+        with pytest.raises(residency.MetalReplayMemoryPressure, match="before device allocation"):
+            manager.activate(third)
+        assert live_probes[-1] == (700, 336)
+        assert manager._active is None and not second.runners
+        assert len(uploads) == prior_uploads
+
+
 def test_direct_spill_uses_nominal_budget_without_a_live_free_requirement(metal_memory, monkeypatch, tmp_path):
     torch, memory, uploads, _events = metal_memory
     memory["used"] = 900
@@ -158,3 +194,22 @@ def test_direct_device_build_keeps_current_live_admission(metal_memory, monkeypa
     with pytest.raises(MemoryError, match="45%"):
         build(None)
     assert not uploads
+
+
+def test_direct_metal_max_scope_keeps_the_first_input_preference(monkeypatch):
+    budget = residency.MpsInputMemoryBudget(100, 200, max_throughput=True)
+    replacement = residency.MpsInputMemoryBudget(200, 300, max_throughput=True)
+    calls = []
+
+    def capture(_torch, *, max_throughput):
+        assert max_throughput
+        calls.append(True)
+        return budget
+
+    monkeypatch.setattr(residency, "capture_mps_input_memory_budget", capture)
+    with residency.metal_residency_scope() as manager:
+        assert manager.resolve_max_input_memory_budget(None, None) is budget
+        assert manager.resolve_max_input_memory_budget(None, None) is budget
+        with pytest.raises(ValueError, match="same input memory budget"):
+            manager.resolve_max_input_memory_budget(None, replacement)
+    assert calls == [True]

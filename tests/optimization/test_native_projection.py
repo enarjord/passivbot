@@ -1,5 +1,6 @@
 from copy import deepcopy
 import math
+import pickle
 import sys
 from types import SimpleNamespace
 
@@ -190,6 +191,44 @@ def test_multicoin_and_ineligible_mixed_pairs_never_skip_cleaning(monkeypatch, v
     assert len(calls) == 2
     assert planner._projection_eligible == {("base", "binance"): False}
     assert planner._execution_projections == {}
+
+
+@pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
+def test_max_multicoin_projection_matches_full_candidate_preparation(monkeypatch, strategy):
+    initial, vector = projection_inputs(strategy=strategy, suite=True, selected_indices=(0, 2))
+    initial.base.config["optimize"]["gpu"]["tuning_mode"] = " MAX "
+    planner = NativeCandidatePlanner(initial.scorer.evaluator, initial.bindings)
+    assert all(planner._projection_eligible.values())
+    first = planner.prepare("first", vector)
+    assert len(first.requests) == len(planner._execution_projections) == 2
+    assert all(len(binding.dataset.coin_indices) == 2 for binding in planner.bindings)
+
+    second = set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0)
+    expected = []
+    with monkeypatch.context() as patch:
+        patch.setattr(planner, "_projection_eligible", dict.fromkeys(planner._projection_eligible, False))
+        for stages in (None, ["stress"]):
+            expected.append(planner.prepare("second", second, scenarios=stages))
+    with monkeypatch.context() as patch:
+        patch.setattr(planning, "execution_key", lambda _config: pytest.fail("unchanged multicoin policy was cleaned"))
+        for stages, full in zip((None, ["stress"]), expected, strict=True):
+            projected = planner.prepare("second", second, scenarios=stages)
+            assert projected.vector == full.vector and projected.effective_key == full.effective_key
+            assert projected.stage == full.stage and projected.slots == full.slots
+            assert projected.requests == full.requests
+            assert pickle.dumps(projected.record_config) == pickle.dumps(full.record_config)
+
+    # Coin-specific changes still run canonical validation and get a distinct key.
+    effective = planner.scorer.evaluator.build_scenario_candidate_config(
+        first.record_config, planner.scorer.evaluator.contexts[0],
+    )
+    pair = ("base", "binance")
+    assert planner._execution_projections[pair].matches(effective)
+    effective["coin_overrides"] = {"COIN00": {"bot": {"long": {"unstuck": {"close_fraction": 0.03}}}}}
+    assert not planner._execution_projections[pair].matches(effective)
+    full_key = planning.execution_key(effective)
+    assert full_key != planner._execution_projections[pair].key
+    assert planner._execution_key(pair, effective) == full_key
 
 
 @pytest.mark.parametrize("indices,eligible", [((2,), True), ((0, 2), False)])

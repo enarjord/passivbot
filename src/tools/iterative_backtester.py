@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from session_artifacts import create_session_dir, date_span, effective_setup_config

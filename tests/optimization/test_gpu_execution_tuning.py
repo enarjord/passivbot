@@ -118,6 +118,134 @@ def test_growth_remains_available_after_an_underfilled_window_skips_shrinking():
     assert policy.width("a", 512) == 512
 
 
+def test_expandable_cuda_producer_can_supply_a_trial_then_retain_the_throughput_plateau():
+    policy = prepared_policy(initial=4, expandable_producer=True)
+    evidence(policy, seconds=1, backlog=0)
+    assert policy.cohort_width == policy.width("a", 16) == 8
+    assert policy.accepted_cohort_width == 4
+    evidence(policy, seconds=1.98, backlog=0)
+    assert policy.cohort_width == policy.width("a", 16) == 4
+    assert policy.accepted_cohort_width == 4
+
+
+def test_expandable_cuda_producer_keeps_a_faster_warm_width():
+    policy = prepared_policy(initial=4, expandable_producer=True)
+    evidence(policy, seconds=1, backlog=0)
+    assert policy.accepted_cohort_width == 4
+    evidence(policy, seconds=1.5, backlog=0)
+    assert policy.cohort_width == policy.width("a", 16) == 8
+    assert policy.accepted_cohort_width == 8
+    assert policy.controllers["a"].baseline is None
+
+
+@pytest.mark.parametrize("max_throughput,expected", [(False, 4096), (True, 2048)])
+def test_wide_trial_cannot_persist_on_one_fast_partial_dispatch_in_cuda_max(max_throughput, expected):
+    policy = ExecutionBatchTuner(initial=2048, max_throughput=max_throughput, diagnostics=True)
+    policy.constrain("a", 8192)
+    policy.width("a", 8192)
+    for count, seconds in [(2048, 45)] * 3:
+        policy.observe("a", count, seconds, backlog=2048, closing=False, cold=False)
+    assert policy.width("a", 8192) == 4096
+    for count, seconds in [(2500, 49), (1024, 35), (1024, 35)]:
+        policy.observe("a", count, seconds, backlog=0, closing=False, cold=False)
+
+    assert policy.width("a", 8192) == expected
+    decision = policy.diagnostics_snapshot()["last_decision"]
+    assert decision["comparison_count"] == 2500 and decision["comparison_frequency"] == 1
+    assert not decision["comparison_full_width"]
+    assert decision["window_rows_per_second"] == pytest.approx((2500 + 2048) / 119)
+    rate = (2500 + 2048) / 119 if max_throughput else 2500 / 49
+    assert decision["comparison_rows_per_second"] == pytest.approx(rate)
+
+
+@pytest.mark.parametrize("samples,expected", [
+    ([(4096, 50), (4096, 54), (2048, 40)], 4096),
+    ([(4096, 45), (4096, 45), (256, 120)], 2048),
+    ([(4096, 45), (3500, 45), (3500, 45)], 2048),
+])
+def test_cuda_max_persists_only_repeatable_width_with_faster_representative_rate(samples, expected):
+    policy = ExecutionBatchTuner(initial=2048, expandable_producer=True, diagnostics=True)
+    policy.constrain("a", 8192)
+    policy.width("a", 8192)
+    for _ in range(3):
+        policy.observe("a", 2048, 45, backlog=0, closing=False, cold=False)
+    assert policy.cohort_width == 4096 and policy.accepted_cohort_width == 2048
+    # A real compilation or a split must not supply a second full-width sample.
+    policy.observe("a", 4096, 1, backlog=0, closing=False, cold=True)
+    policy.constrain("a", 8192, split=True)
+    policy.observe("a", 4096, 1, backlog=0, closing=False, cold=False)
+    for count, seconds in samples:
+        policy.observe("a", count, seconds, backlog=0, closing=False, cold=False)
+
+    assert policy.cohort_width == policy.accepted_cohort_width == expected
+    decision = policy.diagnostics_snapshot()["last_decision"]
+    expected_rate = sum(count for count, _ in samples) / sum(seconds for _, seconds in samples)
+    assert decision["comparison_rows_per_second"] == pytest.approx(expected_rate)
+    assert decision["comparison_frequency"] == sum(count == 4096 for count, _ in samples)
+
+
+def test_cuda_max_retries_a_repeatable_intermediate_width_without_persisting_a_partial_trial():
+    policy = ExecutionBatchTuner(initial=2048, expandable_producer=True)
+    policy.constrain("a", 8192)
+    policy.width("a", 8192)
+    for _ in range(3):
+        policy.observe("a", 2048, 45, backlog=0, closing=False, cold=False)
+    assert policy.cohort_width == 4096
+    for count in (3000, 2500, 2500):
+        policy.observe("a", count, 49, backlog=0, closing=False, cold=False)
+    assert policy.cohort_width == policy.accepted_cohort_width == 2048
+    for _ in range(12):
+        policy.observe("a", 2048, 45, backlog=0, closing=False, cold=False)
+    assert policy.cohort_width == 2500 and policy.accepted_cohort_width == 2048
+    for _ in range(3):
+        policy.observe("a", 2500, 49, backlog=0, closing=False, cold=False)
+    assert policy.cohort_width == policy.accepted_cohort_width == 2500
+
+
+@pytest.mark.parametrize("seconds,trial_width", [(1.0, 2), (8.0, 8)])
+def test_cuda_max_grows_beyond_parallel_window_only_for_sustained_slow_replay(seconds, trial_width):
+    policy = prepared_policy(initial=4, expandable_producer=True, host_preparation=(4, 0.5))
+    evidence(policy, seconds=seconds, backlog=0)
+    assert policy.cohort_width == trial_width
+    assert policy.accepted_cohort_width == 4
+
+
+def test_cuda_max_host_growth_uses_full_width_rate_when_partial_batches_are_slow():
+    policy = prepared_policy(initial=4, expandable_producer=True, host_preparation=(4, 0.5))
+    policy.width("a", 16)
+    for count, seconds in [(4, 1)] * 2 + [(2, 8)] * 4:
+        policy.observe("a", count, seconds, backlog=0, closing=False, cold=False)
+    assert policy.controllers["a"].last_window_rate < 1
+    assert policy.controllers["a"].last_comparison_shape_rate == 4
+    assert policy.cohort_width == 2
+    assert policy.accepted_cohort_width == 4
+
+
+def test_expandable_cuda_producer_persists_a_physical_clamp_without_a_trial():
+    policy = prepared_policy(initial=8, expandable_producer=True)
+    policy.constrain("a", 5)
+    assert policy.width("a", 16) == 5
+    policy.observe("a", 3, 1, backlog=0, closing=False, cold=True)
+    assert policy.cohort_width == policy.accepted_cohort_width == 5
+
+
+@pytest.mark.parametrize("ceiling,expected", [(12, 8), (5, 5)])
+def test_cuda_max_restarts_at_accepted_width_when_physical_admission_changes(ceiling, expected):
+    policy = prepared_policy(initial=4, expandable_producer=True)
+    evidence(policy, seconds=1, backlog=0)
+    evidence(policy, seconds=1.5, backlog=0)
+    evidence(policy, seconds=1.5, backlog=0)
+    evidence(policy, seconds=1.5, backlog=0)
+    assert policy.cohort_width == 16 and policy.accepted_cohort_width == 8
+    policy.observe("a", 16, 2, backlog=0, closing=False, cold=False)
+
+    policy.constrain("a", ceiling, split=True)
+    assert policy.cohort_width == policy.accepted_cohort_width == expected
+    assert policy.width("a", 16) == expected
+    policy.observe("a", 16, 2, backlog=0, closing=False, cold=False)
+    assert not policy.controllers["a"].samples
+
+
 def test_non_power_of_two_growth_requires_headroom_and_never_changes_other_dataset():
     queries = []
     policy = ExecutionBatchTuner(initial=256, headroom=lambda: queries.append(1) or False)
@@ -233,17 +361,43 @@ def test_unprepared_dataset_claims_one_request_then_honors_known_capacity():
 @pytest.mark.parametrize("setting,mode,automatic,width", [
     (None, "auto", True, 128), ("auto", "refresh", True, 128),
     (None, "off", False, 64), (4, "auto", False, 4),
+    (None, "max", True, 128), (4, "max", False, 4),
+    (None, "conservative", True, 128),
 ])
 def test_cuda_facade_tuning_is_lazy_and_explicit_width_disables_it(setting, mode, automatic, width):
     with CudaBacktestService(batch_size=setting, tuning_mode=mode, max_pending=128) as service:
         assert (service._batch_tuner is not None) is automatic
         assert service._executor.batch_size == width
         assert service._executor._thread is None
+        if automatic:
+            tuner = service._batch_tuner
+            tuner.constrain("a", width)
+            tuner.width("a", width)
+            controller = tuner.controllers["a"]
+            assert controller.require_repeatable_width is (mode == "max")
+            assert controller.rate_aggregation == ("per_count" if mode == "max" else "largest_count")
 
 
 def test_cuda_facade_rejects_invalid_tuning_mode():
-    with pytest.raises(ValueError, match="tuning mode"):
+    with pytest.raises(ValueError, match="tuning_mode"):
         CudaBacktestService(tuning_mode="invalid")
+
+
+@pytest.mark.parametrize("setting,expected", [(None, 32), (64, 64)])
+def test_cuda_max_automatic_width_limit_is_independent_of_admission(setting, expected):
+    with CudaBacktestService(
+            batch_size=setting, tuning_mode="max", max_pending=128,
+            auto_request_capacity=192, auto_batch_size_limit=32,
+    ) as service:
+        assert service._executor.batch_size == expected
+        assert service._executor.max_pending == 192
+        assert service._executor._accumulate_after_preparation
+
+
+@pytest.mark.parametrize("mode,delay", [("conservative", None), ("max", 0.005)])
+def test_initial_reaccumulation_is_only_enabled_in_max_with_adaptive_delay(mode, delay):
+    with CudaBacktestService(tuning_mode=mode, max_batch_delay=delay) as service:
+        assert not service._executor._accumulate_after_preparation
 
 
 @pytest.mark.parametrize("mode,delay,automatic", [
@@ -340,3 +494,135 @@ def test_diagnostics_count_completed_rows_when_capacity_change_discards_tuner_ev
     assert snapshot["latest"]["ceiling"] == 2
     assert policy.width("a", 16) == 2
     assert not policy.controllers["a"].seen
+
+
+def test_split_batch_counts_completed_rows_without_training_on_logical_width():
+    policy = prepared_policy(initial=4, diagnostics=True)
+    policy.width("a", 16)
+    controller = policy.controllers["a"]
+    policy.constrain("a", 16, split=True)
+    policy.observe("a", 4, 2, backlog=0, closing=False, cold=False)
+    snapshot = policy.diagnostics_snapshot()
+    assert snapshot["rows"] == 4 and snapshot["untrained_observations"] == 1
+    assert not controller.samples and policy.controllers["a"] is controller
+    policy.observe("a", 4, 2, backlog=0, closing=False, cold=False)
+    assert controller.samples and policy.diagnostics_snapshot()["rows"] == 8
+
+
+@pytest.mark.parametrize("ceiling,expected", [(16, 8), (5, 5)])
+def test_transport_change_discards_live_trial_and_restarts_at_accepted_width(ceiling, expected):
+    policy = prepared_policy(initial=4, expandable_producer=True, diagnostics=True)
+    policy.constrain("a", 16, transport=(False, False))
+    evidence(policy, seconds=1, backlog=0)
+    evidence(policy, seconds=1.5, backlog=0)
+    assert policy.accepted_cohort_width == 8
+    # Consume cooldown, then start a trial and retain part of its evidence.
+    evidence(policy, seconds=1.5, backlog=0)
+    evidence(policy, seconds=1.5, backlog=0)
+    controller = policy.controllers["a"]
+    assert controller.width == 16 and controller.baseline == (8, 8 / 1.5)
+    policy.observe("a", 16, 2, backlog=100, closing=False, cold=False)
+    assert controller.samples and policy.cohort_width == 16
+
+    policy.constrain("a", ceiling, transport=(True, False))
+    assert policy.cohort_width == policy.accepted_cohort_width == expected
+    assert policy.width("a", 16) == expected
+    restarted = policy.controllers["a"]
+    assert restarted is not controller and restarted.baseline is None
+    assert not restarted.samples and not restarted.seen and restarted.cooldown == 0
+    policy.observe("a", expected, 2, backlog=100, closing=False, cold=False)
+    assert not restarted.samples and not policy.diagnostics_snapshot()["latest"]["evidence_available"]
+    policy.constrain("a", ceiling, transport=(True, False))
+    policy.observe("a", expected, 2, backlog=100, closing=False, cold=False)
+    assert restarted.samples and policy.controllers["a"] is restarted
+
+
+def test_compact_transport_change_resets_only_the_dataset_that_observes_it():
+    policy = prepared_policy(initial=4, expandable_producer=True)
+    shared = {"transport": (True, False)}
+    for dataset in ("a", "b", "unrelated"):
+        policy.constrain(dataset, 16, transport=shared["transport"])
+        policy.width(dataset, 16)
+        policy.observe(dataset, 4, 2, backlog=0, closing=False, cold=False)
+    before = dict(policy.controllers)
+
+    shared["transport"] = (True, True)
+    for dataset, still_unchanged in (("a", ("b", "unrelated")), ("b", ("unrelated",))):
+        policy.constrain(dataset, 16, transport=shared["transport"])
+        assert policy.width(dataset, 16) == 4
+        assert policy.controllers[dataset] is not before[dataset]
+        for other in still_unchanged:
+            assert policy.controllers[other] is before[other] and policy.controllers[other].samples
+
+
+def test_cuda_facade_reports_transport_from_an_already_registered_sibling(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from optimization.gpu import service as replay_module
+    from optimization.gpu.datasets import PreparedGpuDataset
+
+    packed = {"stream_tick_inputs": False, "compact_hourly_ranges": False}
+
+    class Replay:
+        data = packed
+        last_evaluation_split = False
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def evaluate_results(self, candidates):
+            if candidates[0].get("pressure"):
+                self.data["stream_tick_inputs"] = True
+            return candidates
+
+        def _remember_factual_capacities(self):
+            pass
+
+    @contextmanager
+    def attach(*_args):
+        yield None, None, None
+
+    monkeypatch.setattr(replay_module, "SharedAccountReplay", Replay)
+    monkeypatch.setattr(CudaBacktestService, "_dispatch_ceiling", staticmethod(lambda replay: 16))
+    monkeypatch.setattr(PreparedGpuDataset, "attach", attach)
+    monkeypatch.setattr(PreparedGpuDataset, "attach_selection", attach)
+    monkeypatch.setattr(PreparedGpuDataset, "execution_config", lambda _dataset: {})
+    dataset = object.__new__(PreparedGpuDataset)
+    for key, value in {"hlcvs": SimpleNamespace(shape=(1, 1, 4)), "coin_indices": (0,),
+                       "markets_json": "{}", "exchange": "binance", "metrics": ()}.items():
+        object.__setattr__(dataset, key, value)
+
+    with CudaBacktestService(batch_size=None, tuning_mode="max", max_pending=16) as service:
+        service._residency = SimpleNamespace(activate=lambda _replay: None)
+        policy = service._batch_tuner
+        for identity in ("a", "b"):
+            service.register_dataset(identity, dataset)
+        # Drive the registered factory callbacks directly with no GPU or wall-clock training.
+        with service._executor._factories["a"]() as first, service._executor._factories["b"]() as sibling:
+            controllers = dict(policy.controllers)
+            first.evaluate([{"pressure": True}])
+            assert "a" not in policy.controllers and policy.controllers["b"] is controllers["b"]
+            policy.observe("a", 1, 1, backlog=0, closing=False, cold=False)
+            sibling.evaluate([{}])
+            assert "b" not in policy.controllers
+            policy.observe("b", 1, 1, backlog=0, closing=False, cold=False)
+            assert all(policy.width(identity, 16) == 16 for identity in ("a", "b"))
+
+
+@pytest.mark.parametrize("probe_inner_growth,next_width", [(True, 6), (False, 2)])
+def test_rejected_full_width_growth_can_probe_an_interior_width(probe_inner_growth, next_width):
+    policy = prepared_policy(initial=4, expandable_producer=True, max_throughput=True)
+    policy.probe_inner_growth = probe_inner_growth
+    evidence(policy, seconds=1)
+    assert policy.width("a", 16) == 8
+    evidence(policy, seconds=3)
+    assert policy.width("a", 16) == policy.accepted_cohort_width == 4
+    for _ in range(3):
+        evidence(policy, seconds=1)
+    evidence(policy, seconds=1)
+    assert policy.width("a", 16) == next_width
+    assert policy.accepted_cohort_width == 4
+    if probe_inner_growth:
+        evidence(policy, seconds=1)
+        assert policy.width("a", 16) == policy.accepted_cohort_width == 6

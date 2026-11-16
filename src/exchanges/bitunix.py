@@ -8,7 +8,7 @@ import re
 import time
 import uuid
 from copy import deepcopy
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 from urllib.parse import urlencode
 
@@ -27,6 +27,7 @@ from ccxt.base.errors import (
 from config.access import require_live_value
 from custom_endpoint_overrides import CustomEndpointConfigError
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
+from exchanges.retry_after import retry_after_from_headers
 from live.balance_composition import normalize_bitunix_balance_composition
 from live.diagnostic_safety import bounded_exception_code
 from live.state_refresh import AuthoritativeSurfaceUnavailable
@@ -96,6 +97,7 @@ class BitunixClient:
     """Minimal async Bitunix futures client with a CCXT-compatible live boundary."""
 
     _position_fill_transport_guard = True
+    supports_ordinary_cancel_wave = True
     id = "bitunix"
     name = "Bitunix"
     precisionMode = 4  # ccxt.TICK_SIZE
@@ -461,12 +463,13 @@ class BitunixClient:
                 data=body_text if body is not None else None,
             ) as response:
                 response_text = await response.text()
-                if response.status == 429:
-                    raise RateLimitExceeded("Bitunix HTTP 429")
                 if response.status in {401, 403}:
                     raise AuthenticationError(f"Bitunix HTTP {response.status}")
                 if response.status >= 400:
-                    raise NetworkError(f"Bitunix HTTP {response.status}")
+                    error_type = RateLimitExceeded if response.status == 429 else NetworkError
+                    failure = error_type(f"Bitunix HTTP {response.status}")
+                    failure.retry_after_seconds = retry_after_from_headers(response.headers)
+                    raise failure
         except asyncio.CancelledError:
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
@@ -494,8 +497,8 @@ class BitunixClient:
                     "GET", "/api/v1/futures/market/trading_pairs"
                 )
                 break
-            except NetworkError:
-                if attempt == 2:
+            except NetworkError as exc:
+                if attempt == 2 or getattr(exc, "retry_after_seconds", 0.0):
                     raise
                 await asyncio.sleep(0.5 * (2**attempt))
         if not isinstance(rows, list):
@@ -1150,6 +1153,41 @@ class BitunixClient:
             "info": deepcopy(data),
         }
 
+    @staticmethod
+    def ordinary_cancel_acknowledged(order, result):
+        """Prove this singleton cancel was acknowledged without a conflicting row."""
+        info = result.get("info") if isinstance(result, dict) else None
+        if not isinstance(info, dict):
+            return False
+        successes = info.get("successList")
+        failures = info.get("failureList", [])
+        return (
+            result.get("status") == "canceled"
+            and result.get("symbol") == order["symbol"]
+            and str(result.get("id")) == str(order["id"])
+            and isinstance(successes, list)
+            and len(successes) == 1
+            and isinstance(successes[0], dict)
+            and str(successes[0].get("orderId")) == str(order["id"])
+            and failures == []
+        )
+
+    @staticmethod
+    def ordinary_cancel_echo_has_no_fill(order):
+        # Normalization can default a missing cumulative fill to zero. Only
+        # explicit venue evidence can keep a wave's account receipt current.
+        info = order.get("info")
+        if not isinstance(info, dict):
+            return False
+        amounts = [info[field] for field in ("tradeQty", "dealAmount") if field in info]
+        try:
+            return bool(amounts) and all(
+                type(value) in (str, int, float) and Decimal(str(value)).is_zero()
+                for value in amounts
+            )
+        except InvalidOperation:
+            return False
+
     def _normalize_trade(self, row: dict) -> dict:
         market_id = str(row.get("symbol") or "")
         symbol = self.safe_symbol(market_id)
@@ -1668,6 +1706,15 @@ class BitunixOrderStream:
     KLINE_QUEUE_SIZE = 4
     MAX_CONSECUTIVE_MALFORMED_KLINES = 5
     KLINE_SILENCE_TIMEOUT_SECONDS = 45.0
+    MALFORMED_KLINE_LOG_INTERVAL_SECONDS = 300.0
+    MALFORMED_KLINE_REASONS = {
+        "Bitunix kline websocket has inconsistent OHLC values": "inconsistent_ohlc",
+        "Bitunix kline websocket has invalid price or volume": "invalid_price_or_volume",
+        **{
+            f"Bitunix kline websocket invalid {field}": "invalid_" + field.replace(" ", "_")
+            for field in ("open", "high", "low", "close", "base volume")
+        },
+    }
 
     def __init__(self, rest: BitunixClient):
         self.rest = rest
@@ -1681,6 +1728,33 @@ class BitunixOrderStream:
         self._ohlcv_queues: dict[str, asyncio.Queue] = {}
         self._ohlcv_fallback_pending: set[str] = set()
         self._ohlcv_closed = False
+        self._last_malformed_kline_warning: float | None = None
+        self._malformed_kline_drops = 0
+        self._malformed_kline_fallbacks = 0
+        self._malformed_kline_samples: set[str] = set()
+
+    def _log_malformed_kline(self, symbol: str, reason: str, *, fallback: bool) -> None:
+        """Summarize dropped frames across this stream's public sockets."""
+        self._malformed_kline_drops += 1
+        self._malformed_kline_fallbacks += int(fallback)
+        if len(self._malformed_kline_samples) < 3:
+            self._malformed_kline_samples.add(symbol)
+        now = time.monotonic()
+        last = self._last_malformed_kline_warning
+        if last is not None and now - last < self.MALFORMED_KLINE_LOG_INTERVAL_SECONDS:
+            return
+        logging.warning(
+            "[bitunix] [candle] malformed kline updates dropped | "
+            "drops=%d fallback_requests=%d latest_reason=%s sample=%s",
+            self._malformed_kline_drops,
+            self._malformed_kline_fallbacks,
+            reason,
+            ",".join(sorted(self._malformed_kline_samples)),
+        )
+        self._last_malformed_kline_warning = now
+        self._malformed_kline_drops = 0
+        self._malformed_kline_fallbacks = 0
+        self._malformed_kline_samples.clear()
 
     async def _receive_with_keepalive(
         self, ws: aiohttp.ClientWebSocketResponse
@@ -2111,28 +2185,20 @@ class BitunixOrderStream:
                             malformed_counts[malformed_symbol] = (
                                 malformed_counts.get(malformed_symbol, 0) + 1
                             )
+                            reason = self.MALFORMED_KLINE_REASONS.get(str(exc), "invalid_kline_schema")
                             if malformed_symbol not in malformed_warned:
-                                reasons = {
-                                    "Bitunix kline websocket has inconsistent OHLC values": "inconsistent_ohlc",
-                                    "Bitunix kline websocket has invalid price or volume": "invalid_price_or_volume",
-                                    **{
-                                        f"Bitunix kline websocket invalid {field}": "invalid_" + field.replace(" ", "_")
-                                        for field in ("open", "high", "low", "close", "base volume")
-                                    },
-                                }
-                                logging.warning(
-                                    "[bitunix] [candle] malformed kline update dropped "
-                                    "| symbol=%s reason=%s action=drop_update "
-                                    "rest_fallback_after=%d",
+                                logging.debug(
+                                    "[bitunix] [candle] malformed kline update dropped | symbol=%s reason=%s",
                                     malformed_symbol,
-                                    reasons.get(str(exc), "invalid_kline_schema"),
-                                    self.MAX_CONSECUTIVE_MALFORMED_KLINES,
+                                    reason,
                                 )
                                 malformed_warned.add(malformed_symbol)
-                            if (
+                            fallback = (
                                 malformed_counts[malformed_symbol]
                                 >= self.MAX_CONSECUTIVE_MALFORMED_KLINES
-                            ):
+                            )
+                            self._log_malformed_kline(malformed_symbol, reason, fallback=fallback)
+                            if fallback:
                                 self._queue_ohlcv_fallback(
                                     malformed_symbol,
                                     NetworkError(

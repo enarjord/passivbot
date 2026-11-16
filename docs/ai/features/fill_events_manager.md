@@ -2,8 +2,9 @@
 
 ## Contract
 
-All trading writes also share the [bounded position-to-fill settling gate](equity_hard_stop_loss.md#budgets-history-and-admission).
-It schedules tail fetches after position changes and temporarily defers affected coin-sides;
+Ordinary writes share the [bounded position-to-fill settling gate](equity_hard_stop_loss.md#budgets-history-and-admission).
+Dedicated HSL protection uses fresh account observations while fill history settles.
+The gate schedules tail fetches after position changes and temporarily defers affected coin-sides;
 it is not the trailing reconstruction or historical-PnL proof described below. A successful
 qualifying fetch need not contain the expected fill. Its 15-second maximum cannot be renewed by
 repeated changes, failures or a hung request. Expiry releases the settling gate, not required
@@ -129,13 +130,48 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
     requirements after fetching so delayed fills cannot be accepted under the
     earlier boundary and older discarded episodes cannot remain PnL blockers.
 
-## Empty-refresh replay reuse
+## Migrating legacy adapter callers
 
-A successful empty fetch may skip reconstruction only after a full replay proved the same history
-was unchanged, with the same fee policy and no new PnL observations. The disposable proof owns a
-deep copy including mutable raw/fee/provenance data. Fetched duplicates and all enrichment still
-use the full path. Fetches, failure propagation, coverage repair, metadata and refresh checkpoints
-remain unconditional; restart or loss of the proof simply repeats full reconstruction.
+Live planning reads fills through `FillEventsManager`. Legacy exchange-adapter
+methods such as `fetch_pnls` and `gather_fill_events` are compatibility paths.
+They do not establish the manager's coverage, fee quality, or replay state.
+
+For existing bot integrations, use the manager initialized by the live fill
+owner and reuse its cache. For independent consumers, construct a
+`FillEventsManager` with the venue's `BaseFetcher` implementation and an
+explicit cache location. Await `ensure_loaded()` to read existing local data.
+If the caller needs fresh exchange facts, await `refresh_for_lookback(start_ms)`
+and require `manager.get_coverage_status(start_ms=...)["ready"]` before reading
+`get_events(start_ms=...)`.
+The read accessor filters loaded rows and does not prove interval coverage by
+itself. Consumers that require realized PnL must also check pending or degraded
+PnL under the contract above.
+
+Use each event's signed quantity and position side, and read net realized PnL
+through `fill_event_net_pnl(event)`. Keep the manager as the sole writer of its fill
+cache. Legacy method removal should follow migration of their callers.
+
+## Refresh day persistence
+
+Refreshes serialize per manager. Bulk day-file reads and atomic writes run off the event loop.
+A refresh awaits those writes before publishing new in-memory events or advancing coverage and
+refresh metadata. A cancelled refresh drains its current disk write before another refresh can
+start. Failed writes propagate to the existing caller policy.
+
+## Fill refresh replay reuse
+
+A successful empty or exact-duplicate-only fetch may skip reconstruction after a full replay proves
+the complete ordered history is unchanged under the same fee policy. Check duplicate rows after
+normalization, fee enrichment, source-ID replacement, and provenance handling. Only omitted
+replay-derived position annotations may be copied from the matching cached row for comparison.
+Changes to facts, explicit annotations, raw evidence, fees, or any PnL observation take the full
+path. The disposable proof owns a deep copy and is restored only after successful publication.
+It compares canonical rows and process-local type-preserving bytes for their raw evidence, fees,
+and provenance. Evidence outside the supported encoding keeps the exact recursive comparison.
+Duplicate days are verified once using final annotated rows, so a missing or partially published
+file can be repaired without rewriting unchanged data. Fetches, failure propagation, coverage repair,
+metadata, and refresh checkpoints still run. Restart or loss of the proof requires a full replay
+before reuse.
 
 ## Runtime Provenance
 
@@ -219,6 +255,25 @@ logs, runtime windows, and immutable manifests.
    cache-contract failure: quarantine the cache and rebuild the configured lookback before
    accepting individually fetched components.
 
+### Hyperliquid one-way execution attribution
+
+Hyperliquid's account fill feed can contain spot and perpetual executions. Only perpetual
+executions enter this ledger. Use the signed native `startPosition`, execution side and size to
+distinguish an addition, reduction, or position flip. Accept an explicit, side-consistent
+opening or closing action on older rows without a signed position. A reduction needs explicit
+finite realized PnL. A full page that stalls on a timestamp cannot certify coverage.
+
+A flip yields two components of the same raw execution with distinct event and source IDs.
+Allocate gross realized PnL to the close and the reported fee in proportion to each leg's
+quantity at the common execution price. The native Hyperliquid fee already includes the
+builder fee. Missing fees continue through the existing best-effort fee policy. Retain raw
+evidence and component roles for same-millisecond position replay. On cache load, reconstruct a
+legacy single-row flip only when its original execution reconciles to the retained identity,
+timestamp, market, side, price, total quantity and gross PnL. Missing or contradictory split
+legs and unreconciled cache aggregates require the existing quarantine/rebuild path.
+
+[Hyperliquid account fill payloads](https://hyperliquid.gitbook.io/Hyperliquid-docs/for-developers/api/info-endpoint#retrieve-a-users-fills)
+
 ## Failure Semantics And Risks
 
 1. Missing records from pagination assumptions.
@@ -228,6 +283,15 @@ logs, runtime windows, and immutable manifests.
 Exchange fetch methods propagate endpoint failures. The manager or caller may repair, retry,
 quarantine, rebuild, or defer according to `../error_contract.md`; it must not attach neutral PnL
 merely because an auxiliary endpoint failed.
+
+Bitget classic and UTA, Bybit executions, Hyperliquid, and OKX propagate pagination cap exhaustion
+when another page would be required. A failed bounded traversal leaves the interval retryable
+and does not advance coverage or the refresh checkpoint.
+
+Position replay requires a resolved long or short side. The OKX fill reader requires the venue's
+explicit long, short, or net position mode and buy or sell execution side. Binance income-only
+realized PnL and commission records with zero quantity and price may retain an explicit unknown
+side for accounting. They carry no position change.
 
 Unproven required coverage is a controlled live-planning deferral. The execution loop owns its
 bounded, reason-aware retry cadence, and failed coverage ranges do not consume the generic

@@ -371,11 +371,11 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
     ranking inputs continue to come from current or bounded cached real candles.
     Identical projections within one finalized bucket reuse a bounded in-memory
     result keyed by the cached-tail timestamp, requested spans, and projection
-    horizon. The key also includes the content-bearing shard and known-gap state
-    for the requested window, so another process writing the shared cache
-    invalidates stale projections. Candle content, synthetic provenance, or
-    known-gap coverage changes invalidate local entries; metadata-only refresh
-    writes do not force a full recomputation.
+    horizon. The key also includes the content-bearing index state and the actual
+    shard file identities for the requested window. An atomic shard replacement
+    invalidates stale projections even if its index commit fails. Candle content,
+    synthetic provenance, or known-gap coverage changes invalidate local entries.
+    A metadata-only refresh retains an unchanged shard and its projection.
     Compatible current and bounded cache-only EMA spans share one candle-window
     load per metric policy. Cache-only coverage is validated independently per
     span, preserving complete shorter spans when a longer requested window is
@@ -553,6 +553,20 @@ and release are nonblocking operations in the owning task, with no worker-thread
 handoff that can complete acquisition after cancellation. Historical callers keep
 their existing unbounded acquisition policy unless they explicitly install a budget.
 Protective HSL scheduling retains its independent current-fact requirements.
+A contended candle index write lock fails immediately through the existing persistence
+error path. The lock holder retains its atomic write. A later acquisition can retry the
+write without blocking the event loop on the lock.
+Fetch-lock backoff applies only to acquiring that lock. Errors in the protected operation
+propagate after its fetch lock is released.
+Fetch-lock files persist across release and restart. The OS releases ownership on process
+exit. Removing a lock file while another process has it open lets a third process lock a
+different inode for the same symbol. Apply this rule to every writer sharing the directory.
+
+An empty REST refresh stages its final refresh-time checkpoint on a bounded worker.
+The worker writes only a temporary file. The owning task publishes under the index
+lock after checking both the disk revision and the in-memory index. Cancellation
+discards the staged file, and a competing update remains authoritative. Gap repair
+and shard writes use their existing persistence paths.
 
 Trailing reconstruction still requires a completed candle beginning strictly after
 the latest fill minute. Before that first source candle finalizes, a one-to-two
@@ -628,6 +642,14 @@ index; an actual overlap retains the full-history rewrite and proof/epoch policy
 Selections retain complete outage bounds and the existing owned-record revision,
 external-index replacement and conservative unowned-list behavior. No retry or
 trading permission is cached, and payload/index durability ordering is unchanged.
+
+The present-candle refresh decision reads the last refresh and last finalized
+timestamps from one checked index. Final candle gap classification shares one
+index between metadata and physical-hole checks. Each historical missing-span
+pass and each synchronous present gap fetch decision use one checked gap index.
+Batched one-minute EMA spans share one newly checked index after fetching candles
+and retain each span's coverage bounds. Each physical-hole check still reads
+proof over the full hole.
 
 Unknown-gap coverage checks build one contiguous timestamp index after copying,
 sorting and excluding provisional synthetic candles. All gap slices in that

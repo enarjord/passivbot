@@ -1468,9 +1468,6 @@ async def try_prepare_hlcvs_v2_local(
 
     try:
         await om.load_markets()
-        first_timestamps_unified = await get_first_timestamps_unified(
-            coins, exchange=exchange
-        )
         catalog = OhlcvCatalog(Path("caches") / "ohlcvs" / "catalog.sqlite")
         store = OhlcvStore(Path("caches") / "ohlcvs", catalog)
         mss = {}
@@ -1507,7 +1504,6 @@ async def try_prepare_hlcvs_v2_local(
             coin_symbols[coin] = symbol
             coin_source_windows[coin] = (int(rng.timestamps[0]), int(rng.timestamps[-1]))
             mss[coin] = om.get_market_specific_settings(coin)
-            mss[coin]["inception_timestamp_ms"] = _coerce_positive_ts(first_timestamps_unified.get(coin))
             global_start_ts = adjusted_start_ts if global_start_ts is None else min(global_start_ts, adjusted_start_ts)
 
         if not coin_symbols:
@@ -4400,9 +4396,6 @@ async def prepare_hlcvs_internal(
 ):
     interval_ms = 60_000
 
-    first_timestamps_unified = await get_first_timestamps_unified(
-        coins, exchange=exchange
-    )
     per_coin_warmups = compute_per_coin_warmup_minutes(config)
     default_warm = int(per_coin_warmups.get("__default__", 0))
 
@@ -4545,7 +4538,6 @@ async def prepare_hlcvs_internal(
     mss = {}
     for coin in sorted(valid_coin_data):
         meta = om.get_market_specific_settings(coin)
-        meta["inception_timestamp_ms"] = _coerce_positive_ts(first_timestamps_unified.get(coin))
         first_idx, last_idx = valid_index_ranges.get(
             coin, (n_timesteps, n_timesteps)
         )
@@ -4794,12 +4786,6 @@ async def _prepare_hlcvs_combined_impl(
     tradfi_for_stock_perps = _has_stock_perp_calendar_context(
         config.get("backtest", {}).get("ohlcv_source_dir")
     )
-    timestamp_exchanges = list(
-        dict.fromkeys([*exchanges_to_consider, *forced_sources.values()])
-    )
-    first_timestamps_unified = await get_first_timestamps_unified(
-        coins, exchanges=timestamp_exchanges
-    )
 
     per_coin_warmups = compute_per_coin_warmup_minutes(config)
     default_warm = int(per_coin_warmups.get("__default__", 0))
@@ -4816,7 +4802,7 @@ async def _prepare_hlcvs_combined_impl(
     market_settings_sources = _filter_market_settings_sources_for_coins(
         market_settings_sources, coins
     )
-    coins = _normalize_combined_coins(coins, forced_sources, om_dict, first_timestamps_unified)
+    coins = _normalize_combined_coins(coins, forced_sources, om_dict)
 
     progress = ProgressTracker(len(coins), "combined fetching candles")
     progress.maybe_log(force=True)
@@ -4832,7 +4818,6 @@ async def _prepare_hlcvs_combined_impl(
             sem=sem,
             base_start_ts=base_start_ts,
             end_ts=end_ts,
-            first_timestamps_unified=first_timestamps_unified,
             tradfi_for_stock_perps=tradfi_for_stock_perps,
             forced_sources=forced_sources,
             market_settings_sources=market_settings_sources,
@@ -4863,7 +4848,6 @@ async def _prepare_hlcvs_combined_impl(
 
         chosen_data_per_coin[result.coin] = result.best_df
         chosen_mss_per_coin[result.coin] = result.market_settings
-        chosen_mss_per_coin[result.coin]["inception_timestamp_ms"] = _coerce_positive_ts(first_timestamps_unified.get(result.coin))
         chosen_candidates_per_coin[result.coin] = result.candidates
         selected_candidate = next(
             candidate
@@ -5096,7 +5080,6 @@ def _normalize_combined_coins(
     coins: Sequence[str],
     forced_sources: Dict[str, str],
     om_dict: Dict[str, HLCVManager],
-    first_timestamps_unified: dict,
 ) -> list[str]:
     def normalize_stock_perp_coin(coin: str, forced_exchange: Optional[str]) -> str:
         if forced_exchange != "hyperliquid":
@@ -5121,8 +5104,6 @@ def _normalize_combined_coins(
             forced_ex = forced_sources.get(f"xyz:{coin}")
         normalized_coin = normalize_stock_perp_coin(coin, forced_ex)
         normalized_coins.append(normalized_coin)
-        if normalized_coin != coin and coin in first_timestamps_unified:
-            first_timestamps_unified.setdefault(normalized_coin, first_timestamps_unified[coin])
     return sorted(set(normalized_coins))
 
 
@@ -5131,7 +5112,6 @@ def _plan_combined_coin(
     coin: str,
     base_start_ts: int,
     end_ts: int,
-    first_timestamps_unified: dict,
     tradfi_for_stock_perps: bool,
     forced_sources: Dict[str, str],
     exchanges_to_consider: Sequence[str],
@@ -5384,7 +5364,6 @@ async def _resolve_combined_coin(
     sem: asyncio.Semaphore,
     base_start_ts: int,
     end_ts: int,
-    first_timestamps_unified: dict,
     tradfi_for_stock_perps: bool,
     forced_sources: Dict[str, str],
     market_settings_sources: Dict[str, str],
@@ -5404,7 +5383,6 @@ async def _resolve_combined_coin(
             coin=coin,
             base_start_ts=base_start_ts,
             end_ts=end_ts,
-            first_timestamps_unified=first_timestamps_unified,
             tradfi_for_stock_perps=tradfi_for_stock_perps,
             forced_sources=forced_sources,
             exchanges_to_consider=exchanges_to_consider,

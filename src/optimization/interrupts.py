@@ -6,6 +6,10 @@ from types import FrameType
 from typing import Callable
 
 
+class OptimizerInterruptRequested(KeyboardInterrupt):
+    """An optimizer cancellation requested through its SIGINT latch."""
+
+
 class OptimizerInterruptLatch:
     """Latch SIGINT until optimizer code reaches a safe cancellation point.
 
@@ -28,7 +32,7 @@ class OptimizerInterruptLatch:
 
     def raise_if_requested(self) -> None:
         if self._requested.is_set():
-            raise KeyboardInterrupt
+            raise OptimizerInterruptRequested
 
     def install(self) -> "OptimizerInterruptLatch":
         if threading.current_thread() is not threading.main_thread():

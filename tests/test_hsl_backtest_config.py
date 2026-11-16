@@ -494,9 +494,12 @@ def test_disabled_hsl_zero_balance_rejects_required_trading_input():
 
 
 def test_no_positive_post_warmup_window_fails_explicitly():
+    from passivbot_rust import NoEvaluatedIntervalError
+
     args = payload()
     args[-1]["global_warmup_bars"] = len(args[0])
-    with pytest.raises(ValueError, match="no positive evaluated interval"):
+    assert issubclass(NoEvaluatedIntervalError, ValueError)
+    with pytest.raises(NoEvaluatedIntervalError, match="no positive evaluated interval"):
         run(args)
 
 

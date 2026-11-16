@@ -9,6 +9,53 @@ torch = pytest.importorskip("torch")
 from optimization.gpu import mps_kernel, service
 
 
+@pytest.mark.parametrize(
+    "global_state,max_mode,width,sm_count,override,expected",
+    [
+        (False, True, 8192, 46, 8, 1),
+        (True, False, 8192, 46, None, 1),
+        (True, True, 511, 46, None, 1),
+        (True, True, 512, 46, None, 4),
+        (True, True, 512, 80, None, 1),
+        (True, True, 640, 80, None, 4),
+        (True, True, 1023, 46, None, 4),
+        (True, True, 1024, 46, None, 8),
+        (True, True, 1024, 80, None, 4),
+        (True, True, 1280, 80, None, 8),
+        (True, True, 1024, 46, 1, 1),
+    ],
+)
+def test_cuda_temporal_block_size(monkeypatch, global_state, max_mode, width, sm_count, override, expected):
+    runner = mps_kernel._MulticoinReplayRunner.__new__(mps_kernel._MulticoinReplayRunner)
+    runner.bars = SimpleNamespace(device=torch.device("cuda", 1))
+    runner.cuda_max_scratch_policy = max_mode
+    runner.cuda_global_replay_side_state = global_state
+    runner.cuda_global_replay_block_size = override
+
+    def get_properties(device):
+        assert device == runner.bars.device
+        return SimpleNamespace(multi_processor_count=sm_count)
+
+    monkeypatch.setattr(torch.cuda, "get_device_properties", get_properties)
+    assert runner._cuda_temporal_block_size(width) == expected
+
+
+@pytest.mark.parametrize("runner_class,width,expected", [
+    (mps_kernel.MpsEmaAnchorMulticoinRunner, 2048, 8),
+    (mps_kernel.MpsEmaAnchorMulticoinRunner, 4095, 8),
+    (mps_kernel.MpsEmaAnchorMulticoinRunner, 4096, 16),
+    (mps_kernel.MpsEmaAnchorMulticoinRunner, 8192, 8),
+    (mps_kernel.MpsEmaAnchorMulticoinFusedRunner, 4096, 8),
+    (mps_kernel.MpsTrailingMartingaleMulticoinRunner, 4096, 8),
+])
+def test_cuda_max_packs_directional_ema_at_intermediate_width(monkeypatch, runner_class, width, expected):
+    runner = runner_class.__new__(runner_class)
+    runner.bars = SimpleNamespace(device=torch.device("cuda"))
+    runner.cuda_max_scratch_policy = runner.cuda_global_replay_side_state = True
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda _: SimpleNamespace(multi_processor_count=46))
+    assert runner._cuda_temporal_block_size(width) == expected
+
+
 class Clock:
     def __init__(self):
         self.seconds = 0.0
@@ -17,6 +64,51 @@ class Clock:
     def __call__(self):
         self.reads += 1
         return self.seconds
+
+
+def test_cuda_max_tunes_warmup_without_growing_first_trading_chunk(monkeypatch):
+    clock, ranges = Clock(), []
+    width, trading_start = 256, 72
+
+    def dispatch(*_args, **_kwargs):
+        clock.seconds += 0.125
+
+    def make_range(values, **_kwargs):
+        ranges.append(values)
+        return tuple(values)
+
+    runner = mps_kernel._MulticoinReplayRunner.__new__(mps_kernel._MulticoinReplayRunner)
+    runner.replay_kernel_name = "replay"
+    runner.native_factual_hsl = True
+    runner.bars = SimpleNamespace(device=SimpleNamespace(type="cuda"))
+    runner.initial_cuda_chunk_bars = 2
+    runner.requested_start_idx = trading_start
+    runner.run_config = SimpleNamespace(warmup_bars=60)
+    runner.temporal_chunk_bar_limit = 16
+    runner.max_dispatch_candidate_bars = 100_000
+    runner.n = 93
+    runner.n_coins = runner.replay_sides = 1
+    runner._history_batch_bytes = lambda _: 0
+    runner.hsl_scratch_budget_bytes = 1024
+    runner._replay_state_bytes = 32
+    runner._replay_states = {(width, 32): "state"}
+    runner.interrupt_check = lambda: None
+    runner._cuda_temporal_block_size = lambda _: 1
+    monkeypatch.setattr(mps_kernel.time, "perf_counter", clock)
+    monkeypatch.setattr(mps_kernel, "gpu_device", lambda *_: "cuda")
+    monkeypatch.setattr(mps_kernel, "torch", SimpleNamespace(tensor=make_range, int32="int32"))
+    monkeypatch.setattr(mps_kernel, "synchronize", lambda: None)
+    monkeypatch.setattr(mps_kernel, "_require_available_held_valuation", lambda _: None)
+    scalars = SimpleNamespace(detach=lambda: SimpleNamespace(cpu=lambda: None))
+    runner._dispatch_replay(
+        SimpleNamespace(replay=dispatch), ("input",),
+        torch.full((width,), 92, dtype=torch.int32), batch_size=width, scalars=scalars,
+    )
+
+    assert max(end - start for start, end in ranges if end <= trading_start) == 16
+    first_trading = next(i for i, (start, _) in enumerate(ranges) if start >= trading_start)
+    assert ranges[first_trading - 1][1] == trading_start
+    assert ranges[first_trading:first_trading + 4] == [[72, 74], [74, 76], [76, 78], [78, 82]]
 
 
 @pytest.mark.parametrize("profile", [False, True])
@@ -62,6 +154,7 @@ def test_temporal_host_split_keeps_dispatches_waits_and_tuner_samples(monkeypatc
     runner.bars = SimpleNamespace(device=SimpleNamespace(type="mps"))
     runner.temporal_chunk_bar_limit = 3
     runner.max_dispatch_candidate_bars = 100_000
+    runner.n = 8
     runner.n_coins = runner.replay_sides = 1
     runner._history_batch_bytes = lambda _: 0
     runner.hsl_scratch_budget_bytes = 1024

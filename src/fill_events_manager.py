@@ -18,15 +18,18 @@ import errno
 import inspect
 import json
 import logging
+import marshal
 import math
 import os
 import re
 import shutil
+import tempfile
 import time
 from collections import defaultdict, deque
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from importlib import import_module
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypedDict
@@ -41,6 +44,7 @@ from bitget_normalization import (
 )
 from config import load_input_config, prepare_config
 from live.diagnostic_safety import bounded_exception_type, exception_text_contains
+from live.state_refresh import AuthoritativeSurfaceUnavailable
 
 try:
     from utils import (  # type: ignore
@@ -594,7 +598,11 @@ def _is_synthetic_pnl_source(source: object) -> bool:
 def _raw_quote_value(payload: Dict[str, object]) -> float:
     total = 0.0
     for raw in _normalize_raw_field(payload.get("raw")):
-        data = raw.get("data") if isinstance(raw, dict) else raw
+        if raw.get("source") == "fetch_my_trades" and raw.get("piece") in ("open", "close"):
+            # The raw Hyperliquid execution is shared by both legs. Use the
+            # canonical component's quantity and price for its own notional.
+            continue
+        data = raw.get("data")
         if not isinstance(data, dict):
             continue
         info = data.get("info")
@@ -749,6 +757,27 @@ def ensure_qty_signage(events: List[Dict[str, object]]) -> None:
             ev["qty"] = -abs(qty)
 
 
+def _fill_position_side(payload: Dict[str, object]) -> str:
+    position_side = str(payload.get("position_side") or payload.get("pside") or "").lower()
+    if position_side in {"long", "short"}:
+        return position_side
+    # Binance income can outlive the matching trade endpoint's retention.
+    # A standalone accounting row has no position effect or attributable side.
+    if (
+        position_side == "unknown"
+        and _fill_float(payload.get("qty")) == 0.0
+        and _fill_float(payload.get("amount") or 0.0) == 0.0
+        and _fill_float(payload.get("price")) == 0.0
+    ):
+        raw = _normalize_raw_field(payload.get("raw"))
+        if raw and all(
+            row.get("source") in ("binance_income_realized_pnl", "binance_income_commission")
+            for row in raw
+        ):
+            return position_side
+    raise FillEventDataError("fill position_side must be long or short")
+
+
 def _compute_add_reduce(pos_side: str, qty_signed: float) -> Tuple[float, float]:
     """Compute add/reduce amounts based on position side and signed qty.
 
@@ -798,7 +827,7 @@ def compute_psize_pprice(
     for ev in events:
         key = (
             str(ev.get("symbol") or ""),
-            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            _fill_position_side(ev),
         )
         grouped[key].append(ev)
 
@@ -868,6 +897,7 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
     """
     recovered_state: Dict[Tuple[str, str], Tuple[float, Optional[float], int]] = {}
     for ev in events:
+        key = (str(ev.get("symbol") or ""), _fill_position_side(ev))
         components = _hyperliquid_raw_position_components(ev)
         candidates = [
             (after_size, qty, entry_price, reducing)
@@ -882,10 +912,6 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
         ]
 
         if not candidates:
-            key = (
-                str(ev.get("symbol") or ""),
-                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
-            )
             recovered_state.pop(key, None)
             continue
 
@@ -926,10 +952,6 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
                         / weighted_qty
                     )
 
-        key = (
-            str(ev.get("symbol") or ""),
-            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
-        )
         component_order = _unique_position_chain_order(
             [(component[0], component[1]) for component in components]
         )
@@ -1024,6 +1046,55 @@ def _unique_position_chain_order(
     return ordered
 
 
+def _hyperliquid_native_size(value: object) -> Decimal:
+    try:
+        size = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise FillEventDataError("invalid Hyperliquid position or execution size") from exc
+    if not size.is_finite() or not math.isfinite(float(size)):
+        raise FillEventDataError("invalid Hyperliquid position or execution size")
+    return size
+
+
+def _hyperliquid_trade_side(trade: Dict[str, object]) -> str:
+    info = trade.get("info") or {}
+    sides = {"b": "buy", "buy": "buy", "a": "sell", "sell": "sell"}
+    raw_side = info.get("side")
+    normalized = trade.get("side")
+    native = sides.get(str(raw_side).lower())
+    side = sides.get(str(normalized).lower())
+    if (raw_side is not None and native is None) or (
+        normalized is not None and side is None
+    ) or (native and side and native != side):
+        raise FillEventDataError("invalid Hyperliquid execution side")
+    if native or side:
+        return native or side
+    raise FillEventDataError("missing Hyperliquid execution side")
+
+
+def _hyperliquid_signed_fill_sizes(
+    trade: Dict[str, object],
+) -> tuple[Decimal, Decimal] | None:
+    info = trade.get("info") or {}
+    if "startPosition" not in info:
+        return None
+    before = _hyperliquid_native_size(info["startPosition"])
+    size = _hyperliquid_native_size(info.get("sz", trade.get("amount")))
+    if size <= 0:
+        raise FillEventDataError("Hyperliquid execution size must be positive")
+    if trade.get("amount") is not None and not math.isclose(
+        float(size), _fill_float(trade["amount"]), rel_tol=1e-12, abs_tol=0.0
+    ):
+        raise FillEventDataError("Hyperliquid raw execution size disagrees with CCXT")
+    return before, size if _hyperliquid_trade_side(trade) == "buy" else -size
+
+
+def _hyperliquid_is_spot_fill(trade: Dict[str, object]) -> bool:
+    coin = str((trade.get("info") or {}).get("coin") or "")
+    symbol = str(trade.get("symbol") or "")
+    return coin.startswith("@") or "/" in coin or ("/" in symbol and ":" not in symbol)
+
+
 def _hyperliquid_raw_position_components(
     ev: Dict[str, object],
 ) -> List[Tuple[float, float, float, float, float, bool]]:
@@ -1057,7 +1128,27 @@ def _hyperliquid_raw_position_components(
             continue
         if qty <= 0.0:
             continue
-        side = str(data.get("side") or info.get("side") or ev.get("side") or "").lower()
+        piece = item.get("piece")
+        if piece is not None:
+            try:
+                sizes = _hyperliquid_signed_fill_sizes(data)
+                if sizes is None:
+                    continue
+                before, delta = sizes
+                after = before + delta
+            except FillEventDataError:
+                continue
+            if piece == "close":
+                close_qty = float(abs(before))
+                components.append((close_qty, 0.0, close_qty, price, 0.0, True))
+            elif piece == "open":
+                open_qty = float(abs(after))
+                components.append((0.0, open_qty, open_qty, price, price, False))
+            continue
+        try:
+            side = _hyperliquid_trade_side(data)
+        except FillEventDataError:
+            continue
         position_side = str(ev.get("position_side") or ev.get("pside") or "").lower()
         if not position_side:
             direction = str(info.get("dir") or "").lower()
@@ -1268,6 +1359,73 @@ def _hyperliquid_coalesced_reconciliation_failure(
     return None
 
 
+def _restore_hyperliquid_singleton(
+    event: Dict[str, object], trade: Dict[str, object],
+) -> List[Dict[str, object]]:
+    """Repair only cached side/fee changes or flips proven by a retained raw execution."""
+    info = trade.get("info") or {}
+    if _hyperliquid_is_spot_fill(trade):
+        return []
+    trade_id = str(trade.get("id") or info.get("tid") or "")
+    event_id = str(event["id"])
+    try:
+        pieces = HyperliquidFetcher._normalize_trade_components(trade)
+        if event_id != trade_id:
+            # Split rows already contain allocated fees and exact source IDs.
+            # Validate them without converting a second time.
+            matching = next((piece for piece in pieces if piece["id"] == event_id), None)
+            if (
+                matching is None or len(pieces) != 2
+                or event.get("source_ids") != [event_id]
+                or not _same_nested_fill_evidence(event["raw"], matching["raw"])
+                or event["position_side"] != matching["position_side"]
+                or event["symbol"] != matching["symbol"]
+                or event["side"] != matching["side"]
+                or event["timestamp"] != matching["timestamp"]
+                or event["price"] != matching["price"]
+                or event["pnl"] != matching["pnl"]
+                or event["c_mult"] != matching["c_mult"]
+                or abs(event["qty"]) != matching["qty"]
+                or not _same_nested_fill_evidence(event["fees"], matching["fees"])
+            ):
+                raise FillEventDataError("cached Hyperliquid split leg disagrees with its source")
+            return [event]
+
+        if (
+            event["symbol"] != pieces[0]["symbol"]
+            or event["side"] != pieces[0]["side"]
+            or event["timestamp"] != pieces[0]["timestamp"]
+            or event["price"] != pieces[0]["price"]
+            or event["pnl"] != sum(piece["pnl"] for piece in pieces)
+            or _payload_contract_multiplier(event) != pieces[0]["c_mult"]
+            or not math.isclose(
+                abs(event["qty"]), sum(piece["qty"] for piece in pieces),
+                rel_tol=1e-12, abs_tol=0.0,
+            )
+        ):
+            raise FillEventDataError("cached Hyperliquid fill disagrees with its execution")
+
+        native_builder_fee = info.get("builderFee") is not None and info.get("fee") is not None
+        fee_changed = native_builder_fee and not _same_nested_fill_evidence(
+            event.get("fees"), pieces[0]["fees"]
+        )
+        if len(pieces) == 1 and not fee_changed:
+            return [{**event, "position_side": pieces[0]["position_side"]}]
+
+        # Derived fee and position metadata must be recomputed from the leg
+        # amounts. Preserve ownership labels and existing attribution only.
+        for piece in pieces:
+            for key in ("client_order_id", "pb_order_type", "provenance"):
+                if key in event:
+                    piece[key] = deepcopy(event[key])
+        return pieces
+    except FillEventDataError as exc:
+        raise FillEventCacheContractError(
+            "cached Hyperliquid fill cannot be reconciled to its execution; "
+            "quarantine and rebuild the cache"
+        ) from exc
+
+
 def _expand_hyperliquid_coalesced_events(
     events: List[Dict[str, object]],
 ) -> List[Dict[str, object]]:
@@ -1301,7 +1459,18 @@ def _expand_hyperliquid_coalesced_events(
             seen_ids.add(trade_id)
             unique_trades.append((trade_id, trade))
         if len(unique_trades) <= 1 and not is_legacy_aggregate:
-            expanded.append(event)
+            if unique_trades:
+                expanded.extend(_restore_hyperliquid_singleton(event, unique_trades[0][1]))
+            elif raw_trades or any(
+                str(item.get("source") or "") == "fetch_my_trades"
+                for item in _normalize_raw_field(event.get("raw"))
+            ):
+                raise FillEventCacheContractError(
+                    "cached Hyperliquid fill lacks an identifiable raw execution; "
+                    "quarantine and rebuild the cache"
+                )
+            else:
+                expanded.append(event)
             continue
 
         children: List[Dict[str, object]] = []
@@ -1336,6 +1505,29 @@ def _expand_hyperliquid_coalesced_events(
                 f"components={len(children)} reason={failure}"
             )
         expanded.extend(children)
+    # A legacy unsplit row and already-split rows, or one surviving leg from
+    # a malformed cache, cannot safely certify the full execution.
+    split_parents: Dict[str, Dict[str, object]] = defaultdict(dict)
+    split_ids: set[str] = set()
+    for event in expanded:
+        for item in _normalize_raw_field(event.get("raw")):
+            if item.get("source") != "fetch_my_trades" or not item.get("piece"):
+                continue
+            event_id = str(event["id"])
+            if event_id in split_ids:
+                raise FillEventCacheContractError(
+                    "duplicate cached Hyperliquid flip leg; quarantine and rebuild the cache"
+                )
+            split_ids.add(event_id)
+            split_parents[event_id.rsplit(":", 1)[0]][str(item["piece"])] = item["data"]
+    for legs in split_parents.values():
+        if legs.keys() != {"close", "open"} or not _same_nested_fill_evidence(
+            legs["close"], legs["open"]
+        ):
+            raise FillEventCacheContractError(
+                "incomplete or contradictory cached Hyperliquid position flip; "
+                "quarantine and rebuild the cache"
+            )
     return expanded
 
 
@@ -1351,7 +1543,7 @@ def order_same_timestamp_fills(events: List[Dict[str, object]]) -> None:
     for index, ev in enumerate(events):
         key = (
             str(ev.get("symbol") or ""),
-            str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            _fill_position_side(ev),
             int(ev.get("timestamp") or 0),
         )
         grouped[key].append(index)
@@ -1410,7 +1602,7 @@ def compute_realized_pnls_from_trades(
             continue
         symbol = str(trade.get("symbol") or "")
         side = str(trade.get("side") or "").lower()
-        pos_side = str(trade.get("position_side") or trade.get("pside") or "long").lower()
+        pos_side = _fill_position_side(trade)
         qty = abs(float(trade.get("qty") or trade.get("amount") or 0.0)) * (
             _payload_contract_multiplier(trade)
         )
@@ -1425,7 +1617,7 @@ def compute_realized_pnls_from_trades(
         # Determine whether this trade adds or reduces for this side
         if pos_side == "short":
             adds = side == "sell"
-        else:  # long or unknown
+        else:  # long
             adds = side == "buy"
 
         realized = 0.0
@@ -1752,12 +1944,12 @@ class FillEvent:
             "price",
             "pnl",
             "pb_order_type",
-            "position_side",
             "client_order_id",
         ]
         missing = [key for key in required if key not in data]
         if missing:
             raise ValueError(f"Fill event missing required keys: {missing}")
+        position_side = _fill_position_side(data)
         fee_paid, fee_meta = _normalize_fee_paid_from_payload(
             data,
             max_abs_fee_fraction=float("inf"),
@@ -1799,7 +1991,7 @@ class FillEvent:
             fee_ratio=_fill_float(fee_meta.get("fee_ratio") or 0.0),
             fees=data.get("fees"),
             pb_order_type=str(data["pb_order_type"]),
-            position_side=str(data["position_side"]).lower(),
+            position_side=position_side,
             client_order_id=str(data["client_order_id"]),
             psize=_fill_float(data.get("psize", 0.0)),
             pprice=_fill_float(data.get("pprice", 0.0)),
@@ -1815,6 +2007,81 @@ class FillEvent:
     @property
     def pnl_pending(self) -> bool:
         return str(self.pnl_status).lower() == "pending"
+
+
+def _same_nested_fill_evidence(left: object, right: object) -> bool:
+    """Compare retained evidence without coercing scalar types."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            type(key) is str and _same_nested_fill_evidence(value, right[key])
+            for key, value in left.items()
+        )
+    if isinstance(left, (list, tuple)):
+        return len(left) == len(right) and all(
+            _same_nested_fill_evidence(a, b) for a, b in zip(left, right)
+        )
+    if isinstance(left, float) and left == right == 0.0:
+        return math.copysign(1.0, left) == math.copysign(1.0, right)
+    return type(left) in (str, bool, int, float, type(None)) and left == right
+
+
+def _same_fill_payload(left: FillEvent, right: FillEvent) -> bool:
+    return (
+        _same_nested_fill_evidence(left.raw, right.raw)
+        and _same_nested_fill_evidence(left.fees, right.fees)
+        and _same_nested_fill_evidence(left.provenance, right.provenance)
+    )
+
+
+def _same_fill_tape(left: list[FillEvent], right: list[FillEvent]) -> bool:
+    # Dataclass equality checks all canonical fields, but Python equates nested
+    # True, 1, and 1.0. Preserve differences in raw evidence and provenance.
+    return left == right and all(_same_fill_payload(a, b) for a, b in zip(left, right))
+
+
+def _encodable_fill_evidence(value: object) -> bool:
+    value_type = type(value)
+    if value_type is dict:
+        return all(
+            type(key) is str and _encodable_fill_evidence(item)
+            for key, item in value.items()
+        )
+    if value_type is list or value_type is tuple:
+        return all(_encodable_fill_evidence(item) for item in value)
+    return (
+        value_type is str or value_type is bool or value_type is int
+        or value_type is float or value is None
+    )
+
+
+def _fill_tape_evidence_bytes(tape: list[FillEvent], *, validate: bool = False) -> bytes | None:
+    evidence = [(event.raw, event.fees, event.provenance) for event in tape]
+    try:
+        if validate and not _encodable_fill_evidence(evidence):
+            return None
+        # Format 2 preserves scalar types and signed zero without encoding
+        # object sharing. These bytes are process-local and are never decoded.
+        return marshal.dumps(evidence, 2)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return None
+
+
+@dataclass(frozen=True)
+class _FillReplayProof:
+    fee_policy: tuple[float, float]
+    tape: list[FillEvent]
+    evidence_bytes: bytes | None
+
+    def matches(self, tape: list[FillEvent], fee_policy: tuple[float, float]) -> bool:
+        if fee_policy != self.fee_policy:
+            return False
+        if self.evidence_bytes is None:
+            return _same_fill_tape(tape, self.tape)
+        # The saved evidence uses exact built-in types. Other encodable values
+        # have distinct tags or encode as bytes, which validation excludes.
+        return tape == self.tape and _fill_tape_evidence_bytes(tape) == self.evidence_bytes
 
 
 def fill_event_pnl_status(event: object) -> str:
@@ -2090,34 +2357,59 @@ class FillEventCache:
         self.save_metadata(metadata)
 
     def save_days(self, day_events: Dict[str, Sequence[FillEvent]]) -> None:
-        for day, events in day_events.items():
-            path = self.root / f"{day}.json"
-            payload = [event.to_dict() for event in sorted(events, key=lambda ev: ev.timestamp)]
-            if path.exists():
-                try:
-                    with path.open("r", encoding="utf-8") as fh:
-                        current = json.load(fh)
-                except Exception:
-                    current = None
-                if current == payload:
-                    logger.debug("FillEventCache.save_days: %s unchanged", path.name)
-                    continue
-            tmp_path = path.with_suffix(".tmp")
-            try:
-                with tmp_path.open("w", encoding="utf-8") as fh:
+        self._publish_day_writes(self._stage_day_writes(day_events))
+
+    def _stage_day_writes(
+        self, day_events: Dict[str, Sequence[FillEvent]]
+    ) -> list[tuple[Path, Path, int]]:
+        """Write private staging files. Only the refresh owner may publish them."""
+        staged = []
+        try:
+            for day, events in day_events.items():
+                path = self.root / f"{day}.json"
+                payload = [event.to_dict() for event in sorted(events, key=lambda ev: ev.timestamp)]
+                if path.exists():
+                    try:
+                        with path.open("r", encoding="utf-8") as fh:
+                            current = json.load(fh)
+                    except Exception:
+                        current = None
+                    if current == payload and _same_nested_fill_evidence(current, payload):
+                        logger.debug("FillEventCache.save_days: %s unchanged", path.name)
+                        continue
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=self.root,
+                    prefix=f".{path.stem}.", suffix=".tmp", delete=False,
+                ) as fh:
+                    staged.append((Path(fh.name), path, len(payload)))
                     json.dump(payload, fh)
-                os.replace(tmp_path, path)
-            except Exception as exc:
-                if _is_disk_full_error(exc):
-                    raise FillEventCacheDiskFullError(
-                        f"fill event cache write failed: disk full while writing {path}"
-                    ) from exc
-                raise
-            logger.debug(
-                "[fills] cache wrote %d events to %s",
-                len(payload),
-                path.name,
-            )
+        except BaseException as exc:
+            self._discard_day_writes(staged)
+            if _is_disk_full_error(exc):
+                raise FillEventCacheDiskFullError(
+                    f"fill event cache write failed: disk full while writing {path}"
+                ) from exc
+            raise
+        return staged
+
+    @staticmethod
+    def _discard_day_writes(staged: list[tuple[Path, Path, int]]) -> None:
+        for temporary, _path, _count in staged:
+            temporary.unlink(missing_ok=True)
+
+    def _publish_day_writes(self, staged: list[tuple[Path, Path, int]]) -> None:
+        try:
+            for temporary, path, count in staged:
+                os.replace(temporary, path)
+                logger.debug("[fills] cache wrote %d events to %s", count, path.name)
+        except Exception as exc:
+            if _is_disk_full_error(exc):
+                raise FillEventCacheDiskFullError(
+                    f"fill event cache write failed: disk full while writing {path}"
+                ) from exc
+            raise
+        finally:
+            self._discard_day_writes(staged)
 
     @property
     def metadata_path(self) -> Path:
@@ -2431,6 +2723,20 @@ class BaseFetcher:
         raise NotImplementedError
 
 
+@dataclass(frozen=True)
+class FillRefreshWork:
+    """Operation counts for a completed refresh, without exchange payloads."""
+
+    received_rows: int
+    duplicate_rows: int
+    changed_overlap_rows: int
+    ignored_overlap_rows: int
+    pnl_observations: int
+    duplicate_days_checked: int
+    day_replacements: int
+    replay_reused: bool
+
+
 @dataclass
 class FillFetchRequestStats:
     """Best-effort remote-call timing collected by wrapping fetcher API clients."""
@@ -2628,11 +2934,11 @@ class BitgetFetcher(BaseFetcher):
 
         while True:
             if fetch_count >= max_fetches:
-                logger.warning(
-                    "BitgetFetcher.fetch: reached maximum pagination depth (%d)",
-                    max_fetches,
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills",
+                    "BitgetFetcher.fetch: incomplete history after "
+                    f"pagination cap ({max_fetches})"
                 )
-                break
             fetch_count += 1
             payload = await self.api.private_mix_get_v2_mix_order_fill_history(dict(params))
             fill_list = payload.get("data", {}).get("fillList") or []
@@ -2854,8 +3160,11 @@ class BitgetFetcher(BaseFetcher):
         cursor: Optional[str] = None
         while True:
             if fetch_count >= max_fetches:
-                logger.warning("BitgetFetcher._fetch_uta: reached max pagination depth (%d)", max_fetches)
-                break
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills",
+                    "BitgetFetcher._fetch_uta: incomplete history after "
+                    f"pagination cap ({max_fetches})"
+                )
             fetch_count += 1
             request_params = dict(params)
             request_params["endTime"] = end_time
@@ -3668,9 +3977,10 @@ class FillEventsManager:
         self._events: List[FillEvent] = []
         # A disposable proof that replay left this exact history unchanged.
         # Own nested data too: frozen FillEvents still contain mutable raw/fee data.
-        self._empty_refresh_proof: Optional[Tuple[Tuple[float, float], List[FillEvent]]] = None
+        self._empty_refresh_proof: _FillReplayProof | None = None
         self._loaded = False
         self._lock = asyncio.Lock()
+        self._refresh_lock = asyncio.Lock()
         self._degraded_pnl_repair_attempted_keys: set[str] = set()
         self._degraded_pnl_repair_aux_cursor_ms: dict[str, int] = {}
         self._degraded_pnl_repair_aux_completed_keys: set[str] = set()
@@ -3925,8 +4235,11 @@ class FillEventsManager:
                 if self.exchange.lower() == "kucoin":
                     self._run_kucoin_doctor({}, auto_repair=True)
                 payload = [ev.to_dict() for ev in self._events]
-                if self.exchange.lower() == "hyperliquid":
+                is_hyperliquid = self.exchange.lower() == "hyperliquid"
+                if is_hyperliquid:
                     payload = _expand_hyperliquid_coalesced_events(payload)
+                elif self.exchange.lower() == "okx":
+                    _restore_cached_okx_net_position_sides(payload)
                 for raw in payload:
                     self._apply_fee_policy(raw)
                 ensure_qty_signage(payload)
@@ -3935,10 +4248,16 @@ class FillEventsManager:
                 apply_exchange_raw_position_overrides(payload)
                 synthesized_days = self._synthesize_missing_pnls(payload)
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
-                normalized_days = {_day_key(ev.timestamp) for ev in self._events}
+                normalized_days = {_day_key(ev.timestamp) for ev in filtered}
                 if normalized_days:
                     self.cache.save_days(self._events_for_days(self._events, normalized_days))
-                if synthesized_days or normalized_days:
+                if is_hyperliquid and not self._events:
+                    # A spot-only legacy day was removed without making a
+                    # remote observation or moving the refresh checkpoint.
+                    metadata = self.cache.load_metadata()
+                    metadata["oldest_event_ts"] = metadata["newest_event_ts"] = 0
+                    self.cache.save_metadata(metadata)
+                elif synthesized_days or normalized_days:
                     self.cache.update_metadata_from_events(
                         self._events, mark_refreshed=False
                     )
@@ -3958,7 +4277,7 @@ class FillEventsManager:
         for ev in payload:
             key = (
                 str(ev.get("symbol") or ""),
-                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+                _fill_position_side(ev),
             )
             grouped[key].append(ev)
 
@@ -4075,7 +4394,7 @@ class FillEventsManager:
         for ev in payload:
             key = (
                 str(ev.get("symbol") or ""),
-                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+                _fill_position_side(ev),
             )
             grouped[key].append(ev)
 
@@ -4152,7 +4471,7 @@ class FillEventsManager:
         for close in close_fills:
             signed_qty = _payload_signed_effective_qty(close)
             _add_amt, reduce_amt = _compute_add_reduce(
-                str(lifecycle.get("position_side") or "long").lower(),
+                str(lifecycle["position_side"]),
                 signed_qty,
             )
             weights.append(max(reduce_amt, 0.0))
@@ -4822,7 +5141,7 @@ class FillEventsManager:
         for ev in payload:
             key = (
                 str(ev.get("symbol") or ""),
-                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+                _fill_position_side(ev),
             )
             grouped[key].append(ev)
 
@@ -4967,6 +5286,22 @@ class FillEventsManager:
             logger.info("[fills-doctor] KuCoin repair complete; cache backed up at %s", backup_path)
         return report
 
+    async def _save_refresh_days(self, day_payload) -> int:
+        """Drain staging even on repeated cancellation. Only this task can publish."""
+        write = asyncio.create_task(asyncio.to_thread(self.cache._stage_day_writes, day_payload))
+        try:
+            staged = await asyncio.shield(write)
+        except asyncio.CancelledError:
+            while not write.done():
+                try:
+                    await asyncio.shield(write)
+                except asyncio.CancelledError:
+                    continue
+            self.cache._discard_day_writes(write.result())
+            raise
+        self.cache._publish_day_writes(staged)
+        return len(staged)
+
     async def refresh(
         self,
         *,
@@ -4974,8 +5309,25 @@ class FillEventsManager:
         end_ms: Optional[int] = None,
         mark_refreshed: bool = True,
         degraded_pnl_aux_range: Optional[Tuple[int, int]] = None,
-    ) -> None:
+    ) -> FillRefreshWork:
+        async with self._refresh_lock:
+            return await self._refresh(
+                start_ms=start_ms,
+                end_ms=end_ms,
+                mark_refreshed=mark_refreshed,
+                degraded_pnl_aux_range=degraded_pnl_aux_range,
+            )
+
+    async def _refresh(
+        self,
+        *,
+        start_ms: Optional[int] = None,
+        end_ms: Optional[int] = None,
+        mark_refreshed: bool = True,
+        degraded_pnl_aux_range: Optional[Tuple[int, int]] = None,
+    ) -> FillRefreshWork:
         await self.ensure_loaded()
+        proof, self._empty_refresh_proof = self._empty_refresh_proof, None
         logger.debug(
             "[fills] refresh: start=%s end=%s current_cache=%d",
             _format_ms(start_ms),
@@ -4993,6 +5345,9 @@ class FillEventsManager:
                     source_id_index[str(source_id)].add(ev.id)
         added_ids: set[str] = set()
         all_days_persisted: set[str] = set()
+        duplicate_days: set[str] = set()
+        received_rows = duplicate_rows = changed_overlap_rows = ignored_overlap_rows = 0
+        day_replacements = 0
 
         def _drop_indexed_event(event_id: str) -> FillEvent | None:
             existing = updated_map.pop(event_id, None)
@@ -5006,7 +5361,10 @@ class FillEventsManager:
                         source_id_index.pop(str(source_id), None)
             return existing
 
-        def handle_batch(batch: List[Dict[str, object]]) -> None:
+        async def handle_batch(batch: List[Dict[str, object]]) -> None:
+            nonlocal received_rows, duplicate_rows, changed_overlap_rows, ignored_overlap_rows
+            nonlocal day_replacements
+            received_rows += len(batch)
             ensure_qty_signage(batch)
             days_touched: set[str] = set()
             parsed_events: List[Tuple[Dict[str, object], FillEvent]] = []
@@ -5015,6 +5373,9 @@ class FillEventsManager:
                 raw.setdefault("raw", [])
                 try:
                     event = FillEvent.from_dict(raw)
+                except FillEventDataError:
+                    # The history owner handles known input defects as unavailable.
+                    raise
                 except ValueError as exc:
                     malformed_events.append((raw, exc))
                     continue
@@ -5029,7 +5390,7 @@ class FillEventsManager:
                 raise ValueError(
                     f"malformed fill event(s) fetched from {self.exchange}: {preview}{extra}"
                 ) from malformed_events[0][1]
-            for _raw, event in parsed_events:
+            for raw, event in parsed_events:
                 source_ids = {str(source_id) for source_id in event.source_ids or [] if source_id}
                 replaced_ids: set[str] = set()
                 existing_events: List[FillEvent] = []
@@ -5047,6 +5408,7 @@ class FillEventsManager:
                         if existing is not None:
                             existing_source_ids.update(str(x) for x in existing.source_ids or [] if x)
                     if overlapping_ids and not existing_source_ids <= source_ids:
+                        ignored_overlap_rows += 1
                         continue
                     replaced_ids = overlapping_ids
                     existing_events.extend(
@@ -5060,6 +5422,10 @@ class FillEventsManager:
                             days_touched.add(_day_key(replaced.timestamp))
                 prev = updated_map.get(event.id)
                 if prev is not None and event.timestamp < prev.timestamp:
+                    if replaced_ids:
+                        changed_overlap_rows += 1
+                    else:
+                        ignored_overlap_rows += 1
                     continue
                 if (
                     prev is not None
@@ -5093,6 +5459,21 @@ class FillEventsManager:
                         datetime.now(tz=timezone.utc).timestamp() * 1000
                     )
                     event = replace(event, provenance=first_ingested)
+                if prev is not None and not replaced_ids:
+                    # These optional annotations are derived again by a full
+                    # replay. Explicitly supplied values and all factual fields,
+                    # including raw after-state data, still have to match.
+                    candidate = replace(
+                        event,
+                        psize=event.psize if "psize" in raw else prev.psize,
+                        pprice=event.pprice if "pprice" in raw else prev.pprice,
+                    )
+                    if candidate == prev and _same_fill_payload(candidate, prev):
+                        duplicate_rows += 1
+                        duplicate_days.add(_day_key(prev.timestamp))
+                        continue
+                if existing_events:
+                    changed_overlap_rows += 1
                 if prev is not None:
                     for source_id in prev.source_ids or []:
                         indexed = source_id_index.get(str(source_id))
@@ -5112,7 +5493,7 @@ class FillEventsManager:
             if not days_touched:
                 return
             day_payload = self._events_for_days(updated_map.values(), days_touched)
-            self.cache.save_days(day_payload)
+            day_replacements += await self._save_refresh_days(day_payload)
             all_days_persisted.update(days_touched)
 
         fetch_started = time.monotonic()
@@ -5199,35 +5580,35 @@ class FillEventsManager:
         if fetched_batches:
             for batch in fetched_batches:
                 await self._apply_fee_policy_to_batch(batch)
-                handle_batch(batch)
+                await handle_batch(batch)
         elif fetched_events:
             batch = [dict(ev) for ev in fetched_events if in_requested_range(ev)]
             await self._apply_fee_policy_to_batch(batch)
-            handle_batch(batch)
+            await handle_batch(batch)
 
-        self._events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
+        new_events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
         pnl_observations = list(getattr(self.fetcher, "pnl_observations", []) or [])
 
-        # Empty successful fetches need not replay history once a full replay
-        # has demonstrated a fixed point. New rows (including duplicate fetches),
-        # PnL observations, policy changes and nested-data changes use the full path.
-        empty_refresh = not fetched_batches and not fetched_events and not pnl_observations
+        # Reuse only after the complete normalized tape reached a replay fixed
+        # point. A same-ID correction, source replacement or new observation
+        # still requires the full path.
+        replay_candidate = not pnl_observations and (
+            (not fetched_batches and not fetched_events)
+            or (received_rows > 0 and received_rows == duplicate_rows)
+        )
         fee_policy = (self.fallback_fee_fraction, self.max_abs_fee_fraction)
-        proof = self._empty_refresh_proof
-        self._empty_refresh_proof = None
         unchanged = bool(
-            empty_refresh
+            replay_candidate
             and proof is not None
-            and fee_policy == proof[0]
-            and self._events == proof[1]
+            and proof.matches(new_events, fee_policy)
         )
         before_replay = (
-            deepcopy(self._events) if empty_refresh and self._events and not unchanged else None
+            deepcopy(new_events) if replay_candidate and new_events and not unchanged else None
         )
 
         # Annotate psize/pprice for all events unless replay is proven redundant.
-        if self._events and not unchanged:
-            payload = [ev.to_dict() for ev in self._events]
+        if new_events and not unchanged:
+            payload = [ev.to_dict() for ev in new_events]
             for raw in payload:
                 self._apply_fee_policy(raw)
             ensure_qty_signage(payload)
@@ -5236,42 +5617,59 @@ class FillEventsManager:
             apply_exchange_raw_position_overrides(payload)
             synthesized_days = (
                 self._synthesize_missing_pnls(payload)
-                if any(ev.pnl_pending for ev in self._events)
+                if any(ev.pnl_pending for ev in new_events)
                 else set()
             )
             cycle_reconciled_days = self._reconcile_pnl_observations(payload, pnl_observations)
-            self._events = [FillEvent.from_dict(ev) for ev in payload]
+            new_events = [FillEvent.from_dict(ev) for ev in payload]
             all_days_persisted.update(synthesized_days)
             all_days_persisted.update(cycle_reconciled_days)
 
-            # Re-persist touched days with annotated psize/pprice values
-            if all_days_persisted:
-                day_payload = self._events_for_days(self._events, all_days_persisted)
-                self.cache.save_days(day_payload)
+        # Check duplicate days once against the final canonical rows. This
+        # repairs missing files or a partial previous publication without
+        # writing unannotated duplicates and then writing their replay again.
+        final_days = all_days_persisted | duplicate_days
+        if final_days:
+            day_payload = self._events_for_days(new_events, final_days)
+            day_replacements += await self._save_refresh_days(day_payload)
 
         fetched_bounded_range = start_ms is not None and end_ms is not None
 
-        # Update cache metadata with timestamps
-        if self._events:
-            self.cache.update_metadata_from_events(
-                self._events, mark_refreshed=mark_refreshed
-            )
-        elif mark_refreshed:
-            # A successful empty fetch proves that metadata-only event bounds
-            # are stale. Keeping them would leave coverage permanently blocked
-            # by a cache_metadata_event_mismatch verdict.
-            self.cache.mark_refreshed(reset_event_bounds=True)
-        if fetched_bounded_range:
-            # A successful bounded fetch proves the retried range even when the
-            # exchange returns no new fills or only duplicates.
-            self.cache.clear_gap(start_ms, end_ms)
+        # Failed metadata persistence must not advance the in-memory
+        # checkpoint past fills that are still unpublished in this manager.
+        previous_metadata = deepcopy(self.cache.load_metadata())
+        try:
+            if new_events:
+                self.cache.update_metadata_from_events(
+                    new_events, mark_refreshed=mark_refreshed
+                )
+            elif mark_refreshed:
+                # A successful empty fetch proves that metadata-only event bounds
+                # are stale. Keeping them would leave coverage permanently blocked
+                # by a cache_metadata_event_mismatch verdict.
+                self.cache.mark_refreshed(reset_event_bounds=True)
+            if fetched_bounded_range:
+                # A successful bounded fetch proves the retried range even when the
+                # exchange returns no new fills or only duplicates.
+                self.cache.clear_gap(start_ms, end_ms)
 
+        except Exception:
+            self.cache._metadata = previous_metadata
+            raise
+
+        self._events = new_events
         # Retain proof only after all ordinary persistence/checkpoint work succeeds.
         # Losing this cache (including restart) merely performs another full replay.
         if unchanged:
             self._empty_refresh_proof = proof
-        elif before_replay is not None and self._events == before_replay and not all_days_persisted:
-            self._empty_refresh_proof = (fee_policy, before_replay)
+        elif (
+            before_replay is not None
+            and not all_days_persisted
+            and _same_fill_tape(self._events, before_replay)
+        ):
+            self._empty_refresh_proof = _FillReplayProof(
+                fee_policy, before_replay, _fill_tape_evidence_bytes(before_replay, validate=True)
+            )
 
         # Consolidated refresh summary log
         # Only log at INFO when there are actually new fills; routine refreshes go to DEBUG
@@ -5288,14 +5686,24 @@ class FillEventsManager:
                 days_preview,
             )
         else:
-            logger.debug("[fills] refresh: events=%d (no changes)", len(self._events))
+            logger.debug("[fills] refresh: events=%d (no new fills)", len(self._events))
+        return FillRefreshWork(
+            received_rows=received_rows,
+            duplicate_rows=duplicate_rows,
+            changed_overlap_rows=changed_overlap_rows,
+            ignored_overlap_rows=ignored_overlap_rows,
+            pnl_observations=len(pnl_observations),
+            duplicate_days_checked=len(duplicate_days),
+            day_replacements=day_replacements,
+            replay_reused=unchanged,
+        )
 
     async def refresh_latest(
         self,
         *,
         overlap: int = 20,
         last_refresh_overlap_ms: Optional[int] = None,
-    ) -> None:
+    ) -> FillRefreshWork:
         """Fetch recent fills, overlapping Hyperliquid by timestamp cohort."""
         await self.ensure_loaded()
         if not self._events:
@@ -5372,7 +5780,7 @@ class FillEventsManager:
                 old_synthetic_count,
                 synthetic_refresh_margin_ms / 60_000,
             )
-        await self.refresh(start_ms=start_ms, end_ms=None)
+        return await self.refresh(start_ms=start_ms, end_ms=None)
 
     async def refresh_degraded_pnl_events(
         self,
@@ -6089,6 +6497,12 @@ class BybitFetcher(BaseFetcher):
         fetch_count = 0
         prev_params = None
         while True:
+            if fetch_count >= max_fetches:
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills",
+                    "BybitFetcher._fetch_my_trades: incomplete history after "
+                    f"pagination cap ({max_fetches})"
+                )
             new_key = _check_pagination_progress(
                 prev_params,
                 params,
@@ -6115,20 +6529,17 @@ class BybitFetcher(BaseFetcher):
                 continue
             batch.sort(key=lambda x: x["timestamp"])
             results.extend(batch)
+            first_ts = batch[0]["timestamp"]
+            if first_ts <= start_ms:
+                break
             if len(batch) < self.trade_limit:
                 if params["endTime"] - start_ms < self._max_span_ms:
                     break
                 params["endTime"] = max(start_ms, params["endTime"] - self._max_span_ms)
                 continue
-            first_ts = batch[0]["timestamp"]
-            if first_ts <= start_ms:
-                break
             if params["endTime"] == first_ts:
                 break
             params["endTime"] = int(first_ts)
-            if fetch_count >= max_fetches:
-                logger.warning("BybitFetcher._fetch_my_trades: max fetches reached")
-                break
         ordered = sorted(
             results,
             key=lambda x: int(x.get("info", {}).get("updatedTime") or x.get("timestamp") or 0),
@@ -6495,41 +6906,33 @@ class HyperliquidFetcher(BaseFetcher):
                 )
             if not trades:
                 break
-            before_count = len(collected)
             for trade in trades:
-                event = self._normalize_trade(trade)
-                ts = event["timestamp"]
-                if since_ms is not None and ts < since_ms:
+                ts = self._trade_timestamp(trade)
+                if (since_ms is not None and ts < since_ms) or (
+                    until_ms is not None and ts > until_ms
+                ) or _hyperliquid_is_spot_fill(trade):
                     continue
-                if until_ms is not None and ts > until_ms:
-                    continue
-                collected[event["id"]] = event
-            added = len(collected) - before_count
+                for event in self._normalize_trade_components(trade):
+                    previous = collected.get(event["id"])
+                    if previous is not None and not _same_nested_fill_evidence(previous, event):
+                        raise FillEventDataError("conflicting Hyperliquid execution identity")
+                    collected[event["id"]] = event
             if len(trades) < self.trade_limit:
                 break
-            last_ts = int(
-                trades[-1].get("timestamp")
-                or trades[-1].get("info", {}).get("time")
-                or trades[-1].get("info", {}).get("updatedTime")
-                or 0
-            )
-            if last_ts <= 0:
+            last_ts = self._trade_timestamp(trades[-1])
+            if until_ms is not None and last_ts > until_ms:
                 break
-            if until_ms is not None and last_ts >= until_ms:
-                break
-            if added <= 0:
-                logger.debug(
-                    "HyperliquidFetcher.fetch: no new trades added on page (last_ts=%s), stopping",
-                    last_ts,
+            if params.get("since") is not None and last_ts <= params["since"]:
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills", "Hyperliquid full fill page made no timestamp progress"
                 )
-                break
             params["since"] = last_ts
             if fetch_count >= max_fetches:
-                logger.warning(
-                    "HyperliquidFetcher.fetch: reached maximum pagination depth (%d)",
-                    max_fetches,
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills",
+                    "HyperliquidFetcher.fetch: incomplete history after "
+                    f"pagination cap ({max_fetches})"
                 )
-                break
 
         # Hyperliquid's startPosition is per execution. Preserve those component
         # boundaries: coalescing same-side fills can merge disjoint links from an
@@ -6554,50 +6957,140 @@ class HyperliquidFetcher(BaseFetcher):
         return events
 
     @staticmethod
-    def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
-        info = trade.get("info", {}) or {}
-        trade_id = str(trade.get("id") or info.get("hash") or info.get("tid") or "")
-        order_id = str(trade.get("order") or info.get("oid") or "")
+    def _trade_timestamp(trade: Dict[str, object]) -> int:
+        info = trade.get("info") or {}
         timestamp = _fill_int(
             trade.get("timestamp")
             or info.get("time")
             or info.get("tradeTime")
             or info.get("updatedTime")
-            or 0
         )
-        symbol_raw = trade.get("symbol") or info.get("symbol") or info.get("coin")
-        side = str(trade.get("side") or info.get("side") or "").lower()
-        qty = abs(_fill_float(trade.get("amount") or info.get("sz") or 0.0))
-        price = _fill_float(trade.get("price") or info.get("px") or 0.0)
-        pnl = _fill_float(trade.get("pnl") or info.get("closedPnl") or 0.0)
+        if timestamp <= 0:
+            raise FillEventDataError("Hyperliquid fill timestamp must be positive")
+        return timestamp
+
+    @staticmethod
+    def _normalize_trade(trade: Dict[str, object]) -> Dict[str, object]:
+        """Normalize a singleton fill for legacy aggregate reconciliation."""
+        events = HyperliquidFetcher._normalize_trade_components(trade)
+        if len(events) != 1:
+            raise FillEventDataError("Hyperliquid position flip requires both legs")
+        return events[0]
+
+    @staticmethod
+    def _normalize_trade_components(trade: Dict[str, object]) -> List[Dict[str, object]]:
+        info = trade.get("info") or {}
+        trade_id = str(trade.get("id") or info.get("tid") or "")
+        if not trade_id:
+            raise FillEventDataError("Hyperliquid fill lacks an execution ID")
+        if info.get("tid") is not None and str(info["tid"]) != trade_id:
+            raise FillEventDataError("Hyperliquid raw execution ID disagrees with CCXT")
+        order_id = str(trade.get("order") or info.get("oid") or "")
+        timestamp = HyperliquidFetcher._trade_timestamp(trade)
+        symbol = str(trade.get("symbol") or info.get("symbol") or info.get("coin") or "")
+        if not symbol:
+            raise FillEventDataError("Hyperliquid fill lacks a market symbol")
+        side = _hyperliquid_trade_side(trade)
+        price = _fill_float(info.get("px", trade.get("price")))
+        if not math.isfinite(price) or price <= 0.0:
+            raise FillEventDataError("invalid Hyperliquid fill price")
+        if trade.get("price") is not None and not math.isclose(
+            price, _fill_float(trade["price"]), rel_tol=1e-12, abs_tol=0.0
+        ):
+            raise FillEventDataError("Hyperliquid raw fill price disagrees with CCXT")
+        pnl_raw = info.get("closedPnl", trade.get("pnl"))
+        pnl = _fill_float(pnl_raw) if pnl_raw not in (None, "") else None
+        if pnl is not None and not math.isfinite(pnl):
+            raise FillEventDataError("invalid Hyperliquid realized PnL")
+
         fee = trade.get("fee")
-        if fee is None or (isinstance(fee, (dict, list, tuple)) and not fee):
+        if info.get("builderFee") is not None and info.get("fee") is not None:
+            # The native total already includes the builder fee. CCXT versions
+            # that add it again must not double charge the execution.
+            fee = {"currency": info.get("feeToken"), "cost": info["fee"]}
+        elif fee is None or (isinstance(fee, (dict, list, tuple)) and not fee):
             fee = {"currency": info.get("feeToken"), "cost": info.get("fee")}
-        client_order_id = trade.get("clientOrderId") or info.get("cloid") or info.get("clOrdId") or ""
-        direction = str(info.get("dir", "")).lower()
-        if "short" in direction:
-            position_side = "short"
-        elif "long" in direction:
-            position_side = "long"
-        else:
-            position_side = "long" if side == "buy" else "short"
-        return {
+
+        event = {
             "id": trade_id,
             "order_id": order_id,
             "timestamp": timestamp,
-            "datetime": _fill_datetime(timestamp) if timestamp else "",
-            "symbol": str(symbol_raw or ""),
+            "datetime": _fill_datetime(timestamp),
+            "symbol": symbol,
             "side": side,
-            "qty": qty,
             "price": price,
-            "pnl": pnl,
             "fees": fee,
             "pb_order_type": "",
-            "position_side": position_side,
-            "client_order_id": str(client_order_id or ""),
+            "client_order_id": str(
+                trade.get("clientOrderId") or info.get("cloid") or info.get("clOrdId") or ""
+            ),
             "raw": [{"source": "fetch_my_trades", "data": trade}],
             "c_mult": _fill_float(info.get("contractMultiplier") or info.get("multiplier") or 1.0),
         }
+
+        sizes = _hyperliquid_signed_fill_sizes(trade)
+        if sizes is None:
+            # Older retained rows can carry an explicit direction without a
+            # signed startPosition. Verify the complete action tuple.
+            direction = str(info.get("dir") or "").lower()
+            directions = {
+                "open long": ("buy", "long", False),
+                "open short": ("sell", "short", False),
+                "close long": ("sell", "long", True),
+                "close short": ("buy", "short", True),
+            }
+            evidence = directions.get(direction)
+            if evidence is None or evidence[0] != side:
+                raise FillEventDataError("Hyperliquid fill lacks position-side evidence")
+            _, position_side, reducing = evidence
+            qty = float(_hyperliquid_native_size(info.get("sz", trade.get("amount"))))
+            if qty <= 0.0:
+                raise FillEventDataError("Hyperliquid execution size must be positive")
+            after = None
+        else:
+            before, delta = sizes
+            after = before + delta
+            qty = float(abs(delta))
+            reducing = (before > 0 > delta) or (before < 0 < delta)
+            position_side = (
+                ("long" if before > 0 else "short") if reducing
+                else ("long" if delta > 0 else "short")
+            )
+        if reducing and pnl is None:
+            raise FillEventDataError("Hyperliquid reducing fill lacks realized PnL")
+        if not reducing and pnl not in (None, 0.0):
+            raise FillEventDataError("Hyperliquid opening fill has nonzero realized PnL")
+        if sizes is None or not ((before > 0 > after) or (before < 0 < after)):
+            return [{**event, "qty": qty, "pnl": pnl or 0.0, "position_side": position_side}]
+
+        events = []
+        for piece, piece_size, piece_side, piece_pnl in (
+            ("close", abs(before), position_side, pnl),
+            ("open", abs(after), "long" if after > 0 else "short", 0.0),
+        ):
+            event_id = f"{trade_id}:{piece}"
+            ratio = float(piece_size / abs(delta))
+            entries = []
+            for raw_fee in _fee_entries(fee):
+                entry = dict(raw_fee)
+                if _fee_entry_has_reported_amount(entry):
+                    entry = {
+                        "currency": _fee_entry_currency(entry),
+                        "fee_paid": _fee_entry_signed_fee_paid(entry) * ratio,
+                        "rate": entry.get("rate"),
+                    }
+                entries.append(entry)
+            events.append({
+                **event,
+                "id": event_id,
+                "source_ids": [event_id],
+                "qty": float(piece_size),
+                "pnl": piece_pnl,
+                "fees": entries,
+                "position_side": piece_side,
+                "raw": [{"source": "fetch_my_trades", "data": trade, "piece": piece}],
+            })
+        return events
 
 
 class BitunixFetcher(BaseFetcher):
@@ -7948,6 +8441,96 @@ class KucoinFetcher(BaseFetcher):
 # ---------------------------------------------------------------------------
 
 
+# OKX transaction-detail subtypes that explicitly identify a position side.
+_OKX_FILL_SUBTYPE_POSITION_SIDES = {
+    "3": ("buy", "long"),
+    "4": ("sell", "short"),
+    "5": ("sell", "long"),
+    "6": ("buy", "short"),
+    "100": ("sell", "long"),
+    "101": ("buy", "short"),
+    "104": ("sell", "long"),
+    "105": ("buy", "short"),
+    "125": ("sell", "long"),
+    "126": ("buy", "short"),
+    "206": ("buy", "long"),
+    "207": ("sell", "short"),
+    "208": ("sell", "long"),
+    "209": ("buy", "short"),
+    "272": ("buy", "long"),
+    "273": ("sell", "short"),
+    "274": ("sell", "long"),
+    "275": ("buy", "short"),
+    "326": ("buy", "long"),
+    "327": ("sell", "short"),
+    "328": ("sell", "long"),
+    "329": ("buy", "short"),
+}
+
+
+def _okx_fill_timestamp(raw: Dict[str, object]) -> int:
+    timestamp = _fill_int(raw.get("ts") or raw.get("fillTime"))
+    if timestamp <= 0:
+        raise FillEventDataError("OKX fill timestamp must be positive")
+    return timestamp
+
+
+def _okx_net_fill_position_side(raw: Dict[str, object], side: str, pnl: float) -> str:
+    if side not in {"buy", "sell"}:
+        raise FillEventDataError("OKX fill side must be buy or sell")
+    opening_side, closing_side = ("long", "short") if side == "buy" else ("short", "long")
+    reduce_only = raw.get("reduceOnly")
+    if reduce_only not in (None, "") and str(reduce_only).lower() not in {"true", "false"}:
+        raise FillEventDataError("OKX net fill has invalid reduceOnly evidence")
+    if not math.isfinite(pnl) or raw.get("fillPnl") in (None, ""):
+        raise FillEventDataError("OKX net fill requires explicit finite realized PnL")
+    proves_close = str(reduce_only).lower() == "true" or pnl != 0.0
+
+    subtype = _OKX_FILL_SUBTYPE_POSITION_SIDES.get(str(raw.get("subType") or ""))
+    if subtype is not None:
+        expected_side, position_side = subtype
+        if expected_side != side or (proves_close and position_side == opening_side):
+            raise FillEventDataError("OKX net fill has contradictory position-side evidence")
+        return position_side
+    if proves_close:
+        return closing_side
+    raise FillEventDataError("OKX net fill position side is unproven at zero realized PnL")
+
+
+def _restore_cached_okx_net_position_sides(events: List[Dict[str, object]]) -> None:
+    """Recheck cached net fills written before zero PnL required side evidence."""
+    for event in events:
+        raw_fills = [
+            item["data"]
+            for item in _normalize_raw_field(event.get("raw"))
+            if item.get("source") == "okx_fills" and isinstance(item.get("data"), dict)
+        ]
+        if not any(str(raw.get("posSide") or "").lower() == "net" for raw in raw_fills):
+            continue
+        sides = set()
+        try:
+            for raw in raw_fills:
+                side = str(raw.get("side") or "").lower()
+                if side != event["side"]:
+                    raise FillEventDataError("cached OKX fill side differs from its source")
+                position_side = str(raw.get("posSide") or "").lower()
+                if position_side == "net":
+                    position_side = _okx_net_fill_position_side(
+                        raw, side, _fill_float(raw.get("fillPnl"))
+                    )
+                if position_side not in {"long", "short"}:
+                    raise FillEventDataError("cached OKX fill has invalid position-side evidence")
+                sides.add(position_side)
+            if len(sides) != 1:
+                raise FillEventDataError("cached OKX fill combines different position sides")
+        except FillEventDataError as exc:
+            raise FillEventCacheContractError(
+                "cached OKX net fill position side cannot be reconstructed; "
+                "quarantine and rebuild the cache from exchange fills"
+            ) from exc
+        event["position_side"] = sides.pop()
+
+
 class OkxFetcher(BaseFetcher):
     """Fetches fill events from OKX using fills and fills-history endpoints.
 
@@ -8133,11 +8716,20 @@ class OkxFetcher(BaseFetcher):
             batch_events = []
             oldest_ts = None
             for raw in fills:
-                event = self._normalize_fill(raw)
-                event_id = event["id"]
-                if not event_id:
+                if not raw.get("tradeId"):
+                    continue
+                # An out-of-range row can prove pagination progress without
+                # requiring position-side evidence for the unrequested fill.
+                ts = _okx_fill_timestamp(raw)
+                if oldest_ts is None or ts < oldest_ts:
+                    oldest_ts = ts
+                if since_ms is not None and ts < since_ms:
+                    continue
+                if until_ms is not None and ts > until_ms:
                     continue
 
+                event = self._normalize_fill(raw)
+                event_id = event["id"]
                 # Ensure client_order_id/pb_order_type are populated before batch callbacks
                 cached = detail_cache.get(event_id)
                 if cached:
@@ -8156,17 +8748,6 @@ class OkxFetcher(BaseFetcher):
                 event["pb_order_type"] = pb_type
                 if event_id and client_oid:
                     detail_cache[event_id] = (client_oid, pb_type)
-
-                # Check time bounds
-                ts = event["timestamp"]
-                if since_ms is not None and ts < since_ms:
-                    continue
-                if until_ms is not None and ts > until_ms:
-                    continue
-
-                # Track oldest for boundary check
-                if oldest_ts is None or ts < oldest_ts:
-                    oldest_ts = ts
 
                 # Enrich from cache
                 if event_id in detail_cache:
@@ -8193,6 +8774,12 @@ class OkxFetcher(BaseFetcher):
             after_cursor = last_fill.get("billId")
             if not after_cursor:
                 break
+        else:
+            raise AuthoritativeSurfaceUnavailable(
+                "fills",
+                f"OkxFetcher.fetch: incomplete /{endpoint_name} history after "
+                f"pagination cap ({max_fetches})",
+            )
 
         return fetch_count, collected
 
@@ -8200,7 +8787,7 @@ class OkxFetcher(BaseFetcher):
         """Normalize a raw OKX fill to the canonical fill event format."""
         trade_id = str(raw.get("tradeId") or "")
         order_id = str(raw.get("ordId") or "")
-        timestamp = _fill_int(raw.get("ts") or raw.get("fillTime") or 0)
+        timestamp = _okx_fill_timestamp(raw)
         inst_id = str(raw.get("instId") or "")
 
         # Convert instId (e.g., "BTC-USDT-SWAP") to CCXT symbol format
@@ -8217,6 +8804,8 @@ class OkxFetcher(BaseFetcher):
                 symbol = f"{base}/{quote}:{quote}"
 
         side = str(raw.get("side") or "").lower()
+        if side not in {"buy", "sell"}:
+            raise FillEventDataError("OKX fill side must be buy or sell")
         qty = abs(_fill_float(raw.get("fillSz") or 0.0))
         price = _fill_float(raw.get("fillPx") or 0.0)
         pnl = _fill_float(raw.get("fillPnl") or 0.0)
@@ -8225,18 +8814,11 @@ class OkxFetcher(BaseFetcher):
         # Position side handling (supports both hedge and net modes)
         pos_side_raw = str(raw.get("posSide") or "").lower()
         if pos_side_raw == "net":
-            # Net mode: infer position side from side + pnl
-            # If closing (has PnL), opposite of trade side was the position
-            if pnl != 0:
-                position_side = "short" if side == "buy" else "long"
-            else:
-                # Opening: same as trade side
-                position_side = "long" if side == "buy" else "short"
+            position_side = _okx_net_fill_position_side(raw, side, pnl)
         elif pos_side_raw in ("long", "short"):
             position_side = pos_side_raw
         else:
-            # Fallback
-            position_side = "long" if side == "buy" else "short"
+            raise FillEventDataError("OKX fill posSide must be long, short, or net")
 
         client_order_id = str(raw.get("clOrdId") or "")
         fee_ccy = str(raw.get("feeCcy") or "")

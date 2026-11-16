@@ -7,7 +7,13 @@ import json
 import logging
 
 from live.diagnostic_safety import bounded_exception_type
-from live.event_bus import EventTags, EventTypes, _hsl_input_console
+from live.event_bus import (
+    EventTags,
+    EventTypes,
+    format_hsl_status_console,
+    hsl_observation_can_be_superseded,
+    split_health_console,
+)
 from live.event_emitters import _safe_emit, _console_sink_error_count
 
 SCOPE_LIMIT = 128
@@ -240,15 +246,13 @@ def record(bot, wave):
         bot._hsl_diagnostic_failed = False
         replacement = snapshot(bot, now_ms=int(utc_ms()))
         if prior is not None and "captured_at_ms" in prior:
-            # Only classify expiry of an already replaced, unchanged GREEN/inactive
-            # observation. Actual current-input outages, RED and scope changes stay
-            # immediate. Both events remain durable with their original severity.
+            # Only suppress the obsolete console observation after an equivalent
+            # current one exists. An unavailable scope remains visible on its current
+            # observation; both events retain their original durable severity.
             if (
-                prior["observation_status"] == "stale"
+                hsl_observation_can_be_superseded(prior)
                 and replacement["observation_status"] == "current"
-                and prior.get("console_state") == replacement.get("console_state")
-                and not prior["counts"]["red"]
-                and not prior["counts"]["unavailable"]
+                and prior["console_state"] == replacement["console_state"]
             ):
                 prior["console_replaced_observation"] = True
             _emit_status(bot, prior, previous[0][0])
@@ -268,6 +272,7 @@ def _emit_status(bot, data, scope_signature):
         scope_signature,
         data["observation_status"],
         tuple(data["account_unavailable"]),
+        data.get("console_replaced_observation") is True,
     )
     previous = getattr(bot, "_hsl_diagnostic_event", None)
     if previous is not None and previous[0] == signature:
@@ -299,23 +304,13 @@ def _emit_status(bot, data, scope_signature):
         and console_errors_after > console_errors_before
     )
     if emitted is None or console_failed:
-        _, input_cause = _hsl_input_console(data)
-        logging.log(
-            (
-                logging.DEBUG
-                if data.get("console_replaced_observation")
-                else logging.WARNING if unavailable else logging.INFO
-            ),
-            "[risk] HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d%s",
-            data["signal_mode"],
-            data["observation_status"],
-            counts["green"],
-            counts["red"],
-            counts["inactive"],
-            counts["unavailable"],
-            counts["estimated"],
-            " " + input_cause if input_cause else "",
+        level = (
+            logging.DEBUG
+            if data.get("console_replaced_observation")
+            else logging.WARNING if unavailable else logging.INFO
         )
+        for line in split_health_console(format_hsl_status_console(data), "[risk]"):
+            logging.log(level, "%s", line)
 
 
 def snapshot(bot, *, now_ms):

@@ -916,6 +916,74 @@ def test_candle_manager_emits_high_volume_cache_debug_at_trace(tmp_path, caplog)
     assert records[0].levelno == int(getattr(logging, "TRACE", 5))
 
 
+@pytest.mark.parametrize(
+    "debug,event,logger_level",
+    [
+        (0, "archive_requested", logging.DEBUG),
+        (1, "saved_range", logging.DEBUG),
+        (1, "ccxt_fetch_ohlcv", logging.DEBUG),
+        (2, "index_cached", logging.DEBUG),
+        (2, "saved_range", logging.INFO),
+        (3, "index_cached", logging.DEBUG),
+    ],
+)
+def test_suppressed_candle_debug_skips_message_work(
+    tmp_path, monkeypatch, caplog, debug, event, logger_level
+):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    cm.debug_level = debug
+    caplog.set_level(logger_level, logger=cm.log.name)
+    formatted = []
+
+    def record_format(value):
+        formatted.append(value)
+        return "formatted"
+
+    monkeypatch.setattr(candlestick_manager, "get_caller_name", lambda: record_format("caller"))
+    monkeypatch.setattr(candlestick_manager, "_log_symbol", record_format)
+    monkeypatch.setattr(cm, "_fmt_ts", record_format)
+    caplog.clear()
+
+    cm._log("debug", event, symbol="BTC/USDT:USDT", start_ts=np.int64(0))
+
+    assert not caplog.records
+    assert not formatted
+
+
+@pytest.mark.parametrize(
+    "debug,severity,event,expected_level,include_caller",
+    [
+        (0, "info", "saved_range", logging.INFO, False),
+        (1, "debug", "archive_requested", logging.DEBUG, True),
+        (2, "debug", "saved_range", logging.DEBUG, True),
+        (3, "debug", "index_cached", int(getattr(logging, "TRACE", 5)), True),
+        (3, "debug", "saved_range", logging.DEBUG, True),
+        (1, "warning", "ccxt_fetch_ohlcv_failed", logging.WARNING, False),
+        (1, "error", "index_failed", logging.ERROR, True),
+    ],
+)
+def test_admitted_candle_log_keeps_message_and_level(
+    tmp_path, monkeypatch, caplog, debug, severity, event, expected_level, include_caller
+):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    cm.debug_level = debug
+    caplog.set_level(1, logger=cm.log.name)
+    monkeypatch.setattr(candlestick_manager, "get_caller_name", lambda: "sample_caller")
+    monkeypatch.setattr(candlestick_manager, "_log_symbol", lambda symbol: "BTC")
+    caplog.clear()
+
+    cm._log(severity, event, symbol="BTC/USDT:USDT", start_ts=np.int64(0), rows=2)
+
+    caller = " called_by=sample_caller" if include_caller else ""
+    assert [(record.levelno, record.getMessage()) for record in caplog.records] == [
+        (
+            expected_level,
+            f"[candle] event={event}{caller} exchange=ex symbol=BTC "
+            "start_ts=1970-01-01T00:00:00 rows=2",
+        )
+    ]
+
+
 @pytest.mark.asyncio
 async def test_get_candles_aborts_when_stop_requested(tmp_path):
     cm = CandlestickManager(
@@ -1025,7 +1093,7 @@ async def test_cache_diagnostics_redact_hostile_exception_text_and_keep_context(
         def release(self):
             raise RuntimeError(secret)
 
-    await cm._release_lock(FailingLock(), str(tmp_path / "fetch.lock"), symbol, "1m")
+    await cm._release_lock(FailingLock(), symbol, "1m")
 
     index_path = Path(cm._index_path(symbol, tf="1m"))
     index_path.parent.mkdir(parents=True, exist_ok=True)
@@ -6203,3 +6271,238 @@ async def test_unrecorded_cache_hole_repairs_from_real_source_and_recovers_ema(t
     assert cm._cache[symbol]["bv"].tolist() == [3.0] * 10
     assert not cm._synthetic_timestamps.get(symbol)
     assert cm._unverified_candle_gap_ranges(symbol, 100 * minute, 109 * minute) == []
+
+
+@pytest.mark.parametrize("defer_index", [False, True])
+def test_rest_minute_batch_commits_shards_and_metadata_once(tmp_path, monkeypatch, defer_index):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    symbol = "BATCH/USDT:USDT"
+    first_minute = 24 * 60 - 1
+    rows = _resolution_candles(first_minute, first_minute + 1)
+    first_ts, last_ts = map(int, rows["ts"])
+    refresh_ms = last_ts + ONE_MIN_MS
+    cm._set_authoritative_start_ts(
+        symbol, last_ts + ONE_MIN_MS, source="test"
+    )
+    cm._save_known_gaps_enhanced(symbol, [{
+        "start_ts": first_ts,
+        "end_ts": last_ts + ONE_MIN_MS,
+        "reason": "pre_inception",
+        "retry_count": _GAP_MAX_RETRIES,
+    }])
+    path = Path(cm._index_path(symbol))
+    prior = path.read_bytes()
+    saves = []
+    original = cm._save_index
+
+    def save(*args, **kwargs):
+        original(*args, **kwargs)
+        saves.append(json.loads(path.read_text()))
+
+    monkeypatch.setattr(cm, "_save_index", save)
+    cm._persist_batch(symbol, rows, last_refresh_ms=refresh_ms, defer_index=defer_index)
+    if defer_index:
+        assert saves == []
+        assert path.read_bytes() == prior
+        cm.flush_deferred_index(symbol)
+
+    [committed] = saves
+    assert len(committed["shards"]) == 2
+    assert committed["meta"]["last_refresh_ms"] == refresh_ms
+    assert committed["meta"]["last_final_ts"] == last_ts
+    assert committed["meta"]["observed_start_ts"] == first_ts
+    assert committed["meta"]["authoritative_start_ts"] == first_ts
+    assert committed["meta"]["known_gaps"] == []
+    fresh = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    np.testing.assert_array_equal(fresh._load_from_disk(symbol, first_ts, last_ts), rows)
+
+
+def test_rest_minute_batch_checks_contention_before_correcting_shard(tmp_path):
+    import portalocker
+
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    symbol = "BATCH/USDT:USDT"
+    original = _resolution_candles(58, 59)
+    corrected = _resolution_candles(59, close_offset=100.0)
+    refresh_ms = 60 * ONE_MIN_MS
+    cm._persist_batch(symbol, original, last_refresh_ms=refresh_ms)
+    index_path = Path(cm._index_path(symbol))
+    old_index = index_path.read_bytes()
+    [shard] = json.loads(old_index)["shards"].values()
+    shard_path = Path(shard["path"])
+    old_shard = shard_path.read_bytes()
+
+    with portalocker.Lock(str(index_path) + ".lock", timeout=0, fail_when_locked=True):
+        with pytest.raises(portalocker.exceptions.LockException):
+            cm._persist_batch(symbol, corrected, last_refresh_ms=refresh_ms + ONE_MIN_MS)
+
+    assert index_path.read_bytes() == old_index
+    assert shard_path.read_bytes() == old_shard
+    assert cm.get_last_refresh_ms(symbol) == refresh_ms
+    np.testing.assert_array_equal(cm._cache[symbol], original)
+    fresh = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    np.testing.assert_array_equal(
+        fresh._load_from_disk(symbol, 58 * ONE_MIN_MS, 59 * ONE_MIN_MS), original
+    )
+
+
+def test_rest_minute_batch_commit_failure_keeps_published_metadata_and_cache(tmp_path, monkeypatch):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    symbol = "BATCH/USDT:USDT"
+    rows = _resolution_candles(24 * 60 - 1, 24 * 60)
+    original, new = rows[:1], rows[1:]
+    old_refresh = int(new[0]["ts"])
+    cm._persist_batch(symbol, original, last_refresh_ms=old_refresh)
+    path = Path(cm._index_path(symbol))
+    old_index = path.read_bytes()
+    observed = []
+    cm.set_persist_batch_observer(lambda *_args: observed.append(True))
+
+    def fail_commit(*_args, **_kwargs):
+        raise OSError("index publication failed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(cm, "_save_index", fail_commit)
+        with pytest.raises(OSError, match="index publication failed"):
+            cm._persist_batch(symbol, new, last_refresh_ms=old_refresh + ONE_MIN_MS)
+
+    assert path.read_bytes() == old_index
+    assert cm.get_last_refresh_ms(symbol) == old_refresh
+    np.testing.assert_array_equal(cm._cache[symbol], original)
+    assert not observed
+
+    # An independent reader can still recover the atomically persisted shard.
+    fresh = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    np.testing.assert_array_equal(
+        fresh._load_from_disk(symbol, int(original[0]["ts"]), int(new[0]["ts"])), rows
+    )
+
+    cm._persist_batch(symbol, new, last_refresh_ms=old_refresh + ONE_MIN_MS)
+    assert cm.get_last_refresh_ms(symbol) == old_refresh + ONE_MIN_MS
+    assert len(json.loads(path.read_text())["shards"]) == 2
+    np.testing.assert_array_equal(cm._cache[symbol], rows)
+    assert observed == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("new_day", "identity_error"), [(False, False), (True, False), (True, True)]
+)
+@pytest.mark.parametrize("timeframe", ["1m", "60s"])
+async def test_shared_projection_observes_shards_when_batch_index_commit_fails(
+    tmp_path, monkeypatch, new_day, identity_error, timeframe
+):
+    def manager():
+        return CandlestickManager(exchange=None, exchange_name="fake", cache_dir=str(tmp_path))
+
+    writer, reader = manager(), manager()
+    symbol = "BATCH/USDT:USDT"
+    last_minute = 24 * 60 - 1 if new_day else 59
+    last_ts = last_minute * ONE_MIN_MS
+    projected_ts = last_ts + ONE_MIN_MS
+    for cm in (writer, reader):
+        cm._now_ms_callback = lambda: projected_ts + ONE_MIN_MS
+    original = _resolution_candles(last_minute - 1, last_minute)
+    writer._persist_batch(symbol, original, last_refresh_ms=last_ts)
+
+    async def project(cm):
+        return (await cm.get_projected_open_tail_ema_metrics(
+            symbol, {"close": [1.0]}, latest_expected_ts=projected_ts,
+            last_cached_ts=last_ts, max_tail_gap_ms=ONE_MIN_MS, timeframe=timeframe,
+        ))["close"][1.0]
+
+    get_candles = reader.get_candles
+    reads = 0
+
+    async def counted_read(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        return await get_candles(*args, **kwargs)
+
+    monkeypatch.setattr(reader, "get_candles", counted_read)
+    before = await project(reader)
+    assert reads == 1
+    writer._set_last_refresh_meta(symbol, last_ts + 1)
+    assert await project(reader) == before
+    assert reads == 1
+
+    changed = _resolution_candles(
+        last_minute + int(new_day), close_offset=100.0
+    )
+
+    def fail_index(*_args, **_kwargs):
+        raise OSError("index publication failed")
+
+    old_index = Path(writer._index_path(symbol)).read_bytes()
+    monkeypatch.setattr(writer, "_atomic_write_bytes", fail_index)
+    with pytest.raises(OSError, match="index publication failed"):
+        writer._persist_batch(symbol, changed, last_refresh_ms=projected_ts)
+    assert Path(writer._index_path(symbol)).read_bytes() == old_index
+
+    if identity_error:
+        earlier_shard = writer._shard_path(symbol, writer._date_key(last_ts), tf="1m")
+        file_identity = reader._disk_file_identity
+
+        def fail_earlier_identity(path):
+            if path == earlier_shard:
+                raise PermissionError("shard identity unavailable")
+            return file_identity(path)
+
+        monkeypatch.setattr(reader, "_disk_file_identity", fail_earlier_identity)
+
+    fresh = manager()
+    fresh._now_ms_callback = lambda: projected_ts + ONE_MIN_MS
+    assert await project(reader) == await project(fresh) == float(changed[0]["c"])
+    assert reads == 2
+
+
+def test_failed_deferred_rest_page_keeps_previous_page_and_inception(tmp_path, monkeypatch):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    symbol = "BATCH/USDT:USDT"
+    late_minute = 24 * 60
+    late_ts = late_minute * ONE_MIN_MS
+    cm._set_authoritative_start_ts(symbol, late_ts, source="test")
+    late = _resolution_candles(late_minute)
+    cm._persist_batch(symbol, late, last_refresh_ms=late_ts + ONE_MIN_MS, defer_index=True)
+    early = _resolution_candles(late_minute - 1)
+
+    def fail_shard(*_args, **_kwargs):
+        raise OSError("shard publication failed")
+
+    monkeypatch.setattr(cm, "_save_shard", fail_shard)
+    with pytest.raises(OSError, match="shard publication failed"):
+        cm._persist_batch(
+            symbol, early, last_refresh_ms=late_ts + 2 * ONE_MIN_MS, defer_index=True
+        )
+    cm.flush_deferred_index(symbol)
+    committed = json.loads(Path(cm._index_path(symbol)).read_text())
+    assert len(committed["shards"]) == 1
+    assert committed["meta"]["observed_start_ts"] == late_ts
+    assert committed["meta"]["authoritative_start_ts"] == late_ts
+    assert committed["meta"]["last_refresh_ms"] == late_ts + ONE_MIN_MS
+    np.testing.assert_array_equal(cm._cache[symbol], late)
+
+
+def test_candle_index_write_fails_promptly_under_contention(tmp_path):
+    import time
+    from pathlib import Path
+
+    import portalocker
+
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TEST/USDT"
+    index = cm._ensure_symbol_index(symbol)
+    cm._save_index(symbol)
+    path = Path(cm._index_path(symbol))
+    original = path.read_bytes()
+    index["meta"]["last_refresh_ms"] = 1234
+
+    with portalocker.Lock(str(path) + ".lock", timeout=0, fail_when_locked=True):
+        started = time.monotonic()
+        with pytest.raises(portalocker.exceptions.LockException):
+            cm._save_index(symbol)
+        assert time.monotonic() - started < 1.0
+        assert path.read_bytes() == original
+
+    cm._save_index(symbol)
+    assert path.read_bytes() != original

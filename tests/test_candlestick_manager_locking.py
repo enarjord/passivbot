@@ -3,6 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
+import subprocess
+import sys
+import threading
 import time
 from typing import List
 
@@ -10,6 +14,130 @@ import numpy as np
 import pytest
 
 from candlestick_manager import CANDLE_DTYPE, CandlestickManager
+
+
+@pytest.mark.asyncio
+async def test_empty_rest_refresh_persists_checkpoint_without_candles(tmp_path, monkeypatch):
+    import candlestick_manager as candle
+
+    manager = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+        default_window_candles=5,
+    )
+    symbol = "BTC/USDT:USDT"
+    now = 100 * candle.ONE_MIN_MS + 123
+    manager._now_ms_callback = lambda: now
+    monkeypatch.setattr(candle, "_utc_now_ms", lambda: now)
+    requested = []
+
+    async def fetch(symbol, since, end_exclusive, **kwargs):
+        requested.append((symbol, since, end_exclusive))
+        return np.empty(0, dtype=CANDLE_DTYPE)
+
+    monkeypatch.setattr(manager, "_fetch_ohlcv_paginated", fetch)
+    await manager.refresh(symbol, force_overlap=True)
+
+    assert requested == [(symbol, 95 * candle.ONE_MIN_MS, 100 * candle.ONE_MIN_MS)]
+    restarted = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    assert restarted.get_last_refresh_ms(symbol) == now
+    restarted._load_from_disk(symbol, 95 * candle.ONE_MIN_MS, 100 * candle.ONE_MIN_MS)
+    assert restarted._ensure_symbol_cache(symbol).size == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interruption", [None, "competing_writer", "local_mutation", "cancellation"])
+async def test_empty_refresh_index_staging_keeps_publication_in_owner(
+    tmp_path, monkeypatch, interruption,
+):
+    import candlestick_manager as candle
+    import portalocker
+
+    owner = CandlestickManager(exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False)
+    successor = CandlestickManager(exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False)
+    symbol = "BTC/USDT:USDT"
+    path = Path(owner._index_path(symbol))
+    owner._set_last_refresh_meta(symbol, 1000)
+    staging_started = asyncio.Event()
+    unblock_fsync = threading.Event()
+    loop = asyncio.get_running_loop()
+    original_fsync = candle.os.fsync
+    event_loop_thread = threading.get_ident()
+
+    def delayed_fsync(fd):
+        if threading.get_ident() != event_loop_thread:
+            loop.call_soon_threadsafe(staging_started.set)
+            assert unblock_fsync.wait(timeout=10)
+        original_fsync(fd)
+
+    monkeypatch.setattr(candle.os, "fsync", delayed_fsync)
+    owner_task = asyncio.create_task(owner._save_empty_refresh_checkpoint(symbol, 2000))
+    try:
+        await asyncio.wait_for(staging_started.wait(), timeout=2)
+        assert not owner_task.done()
+        assert owner.get_last_refresh_ms(symbol) == 1000
+        if interruption == "competing_writer":
+            successor._set_last_refresh_meta(symbol, 3000)
+        if interruption == "local_mutation":
+            owner._ensure_symbol_index(symbol)["meta"]["last_refresh_ms"] = 4000
+        if interruption == "cancellation":
+            owner_task.cancel()
+            await asyncio.sleep(0)
+            owner_task.cancel()
+    finally:
+        unblock_fsync.set()
+
+    if interruption == "cancellation":
+        with pytest.raises(asyncio.CancelledError):
+            await owner_task
+    elif interruption in {"competing_writer", "local_mutation"}:
+        with pytest.raises(portalocker.exceptions.LockException, match="changed during"):
+            await owner_task
+    else:
+        await owner_task
+
+    expected = {None: 2000, "competing_writer": 3000, "local_mutation": 1000, "cancellation": 1000}[interruption]
+    restarted = CandlestickManager(exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False)
+    assert restarted.get_last_refresh_ms(symbol) == expected
+    assert owner.get_last_refresh_ms(symbol) == (4000 if interruption == "local_mutation" else expected)
+    assert list(path.parent.glob(".index-*.tmp")) == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_lock_file_survives_handoff_to_another_process(tmp_path):
+    manager = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    symbol, timeframe = "BTC/USDT:USDT", "1m"
+    path = Path(manager._fetch_lock_path(symbol, timeframe))
+    child_script = (
+        "import sys; import portalocker\n"
+        "try:\n"
+        "    with portalocker.Lock(sys.argv[1], timeout=0, fail_when_locked=True):\n"
+        "        pass\n"
+        "except portalocker.exceptions.LockException:\n"
+        "    sys.exit(23)\n"
+    )
+
+    def child_attempt():
+        return subprocess.run(
+            [sys.executable, "-c", child_script, str(path)],
+            check=False, capture_output=True, timeout=10,
+        ).returncode
+
+    async with manager._acquire_fetch_lock(symbol, timeframe):
+        original_inode = path.stat().st_ino
+        assert child_attempt() == 23
+    assert path.stat().st_ino == original_inode
+    assert child_attempt() == 0
+
+    restarted = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    async with restarted._acquire_fetch_lock(symbol, timeframe):
+        assert path.stat().st_ino == original_inode
+        assert child_attempt() == 23
 
 
 class FakeExchange:
@@ -351,6 +479,40 @@ async def test_live_fetch_budget_bounds_contended_lock_wait(tmp_path):
         assert time.monotonic() - started < 0.25
         assert key in holder._held_fetch_locks
     assert waiter._held_fetch_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_lock_preserves_index_write_contention_and_releases(tmp_path):
+    import portalocker
+
+    owner = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    successor = CandlestickManager(
+        exchange=FakeExchange(), cache_dir=str(tmp_path), archive_enabled=False,
+    )
+    symbol = "BTC/USDT:USDT"
+    key = (symbol, "1m")
+    owner._ensure_symbol_index(symbol)
+    owner._save_index(symbol)
+
+    index_lock_path = owner._index_path(symbol) + ".lock"
+    with portalocker.Lock(index_lock_path, timeout=0, fail_when_locked=True):
+        write_error = None
+        with pytest.raises(portalocker.exceptions.LockException) as failure:
+            async with owner._acquire_fetch_lock(*key):
+                try:
+                    owner._save_index(symbol)
+                except portalocker.exceptions.LockException as exc:
+                    write_error = exc
+                    raise
+        assert failure.value is write_error
+        assert owner._held_fetch_locks == {}
+
+        with successor.remote_fetch_budget(0.1):
+            async with successor._acquire_fetch_lock(*key):
+                assert key in successor._held_fetch_locks
+    assert successor._held_fetch_locks == {}
 
 
 @pytest.mark.asyncio

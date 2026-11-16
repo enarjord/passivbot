@@ -451,17 +451,10 @@ async def fetch_and_cache(self, start_ms: int, end_ms: int):
 
 ---
 
-## Appendix A: Legacy `fetch_pnls` Locations
+## Appendix A: Legacy adapter callers
 
-| File | Line | Function |
-|------|------|----------|
-| `exchanges/binance.py` | 238 | `fetch_pnls` |
-| `exchanges/bybit.py` | 198, 318 | `fetch_pnls_sub`, `fetch_pnls` |
-| `exchanges/bitget.py` | 300 | `fetch_pnls` |
-| `exchanges/okx.py` | 229 | `fetch_pnls` |
-| `exchanges/hyperliquid.py` | 232 | `fetch_pnls` |
-| `exchanges/gateio.py` | 233 | `fetch_pnls` |
-| `exchanges/kucoin.py` | 408 | `fetch_pnls` |
+See the [migration path to FillEventsManager](ai/features/fill_events_manager.md#migrating-legacy-adapter-callers)
+for callers of `fetch_pnls` or `gather_fill_events`.
 
 ---
 

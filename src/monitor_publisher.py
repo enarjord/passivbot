@@ -117,7 +117,9 @@ def _json_default(value: Any) -> Any:
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
-def _atomic_write_json(path: Path, payload: dict) -> None:
+def _atomic_write_json(
+    path: Path, payload: dict, *, publish: Callable[[Path, Path], None] | None = None
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(
         f"{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
@@ -135,7 +137,10 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
             f.write("\n")
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, path)
+        if publish is None:
+            os.replace(tmp_path, path)
+        else:
+            publish(tmp_path, path)
     finally:
         try:
             if tmp_path.exists():
@@ -211,6 +216,7 @@ class MonitorPublisher:
         self._disk_full_last_log_ms = 0
         self._disk_full_suppressed = 0
         self._lock = threading.RLock()
+        self._snapshot_write_lock = threading.Lock()
         self._pending_retention_timing = {
             key: 0 for key in _RETENTION_TIMING_KEYS
         }
@@ -1227,43 +1233,62 @@ class MonitorPublisher:
         )
 
     def write_snapshot(
-        self, snapshot: dict, *, ts: Optional[int] = None, force: bool = False
+        self, snapshot: dict, *, ts: Optional[int] = None, force: bool = False,
+        cancelled: threading.Event | None = None,
     ) -> bool:
-        with self._lock:
-            now_ms = self._now_ms() if ts is None else int(ts)
-            if not force and self.last_snapshot_ms and (
-                now_ms - self.last_snapshot_ms < self.snapshot_interval_ms
-            ):
-                return False
+        with self._snapshot_write_lock:
             try:
-                payload = dict(snapshot)
-                payload["schema_version"] = self.schema_version
-                meta = dict(payload.get("meta") or {})
-                meta.setdefault("exchange", self.exchange)
-                meta.setdefault("user", self.user)
-                meta.setdefault("runtime", deepcopy(self.runtime_identity))
-                meta["snapshot_ts_ms"] = now_ms
-                meta["seq"] = self.seq
-                payload["meta"] = meta
-                _atomic_write_json(self.state_latest_path, payload)
-                self.last_snapshot_ms = now_ms
-                self._write_manifest(now_ms=now_ms)
-                if self.checkpoint_interval_ms > 0 and (
-                    force or now_ms - self.last_checkpoint_ms >= self.checkpoint_interval_ms
-                ):
-                    checkpoint = self._rotated_path(
-                        self.checkpoints_dir,
-                        f"state.{self._segment_label(now_ms)}",
-                        ".json",
-                    )
-                    _atomic_write_json(checkpoint, payload)
-                    if self.compress_rotated_segments:
-                        self._gzip_file(checkpoint)
-                    self.last_checkpoint_ms = now_ms
-                self._prune_retention(now_ms=now_ms)
+                with self._lock:
+                    now_ms = self._now_ms() if ts is None else int(ts)
+                    if not force and self.last_snapshot_ms and (
+                        now_ms - self.last_snapshot_ms < self.snapshot_interval_ms
+                    ):
+                        return False
+                    payload = dict(snapshot)
+                    payload["schema_version"] = self.schema_version
+                    meta = dict(payload.get("meta") or {})
+                    meta.setdefault("exchange", self.exchange)
+                    meta.setdefault("user", self.user)
+                    meta.setdefault("runtime", deepcopy(self.runtime_identity))
+                    meta["snapshot_ts_ms"] = now_ms
+                    meta["seq"] = self.seq
+                    payload["meta"] = meta
+                # This snapshot represents the captured sequence. Event
+                # publication may advance while its file is being written.
+                if cancelled is None:
+                    _atomic_write_json(self.state_latest_path, payload)
+                else:
+                    def publish(temp_path: Path, final_path: Path) -> None:
+                        # Teardown takes the same lock to flush the old manifest.
+                        # A cancelled worker can finish its private temporary file
+                        # without publishing into a replacement publisher's root.
+                        with self._lock:
+                            if not cancelled.is_set():
+                                os.replace(temp_path, final_path)
+
+                    _atomic_write_json(self.state_latest_path, payload, publish=publish)
+                with self._lock:
+                    if cancelled is not None and cancelled.is_set():
+                        return False
+                    self.last_snapshot_ms = now_ms
+                    self._write_manifest(now_ms=now_ms)
+                    if self.checkpoint_interval_ms > 0 and (
+                        force or now_ms - self.last_checkpoint_ms >= self.checkpoint_interval_ms
+                    ):
+                        checkpoint = self._rotated_path(
+                            self.checkpoints_dir,
+                            f"state.{self._segment_label(now_ms)}",
+                            ".json",
+                        )
+                        _atomic_write_json(checkpoint, payload)
+                        if self.compress_rotated_segments:
+                            self._gzip_file(checkpoint)
+                        self.last_checkpoint_ms = now_ms
+                    self._prune_retention(now_ms=now_ms)
                 return True
             except Exception as exc:
-                self._log_write_failure("writing snapshot", exc)
+                with self._lock:
+                    self._log_write_failure("writing snapshot", exc)
                 return False
 
     def close(self) -> None:

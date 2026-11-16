@@ -237,7 +237,10 @@ def write_json(path, payload):
     )
 
 
-def record_optimizer_search(config, algorithm, population_plan, *, starting_individuals):
+def record_optimizer_search(
+    config, algorithm, population_plan, *, starting_individuals,
+    cuda_max_search=None, metal_max_search=None,
+):
     """Record resolved search facts for a new session, never restore fitness.
 
     Called only for a new algorithm. Resume retains the original record, and
@@ -260,6 +263,10 @@ def record_optimizer_search(config, algorithm, population_plan, *, starting_indi
         "starting_individuals": int(starting_individuals),
         "scope": "Initial search construction, not evaluation counts or reusable fitness.",
     }
+    if cuda_max_search is not None:
+        payload["cuda_max_search"] = cuda_max_search
+    if metal_max_search is not None:
+        payload["metal_max_search"] = metal_max_search
     # Exclusive creation preserves the initial facts if a caller accidentally
     # tries to initialize an existing run rather than resume its checkpoint.
     with (Path(directory) / SEARCH_MANIFEST).open("x", encoding="utf-8") as stream:

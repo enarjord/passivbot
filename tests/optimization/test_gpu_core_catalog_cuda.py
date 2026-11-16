@@ -169,7 +169,7 @@ def _red_delist_inputs(strategy, side, prior_partial):
             retracement_base_fraction=0.0)
         bot["strategy"]["trailing_martingale"]["close"].update(
             threshold_base_fraction=.5, retracement_base_fraction=0.0)
-    count = 1410
+    count = 6 + 1442
     candles = np.full((count, coin_count, 4), 100.0)
     candles[:, :, 3] = 1.0
     candles[3, :, 0], candles[3, :, 1] = 101.0, 99.0

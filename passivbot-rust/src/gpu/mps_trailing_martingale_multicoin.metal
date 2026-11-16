@@ -15,6 +15,10 @@ using namespace metal;
 #define PASSIVBOT_GPU_SIDE_STATE(TYPE, NAME, SLOT) TYPE NAME
 #endif
 
+#if PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE && (!PASSIVBOT_TM_MULTICOIN_CHUNKED || !PASSIVBOT_HSL_FACTUAL_ONLY || PASSIVBOT_HSL_FACTS_ENABLED || PASSIVBOT_HSL_NATIVE_CACHE_ENABLED || PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED)
+#error CUDA global side state requires temporal forward-risk replay without retained histories
+#endif
+
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 89;
 constant int OVERRIDE_COLS = 75;
@@ -1863,6 +1867,7 @@ inline bool force_close_tm_multicoin_delisted_one_side(
     int candidate_index,
     int k,
     int timestep_count,
+    float interval_ms,
     int coin_count,
     bool short_side,
     bool collect_coin_fill_counts,
@@ -1872,7 +1877,7 @@ inline bool force_close_tm_multicoin_delisted_one_side(
     bool any_close = false;
     for (int c = 0; c < coin_count; ++c) {
         const int last_valid = int(coin_settings[c * COIN_COLS + 7]);
-        if (k != last_valid || last_valid + 1400 >= timestep_count) continue;
+        if (k != last_valid || !multicoin_tail_indicates_delisting(last_valid, timestep_count, interval_ms)) continue;
         const bool closed = force_close_tm_multicoin_delisted_position(
             market_execution_ticks,
             side, account, fills, bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
@@ -1898,6 +1903,7 @@ inline bool force_close_tm_multicoin_delisted_fused(
     int candidate_index,
     int k,
     int timestep_count,
+    float interval_ms,
     int coin_count,
     bool collect_coin_fill_counts,
     float market_order_slippage_fraction,
@@ -1906,7 +1912,7 @@ inline bool force_close_tm_multicoin_delisted_fused(
     bool any_close = false;
     for (int c = 0; c < coin_count; ++c) {
         const int last_valid = int(coin_settings[c * COIN_COLS + 7]);
-        if (k != last_valid || last_valid + 1400 >= timestep_count) continue;
+        if (k != last_valid || !multicoin_tail_indicates_delisting(last_valid, timestep_count, interval_ms)) continue;
         bool short_has_position = false;
         for (int other_coin = 0; other_coin < coin_count; ++other_coin) {
             short_has_position = short_has_position || short_side.psize[other_coin] > 0.0f;
@@ -5293,6 +5299,20 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         return;
     }
 
+#if PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
+    device TrailingMartingaleMulticoinSideState& long_side = replay_states[b].common.side;
+    device TrailingMartingaleMulticoinSideState& short_side = replay_states[b].short_side;
+    if (begin_k == 1) {
+        init_trailing_martingale_multicoin_side_state(
+            long_side, long_config, coin_settings ORGANILLO_PASS,
+            long_coin_overrides, C
+        );
+        init_trailing_martingale_multicoin_side_state(
+            short_side, short_config, coin_settings ORGANILLO_PASS,
+            short_coin_overrides, C
+        );
+    }
+#else
     PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, long_side, 0);
     PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, short_side, 1);
     init_trailing_martingale_multicoin_side_state(
@@ -5303,6 +5323,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         short_side, short_config, coin_settings ORGANILLO_PASS,
         short_coin_overrides, C
     );
+#endif
 
     const float starting_balance = run_settings[0];
     const float liquidation_floor = run_settings[1];
@@ -5353,8 +5374,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     if (begin_k > 1) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         long_side = replay_states[b].common.side;
         short_side = replay_states[b].short_side;
+#endif
         account = replay_states[b].common.account;
         fills = replay_states[b].common.fills;
 
@@ -5755,7 +5778,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 market_execution_ticks,
                 long_side, short_side, account, fills,
                 bars, coin_settings ORGANILLO_PASS, coin_fill_counts,
-                int(b), k, T, C, collect_coin_fill_counts,
+                int(b), k, T, interval_ms, C, collect_coin_fill_counts,
                 market_order_slippage_fraction, forced_delist_equity
             );
         }
@@ -5905,8 +5928,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     if (chunk_stop_k < stop_k) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         replay_states[b].common.side = long_side;
         replay_states[b].short_side = short_side;
+#endif
         replay_states[b].common.account = account;
         replay_states[b].common.fills = fills;
 
@@ -6141,10 +6166,19 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float twel = config.twel;
     const int n_positions = config.n_positions;
     const float allowance_fraction = config.allowance_fraction;
+#if PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
+    device TrailingMartingaleMulticoinSideState& side = replay_states[b].side;
+    if (begin_k == 1) {
+        init_trailing_martingale_multicoin_side_state(
+            side, config, coin_settings ORGANILLO_PASS, coin_overrides, C
+        );
+    }
+#else
     PASSIVBOT_GPU_SIDE_STATE(TrailingMartingaleMulticoinSideState, side, 0);
     init_trailing_martingale_multicoin_side_state(
         side, config, coin_settings ORGANILLO_PASS, coin_overrides, C
     );
+#endif
     thread HslState& hsl = side.hsl;
     const bool coin_hsl_mode = config.coin_hsl_mode;
     thread HslState* coin_hsl = side.coin_hsl;
@@ -6208,7 +6242,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     if (begin_k > 1) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         side = replay_states[b].side;
+#endif
         account = replay_states[b].account;
         fills = replay_states[b].fills;
 
@@ -6454,7 +6490,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             forced_delist_fill = force_close_tm_multicoin_delisted_one_side(
                 market_execution_ticks,
                 side, account, fills, bars, coin_settings ORGANILLO_PASS,
-                coin_fill_counts, int(b), k, T, C, short_side,
+                coin_fill_counts, int(b), k, T, interval_ms, C, short_side,
                 collect_coin_fill_counts, market_order_slippage_fraction,
                 forced_delist_equity
             );
@@ -6574,7 +6610,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 
 #if PASSIVBOT_TM_MULTICOIN_CHUNKED
     if (chunk_stop_k < stop_k) {
+#if !PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE
         replay_states[b].side = side;
+#endif
         replay_states[b].account = account;
         replay_states[b].fills = fills;
 

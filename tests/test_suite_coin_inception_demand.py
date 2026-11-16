@@ -101,24 +101,32 @@ async def test_disjoint_scenario_cache_ignores_unneeded_coin_fact(tmp_path, monk
         suite = extract_suite_config(config, load_suite_override_config(file, source_config=config))
     scenarios, _ = build_scenarios(suite, ["binance"])
     known = BASE - 8 * DAY
-    mss = {coin: {"exchange": "binance", "first_valid_index": 0, "last_valid_index": 2,
+    mss = {coin: {"exchange": "binance", "symbol": f"{coin}/USDT:USDT",
+                  "first_valid_index": 0, "last_valid_index": 2,
+                  "asset_inception_policy_version": bt.ASSET_INCEPTION_POLICY_VERSION,
                   "inception_timestamp_ms": None if coin == "BBB" or recover else known}
            for coin in ("AAA", "BBB")}
     arrays = (np.ones((3, 2, 4)), np.ones(3), np.array([BASE, BASE + 60_000, BASE + 120_000]))
     directory = bt.save_coins_hlcvs_to_cache(
         config, ["AAA", "BBB"], arrays[0], "binance", mss, arrays[1], arrays[2], warmup_minutes=7,
     )
-    recovered = deepcopy(mss)
-    recovered["AAA"]["inception_timestamp_ms"] = known
-    materialize = AsyncMock(
-        return_value=(recovered, arrays[2], arrays[0], arrays[1]) if recover else None,
-        side_effect=None if recover else AssertionError("BBB has no positive-age execution context"),
-    )
+    from types import SimpleNamespace
+
+    async def resolve(markets, *, allow_remote):
+        assert set(markets) == {"AAA"}
+        return {"AAA": SimpleNamespace(
+            timestamp_ms=known, source="test", asset_id="test:aaa", is_provisional=False,
+        )}
+
+    lookup = AsyncMock(side_effect=resolve)
+    monkeypatch.setattr(bt, "resolve_asset_inception", lookup)
+    materialize = AsyncMock(side_effect=AssertionError("age refresh must reuse candles"))
     monkeypatch.setattr(bt, "try_prepare_hlcvs_v2_local", materialize)
     original = deepcopy(config)
     first = (await prepare_master_datasets(config, ["binance"], scenarios=scenarios))["binance"]
     second = (await prepare_master_datasets(config, ["binance"], scenarios=scenarios))["binance"]
-    assert materialize.await_count == int(recover)
+    materialize.assert_not_awaited()
+    assert lookup.await_count == int(recover)
     assert first.cache_dir == second.cache_dir == str(directory)
     assert second.mss["AAA"]["inception_timestamp_ms"] == known
     assert second.mss["BBB"]["inception_timestamp_ms"] is None

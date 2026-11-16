@@ -43,20 +43,25 @@ async def test_suite_cache_recovers_scenario_inception_and_native_admission(
     scenarios, _ = build_scenarios(extract_suite_config(config, override), ["binance"])
     original = deepcopy(config)
     directory, arrays, old_mss = _save_cache(bt, config, None)
-    recovered_mss = deepcopy(old_mss)
-    recovered_mss["AAA"]["inception_timestamp_ms"] = BASE - 6 * DAY
-    materialize = AsyncMock(return_value=(recovered_mss, arrays[2], arrays[0], arrays[1]))
+    from types import SimpleNamespace
+    lookup = AsyncMock(return_value={"AAA": SimpleNamespace(
+        timestamp_ms=BASE - 6 * DAY, source="test", asset_id="test:aaa", is_provisional=False,
+    )})
+    monkeypatch.setattr(bt, "resolve_asset_inception", lookup)
+    materialize = AsyncMock(side_effect=AssertionError("age refresh must reuse candles"))
     monkeypatch.setattr(bt, "try_prepare_hlcvs_v2_local", materialize)
 
     dataset = (await prepare_master_datasets(config, ["binance"], scenarios=scenarios))["binance"]
-    assert materialize.await_count == 1
+    materialize.assert_not_awaited()
+    assert lookup.await_count == 1
     assert dataset.mss["AAA"]["inception_timestamp_ms"] == BASE - 6 * DAY
     # Save must replace the same existing cache, despite its sufficient warmup.
     assert dataset.cache_dir == str(directory)
     disk = json.loads((directory / "market_specific_settings.json").read_text())
     assert disk["AAA"]["inception_timestamp_ms"] == BASE - 6 * DAY
     again = (await prepare_master_datasets(config, ["binance"], scenarios=scenarios))["binance"]
-    assert materialize.await_count == 1
+    materialize.assert_not_awaited()
+    assert lookup.await_count == 1
     assert again.mss["AAA"]["inception_timestamp_ms"] == BASE - 6 * DAY
     assert config == original
     assert old_mss["AAA"]["inception_timestamp_ms"] is None

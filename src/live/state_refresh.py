@@ -69,9 +69,6 @@ async def refresh_protective_authoritative_state(
         return await _refresh_protective_authoritative_state(
             bot, require_balance=require_balance
         )
-    return await _refresh_protective_authoritative_state(
-        bot, require_balance=require_balance
-    )
 
 
 async def _refresh_protective_authoritative_state(

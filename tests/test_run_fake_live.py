@@ -529,6 +529,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
             return self.values.get(key, 0.0)
 
     out = Passivbot._bot_params_to_rust_dict(_Stub(), "long", None)
+    assert "entry_initial_qty_fraction" not in out
     assert out["hsl_enabled"] is True
     assert out["hsl_panic_close_order_type"] == "market"
     assert out["risk_twel_enforcer_policy"] == "reduce_portfolio"

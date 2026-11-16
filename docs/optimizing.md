@@ -8,8 +8,8 @@ Optimizer resume reuses checkpoint fitness only when its fixed evaluation contra
 current run. This includes backtest execution and data policies, backtest-consumed live settings,
 fixed bot parameters, resolved coin overrides, and all fixed fine-tune anchor values. Candidate
 vector values, `optimize.n_cpus`, and output paths are excluded. The shared resume check still
-compares the complete `optimize.gpu` mapping, including GPU worker and hardware-sizing controls;
-changing those controls currently requires a fresh run. Dataset selectors
+compares the complete `optimize.gpu` mapping, including tuning mode and dispatch sizing.
+Changing those settings requires a fresh run. Dataset selectors
 `backtest.market_settings_sources`, `backtest.ohlcv_source_dir`, and `backtest.hlcvs_data_dir`
 are compared as configured. Moving input directories therefore requires a fresh run even when
 contents match; input paths are data selectors, not excluded output paths.
@@ -273,9 +273,10 @@ cannot supply minute drawdowns. Device precision can also affect candidate score
 constraint outcomes and Pareto membership. Compare representative candidates using
 the intended data, cadence and execution policy. See [GPU/CPU parity checks](gpu_parity.md).
 
-CPU orchestration reuses `optimize.pymoo`, `optimize.population_size` and the existing
-cohort meaning of `optimize.iters`. All deduplicated starting configs and initial parents
-receive complete GPU evaluations. Within each cohort, requests are replenished and full
+CPU orchestration reuses `optimize.pymoo` and `optimize.population_size`. The default GPU
+policy uses the same generation budget derived from `optimize.iters` as the CPU optimizer.
+All deduplicated starting configs and initial parents receive complete GPU evaluations.
+Within each cohort, requests are replenished and full
 results/Pareto members are written as completions arrive. Evolution advances when the
 required complete offspring are collected. Fine-tune anchors and supported optimizer
 runtime overrides use canonical CPU preparation; fixed policies remove ineffective genes.
@@ -291,39 +292,77 @@ retired GPU-specific population field. See [v8 migration](v8_to_v9_migration.md)
   "batch_size": null,
   "checkpoint_interval_seconds": 5.0,
   "max_dispatch_candidate_bars": null,
+  "search_cohort_size": null,
   "screening": {
     "scenarios": [],
     "survival_fraction": 0.1,
     "min_survivors": 64
   },
-  "tuning_mode": "auto"
+  "tuning_mode": "conservative"
 }
 ```
 
-An omitted, null or `"auto"` batch width lets the service tune from completed production
-work. A positive explicit width fixes its ceiling. `tuning_mode: "off"` disables batch-width
-and request-accumulation tuning and uses width 64 if none is supplied. `"refresh"` currently
-starts fresh like `"auto"`; advisory measurements are run-local. Prepared work/history
-budgets can reduce physical widths further. Automatic width changes require warm replay
-evidence that the new width affected the actual number of candidates dispatched.
-Native CUDA history chunks still adapt in
-`"off"` mode, targeting bounded command durations without a preemption guarantee.
-CPU consumption cadence also adapts independently. These controls change execution only;
-they never tune simulation precision or search policy.
+`"conservative"` uses the default resource policy for CUDA and Metal. Existing configs
+can keep the `"auto"` alias. `"refresh"` uses the same policy and starts with fresh
+observations, as measurements are run-local.
 
-Automatic native CUDA sessions size replay scratch when a dataset's replay owner is
-created, after its market tensors are resident. The budget includes per-candidate
-history and shared metric workspace, and reserves the
-larger of 1 GiB or 20% of total VRAM when feasible. Under pressure it uses 35% of free
-VRAM, with room for one candidate if that candidate fits. Directional owners share
-the allowance. Before a physical batch changes width or factual storage shape,
-automatic CUDA owners release all completed scratch so replacement histories do
-not overlap retained histories. Unchanged shapes reuse their buffers. Switching
-datasets releases the old owner's scratch and samples free VRAM again; active owners are never resized. Explicit batch widths, tuning mode
-`"off"`, and Metal retain their existing scratch budgets. Increased capacity does
-not eagerly allocate scratch or force a wider batch: dispatch limits and completed
-throughput evidence still govern actual widths. The allowance leaves room for
-factual histories to grow during a resident owner's lifetime.
+`"max"` is an opt-in for unattended runs on CUDA and Apple Metal. It allows wider
+automatic batches. CUDA checks host RAM and VRAM. Metal checks both shared system
+headroom and the MPS working set. Desktop graphics can become sluggish. The service
+bounds work by compatible demand, available memory and dispatch limits.
+See the [Metal qualification procedure](optimizer_benchmark.md#metal-complete-suite-qualification)
+and [synthetic benchmark](optimizer_benchmark.md#metal-max-synthetic-search).
+
+In `max`, `population_size` controls how many parents selection keeps. Startup and
+offspring cohorts can offer more candidates per generation. At startup the optimizer
+evaluates all distinct supplied seeds and generates distinct bounded mutations to fill
+the cohort when the budget and search space allow. Without supplied seeds it samples
+the configured bounds. With automatic batch sizing, the selected device policy supplies
+the initial target. CUDA host memory can limit the target to keep candidate preparation parallel.
+Warm per-scenario trials can adjust the dispatch width within the run's admission limit.
+
+Set `optimize.gpu.search_cohort_size` in `max` to limit how many candidates the
+optimizer offers before the next selection step. This applies to generated startup
+and offspring cohorts, with the resolved survivor population as a lower bound.
+Supplied seeds are still all evaluated. A smaller cohort can yield more selection
+steps for the same proposal budget, with fewer candidates available to fill each
+GPU dispatch. The dispatch limit and memory policy still use the existing GPU
+settings. Null or `"auto"` follows the existing width policy.
+
+GPU `max` can prepare candidates in several CPU processes while the GPU
+replays queued work. The optimizer applies plans in candidate order and retains
+scoring and checkpoint ownership. Worker admission depends on the cohort,
+usable CPU capacity and available host RAM.
+
+`optimize.iters` budgets generated startup candidates and subsequent offspring
+attempts. Supplied seeds are evaluated in addition to that budget. The last cohort
+uses the remaining attempts. Duplicate elimination and scenario screening can
+reduce the number of complete suite results. Resume restores the pending cohort,
+its fitness and the number of allocated attempts. Width tuning restarts from the
+last accepted target. A resumed budget must cover all attempts already allocated.
+Duplicate elimination keeps pymoo's usual distance tolerance and candidate order
+while limiting the memory used for distance calculations on wide cohorts.
+
+An omitted, null or `"auto"` `batch_size` lets the service tune from completed
+production work. A positive width sets a ceiling and disables width tuning. `"max"`
+uses an explicit width as its initial target up to the device ceiling and still
+applies its memory policy. A positive
+`max_dispatch_candidate_bars` also constrains dispatched work. Automatic width changes
+require warm replay evidence that the change affected the actual number of dispatched
+candidates.
+
+`"off"` fixes the batch width and request accumulation, with a width ceiling of 64
+when `batch_size` is automatic. Native CUDA history chunks still adapt to completed
+command durations. CPU consumption cadence adapts independently. These changes
+to replay scheduling preserve simulation precision.
+
+CUDA sizes replay scratch after market tensors are resident when width tuning is
+enabled or the mode is `"max"`. The budget includes replay state, per-candidate
+history and shared metric workspace. With `"conservative"` or `"refresh"`, it
+reserves the larger of 1 GiB or 20% of total VRAM when feasible. Under pressure it
+uses 35% of free VRAM, with room for one candidate if that candidate fits. `"max"`
+can admit more useful work with a smaller reserve. See [GPU service memory and
+admission](gpu_backtest_service.md#input-memory-and-admission).
 
 Legacy CPU exact-worker, validation-count, drift-probe and screened-seed controls have
 been removed. Population size belongs to `optimize.population_size`. Old screening/
@@ -346,8 +385,8 @@ Suite-aggregated EW objectives and limits reduce the selected scenarios during s
 full evaluation still requires all scenarios and available EW samples from every source.
 
 Empty screening labels disable the partial stage. Selecting all scenarios or retaining
-all offspring bypasses it. Screening reduces full evaluations within `iters`; it does
-not extend the generation budget. Single-scenario runs cannot use suite screening.
+all offspring bypasses it. Screening reduces full evaluations within the configured
+budget. Single-scenario runs require empty screening labels.
 
 The [prepared service guide](gpu_backtest_service.md) documents the request boundary,
 residency, tuning and interruption contract. [Service benchmarks](gpu_service_benchmark.md)

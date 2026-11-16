@@ -1,4 +1,4 @@
-use crate::backtest::BacktestEngine;
+use crate::backtest::{BacktestEngine, CoreMetricsSetupError};
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
     calc_trailing_martingale_close_diagnostic,
@@ -41,6 +41,9 @@ use serde::Serialize;
 use serde_json::{self, Value};
 use std::str::FromStr;
 use std::time::Instant;
+
+pyo3::create_exception!(passivbot_rust, MissingEmaError, PyValueError);
+pyo3::create_exception!(passivbot_rust, NoEvaluatedIntervalError, PyValueError);
 
 type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, PyObject);
 
@@ -1667,8 +1670,14 @@ fn run_backtest_core<'py, const ORGANILLO: bool>(
     );
     backtest.eligibility = eligibility.as_ref().map(|a| a.as_array());
     backtest.eligibility_rows = eligibility_rows.as_ref().map(|a| a.as_array());
-    backtest.configure_core_metrics(metric_requests, ew_half_life_days)
-        .map_err(PyValueError::new_err)?;
+    backtest
+        .configure_core_metrics(metric_requests, ew_half_life_days)
+        .map_err(|err| match err {
+            CoreMetricsSetupError::NoEvaluatedInterval => NoEvaluatedIntervalError::new_err(
+                "replay has no positive evaluated interval after declared warmup",
+            ),
+            CoreMetricsSetupError::InvalidSetup(message) => PyValueError::new_err(message),
+        })?;
     profile_add(&mut rust_profile, "rust_backtest_init_ms", init_start);
 
     // Run the backtest and process results
@@ -3754,6 +3763,17 @@ pub fn calc_entries_short_py(
 }
 
 #[pyfunction]
+pub fn panic_limit_price_py(pside: &str, bid: f64, ask: f64, price_step: f64) -> PyResult<f64> {
+    use crate::orchestrator::PositionSide;
+    let side = match pside {
+        "long" => PositionSide::Long,
+        "short" => PositionSide::Short,
+        _ => return Err(PyValueError::new_err("expected long or short position side")),
+    };
+    Ok(crate::orchestrator::panic_limit_price(side, &OrderBook { bid, ask }, price_step))
+}
+
+#[pyfunction]
 pub fn calc_min_entry_qty_py(
     price: f64,
     c_mult: f64,
@@ -4201,11 +4221,14 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
     validate_hsl_panic_close_order_type_pair(&input.global.global_bot_params)?;
     validate_hsl_risk_unstuck_orchestrator_input(&input)?;
 
-    let out = crate::orchestrator::compute_ideal_orders(&input).map_err(|e| {
-        pyo3::exceptions::PyValueError::new_err(format!(
-            "orchestrator compute_ideal_orders failed: {:?}",
-            e
-        ))
+    let out = crate::orchestrator::compute_ideal_orders(&input).map_err(|error| {
+        let message = format!("orchestrator compute_ideal_orders failed: {:?}", error);
+        match error {
+            crate::orchestrator::OrchestratorError::MissingEma { symbol_idx } => {
+                MissingEmaError::new_err((message, symbol_idx))
+            }
+            _ => PyValueError::new_err(message),
+        }
     })?;
 
     serde_json::to_string(&out).map_err(|e| {

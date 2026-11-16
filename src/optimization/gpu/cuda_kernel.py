@@ -5,6 +5,7 @@ used by these kernels differ. Multi-coin private arrays may use a smaller valida
 capacity, and the immutable ternary quantity-relation table uses signed bytes.
 Native temporal replay uses bounded block-owned side state when it fits in shared
 memory; its launch contract gives each block exactly one candidate.
+The global side-state specialization uses each candidate's existing replay row.
 Strategy expressions remain in the Rust-owned source.
 CuPy compiles with NVRTC and shares PyTorch tensors and its current CUDA stream.
 """
@@ -13,6 +14,9 @@ from __future__ import annotations
 
 import re
 import numpy as np
+
+_CUDA_LIMIT_STACK_SIZE = 0  # cudaLimitStackSize
+CUDA_GLOBAL_REPLAY_SIDE_STATE = "PASSIVBOT_CUDA_GLOBAL_REPLAY_SIDE_STATE"
 
 _CUDA_PREAMBLE = r"""
 #include <cuda_runtime.h>
@@ -95,16 +99,35 @@ struct PBReplaySideStorage<T, Slot, false> {
 
 def _shared_side_replay(source: str) -> bool:
     return bool(
-        re.search(r"^#define\s+PASSIVBOT_HSL_FACTUAL_ONLY\s+1\s*$", source, re.M)
+        not _global_side_replay(source)
+        and re.search(r"^#define\s+PASSIVBOT_HSL_FACTUAL_ONLY\s+1\s*$", source, re.M)
         and re.search(r"^#define\s+PASSIVBOT_(?:EMA|TM)_MULTICOIN_CHUNKED\s+1\s*$", source, re.M)
     )
+
+
+def _global_side_replay(source: str) -> bool:
+    if not re.search(rf"^#define[ \t]+{CUDA_GLOBAL_REPLAY_SIDE_STATE}[ \t]+1[ \t]*$", source, re.M):
+        return False
+    enabled = set(re.findall(r"^#define[ \t]+(PASSIVBOT_\w+)[ \t]+1[ \t]*$", source, re.M))
+    temporal = {"PASSIVBOT_EMA_MULTICOIN_CHUNKED", "PASSIVBOT_TM_MULTICOIN_CHUNKED"}
+    retained_history = {
+        "PASSIVBOT_HSL_FACTS_ENABLED",
+        "PASSIVBOT_HSL_NATIVE_CACHE_ENABLED",
+        "PASSIVBOT_HSL_NATIVE_COIN_CACHE_ENABLED",
+    }
+    if (len(temporal & enabled) != 1 or "PASSIVBOT_HSL_FACTUAL_ONLY" not in enabled
+            or retained_history & enabled):
+        raise ValueError(
+            "CUDA global side state requires one temporal forward-risk strategy without retained histories"
+        )
+    return True
 
 
 def cuda_source(
     source: str, *, coin_capacity: int | None = None, shared_replay_state: bool = True
 ) -> str:
     """Lower only the explicitly supported scalar shader dialect."""
-    shared = shared_replay_state and _shared_side_replay(source)
+    shared = _shared_side_replay(source) and shared_replay_state
     if coin_capacity is not None:
         from optimization.gpu.runtime import specialize_coin_capacity
 
@@ -192,6 +215,20 @@ class CudaShaderLibrary:
             options=("--std=c++17", "--fmad=false"),
         )
         self._module.compile()
+
+    def pending_stack_bytes(self, name, device_index):
+        """Estimate context backing still needed by the selected replay symbol."""
+        device = self._cupy.cuda.Device(device_index)
+        with device:
+            local_bytes = int(self._module.get_function(name).attributes["local_size_bytes"])
+            stack_bytes = int(self._cupy.cuda.runtime.deviceGetLimit(_CUDA_LIMIT_STACK_SIZE))
+            if local_bytes <= stack_bytes:
+                return 0
+            attrs = device.attributes
+            # The driver can expand local memory for all hardware thread slots
+            # even for a width-one dispatch. The context retains previous growth.
+            hardware_threads = attrs["MultiProcessorCount"] * attrs["MaxThreadsPerMultiProcessor"]
+            return (local_bytes - stack_bytes) * hardware_threads
 
     def __getattr__(self, name: str):
         kernel = self._module.get_function(name)

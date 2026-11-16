@@ -2596,16 +2596,7 @@ mod core {
             PositionSide::Long => -position_size.abs(),
             PositionSide::Short => position_size.abs(),
         };
-        let price = match pside {
-            PositionSide::Long => {
-                let touch = tolerant_round_dn_preserve_step(ob.ask, price_step);
-                tolerant_round_dn_preserve_step(touch - price_step, price_step).max(price_step)
-            }
-            PositionSide::Short => {
-                let touch = tolerant_round_up_preserve_step(ob.bid, price_step);
-                tolerant_round_up_preserve_step(touch + price_step, price_step)
-            }
-        };
+        let price = panic_limit_price(pside, ob, price_step);
         if !(price.is_finite() && price > 0.0 && qty.is_finite() && qty != 0.0) {
             return None;
         }
@@ -2619,6 +2610,19 @@ mod core {
                 PositionSide::Short => OrderType::ClosePanicShort,
             },
         })
+    }
+
+    pub(crate) fn panic_limit_price(pside: PositionSide, ob: &OrderBook, price_step: f64) -> f64 {
+        match pside {
+            PositionSide::Long => {
+                let touch = tolerant_round_dn_preserve_step(ob.ask, price_step);
+                tolerant_round_dn_preserve_step(touch - price_step, price_step).max(price_step)
+            }
+            PositionSide::Short => {
+                let touch = tolerant_round_up_preserve_step(ob.bid, price_step);
+                tolerant_round_up_preserve_step(touch + price_step, price_step)
+            }
+        }
     }
 
     fn should_generate_entries(mode: TradingMode, has_pos: bool, allow_initial: bool) -> bool {

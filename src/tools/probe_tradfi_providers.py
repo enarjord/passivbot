@@ -1,47 +1,15 @@
 #!/usr/bin/env python3
-"""
-Test script for TradFi data providers.
-
-Tests multiple data sources for historical 1m stock data:
-- Alpaca (5+ years free, recommended)
-- Polygon.io (2 years free)
-- yfinance (7 days, no API key)
-
-Usage:
-    python test_tradfi_providers.py [--provider NAME] [--api-key KEY] [--api-secret SECRET]
-
-Examples:
-    # Test yfinance (no API key needed)
-    python test_tradfi_providers.py --provider yfinance
-
-    # Test Alpaca
-    python test_tradfi_providers.py --provider alpaca --api-key KEY --api-secret SECRET
-
-    # Test Polygon
-    python test_tradfi_providers.py --provider polygon --api-key KEY
-"""
+"""Manually probe a TradFi market-data provider's candle response."""
 
 import argparse
 import asyncio
 import json
-import sys
 from datetime import datetime, timedelta, UTC
-from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
-
-from tradfi_data import (
-    AlpacaProvider,
-    PolygonProvider,
-    YFinanceProvider,
-    TradFiDataFetcher,
-    get_provider,
-    candles_to_array,
-)
+from tradfi_data import candles_to_array, get_provider
 
 
-async def test_provider(provider, symbol: str = "TSLA", days_ago: int = 7):
+async def probe_provider(provider, symbol: str = "TSLA", days_ago: int = 7):
     """Test a single provider."""
     print(f"\n{'=' * 60}")
     print(f"Testing {provider.name.upper()} Provider")
@@ -62,7 +30,7 @@ async def test_provider(provider, symbol: str = "TSLA", days_ago: int = 7):
         try:
             candles = await provider.fetch_1m_candles(symbol, start_ts, end_ts)
         except Exception as e:
-            print(f"\n  ERROR: {e}")
+            print(f"\n  ERROR: {type(e).__name__}")
             return False
 
         if not candles:
@@ -96,7 +64,7 @@ async def test_provider(provider, symbol: str = "TSLA", days_ago: int = 7):
         return True
 
 
-async def test_historical_depth(provider, symbol: str = "TSLA"):
+async def probe_historical_depth(provider, symbol: str = "TSLA"):
     """Test how far back we can fetch data."""
     print(f"\n{'=' * 60}")
     print(f"Testing Historical Depth for {provider.name.upper()}")
@@ -127,7 +95,7 @@ async def test_historical_depth(provider, symbol: str = "TSLA"):
                 candles = await provider.fetch_1m_candles(symbol, start_ts, end_ts)
                 status = f"{len(candles)} candles" if candles else "NO DATA"
             except Exception as e:
-                status = f"ERROR: {e}"
+                status = f"ERROR: {type(e).__name__}"
 
             print(f"  {label:20s}: {status}")
 
@@ -135,7 +103,7 @@ async def test_historical_depth(provider, symbol: str = "TSLA"):
             await asyncio.sleep(provider.rate_limit_delay)
 
 
-async def test_multiple_symbols(provider, symbols: list = ["TSLA", "NVDA", "AAPL"]):
+async def probe_multiple_symbols(provider, symbols=("TSLA", "NVDA", "AAPL")):
     """Test fetching multiple symbols."""
     print(f"\n{'=' * 60}")
     print(f"Testing Multiple Symbols for {provider.name.upper()}")
@@ -153,7 +121,7 @@ async def test_multiple_symbols(provider, symbols: list = ["TSLA", "NVDA", "AAPL
                 candles = await provider.fetch_1m_candles(symbol, start_ts, end_ts)
                 status = f"{len(candles)} candles" if candles else "NO DATA"
             except Exception as e:
-                status = f"ERROR: {e}"
+                status = f"ERROR: {type(e).__name__}"
 
             print(f"  {symbol}: {status}")
 
@@ -171,8 +139,8 @@ def load_config():
         return {}
 
 
-async def main():
-    parser = argparse.ArgumentParser(description="Test TradFi data providers")
+async def main(argv=None):
+    parser = argparse.ArgumentParser(description="Manually probe TradFi candle data providers")
     parser.add_argument(
         "--provider",
         choices=["alpaca", "polygon", "yfinance", "finnhub", "alphavantage"],
@@ -183,7 +151,7 @@ async def main():
     parser.add_argument("--symbol", default="TSLA", help="Stock symbol to test")
     parser.add_argument("--depth-test", action="store_true", help="Test historical depth")
     parser.add_argument("--multi-symbol", action="store_true", help="Test multiple symbols")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Load config
     config = load_config()
@@ -207,7 +175,7 @@ async def main():
         print('    "api_key": "YOUR_KEY",')
         print('    "api_secret": "YOUR_SECRET"')
         print("  }")
-        return
+        return 2
 
     if provider_name == "polygon" and not api_key:
         print("\nERROR: Polygon requires --api-key")
@@ -215,51 +183,23 @@ async def main():
         print("  1. Go to https://polygon.io/ (now massive.com)")
         print("  2. Sign up for free")
         print("  3. Copy API key from dashboard")
-        return
+        return 2
 
-    # Create provider
-    if provider_name == "alpaca":
-        provider = AlpacaProvider(api_key=api_key, api_secret=api_secret)
-    elif provider_name == "polygon":
-        provider = PolygonProvider(api_key=api_key)
-    elif provider_name == "yfinance":
-        provider = YFinanceProvider()
-    else:
-        provider = get_provider(provider_name, api_key)
-
-    # Run tests
-    success = await test_provider(provider, args.symbol)
-
-    if not success:
-        print("\nBasic test failed. Check your API credentials.")
-        return
+    provider = get_provider(provider_name, api_key, api_secret)
+    if not await probe_provider(provider, args.symbol):
+        print("\nBasic probe failed. Check provider access and credentials.")
+        return 1
 
     if args.depth_test:
-        # Recreate provider for depth test
-        if provider_name == "alpaca":
-            provider = AlpacaProvider(api_key=api_key, api_secret=api_secret)
-        elif provider_name == "polygon":
-            provider = PolygonProvider(api_key=api_key)
-        else:
-            provider = YFinanceProvider()
-
-        await test_historical_depth(provider, args.symbol)
+        await probe_historical_depth(provider, args.symbol)
 
     if args.multi_symbol:
-        # Recreate provider for multi-symbol test
-        if provider_name == "alpaca":
-            provider = AlpacaProvider(api_key=api_key, api_secret=api_secret)
-        elif provider_name == "polygon":
-            provider = PolygonProvider(api_key=api_key)
-        else:
-            provider = YFinanceProvider()
-
-        await test_multiple_symbols(provider)
+        await probe_multiple_symbols(provider)
 
     print(f"\n{'=' * 60}")
-    print("Tests completed!")
+    print("Probes completed!")
     print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

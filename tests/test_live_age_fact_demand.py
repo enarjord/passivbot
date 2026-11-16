@@ -56,8 +56,10 @@ async def test_default_discovery_only_requests_enabled_positive_age_sides(
     monkeypatch, ages, enabled, required_sides, planning,
 ):
     bot = _bot(ages=ages, enabled=enabled)
-    lookup = AsyncMock(side_effect=lambda symbols, **_kwargs: {symbol: FIRST for symbol in symbols})
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    lookup = AsyncMock(side_effect=lambda markets: {
+        symbol: SimpleNamespace(timestamp_ms=FIRST, is_provisional=False) for symbol in markets
+    })
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     if planning:
         bot.update_effective_min_cost = AsyncMock()
         bot.refresh_approved_ignored_coins_lists = lambda: None
@@ -79,9 +81,12 @@ async def test_default_discovery_only_requests_enabled_positive_age_sides(
     if expected:
         if planning:
             assert [symbol for call in lookup.await_args_list for symbol in call.args[0]] == expected
-            assert all(call.kwargs == {"exchange": "binance"} for call in lookup.await_args_list)
+            assert all(
+                market == [("binance", bot.markets_dict[symbol])]
+                for call in lookup.await_args_list for symbol, market in call.args[0].items()
+            )
         else:
-            lookup.assert_awaited_once_with(expected, exchange="binance")
+            lookup.assert_awaited_once_with({symbol: [("binance", bot.markets_dict[symbol])] for symbol in expected})
     else:
         lookup.assert_not_awaited()
     assert bot.first_timestamps == {symbol: FIRST for symbol in expected}
@@ -96,7 +101,7 @@ async def test_positive_age_disabled_side_does_not_acquire_facts(monkeypatch, di
     else:
         bot.config["bot"]["long"]["risk"]["max_positions"] = 0
     lookup = AsyncMock(side_effect=AssertionError("disabled sides do not require inception"))
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     await bot.update_first_timestamps()
     lookup.assert_not_awaited()
 
@@ -105,11 +110,14 @@ async def test_positive_age_disabled_side_does_not_acquire_facts(monkeypatch, di
 @pytest.mark.parametrize("requested", [[], ["MANUAL/USDT:USDT"], ["SHORT00/USDT:USDT"]])
 async def test_explicit_symbol_request_is_not_widened_to_any_side_universe(monkeypatch, requested):
     bot = _bot()
-    lookup = AsyncMock(side_effect=lambda symbols, **_kwargs: {symbol: FIRST for symbol in symbols})
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    lookup = AsyncMock(side_effect=lambda markets: {
+        symbol: SimpleNamespace(timestamp_ms=FIRST, is_provisional=False) for symbol in markets
+    })
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
+    bot.markets_dict.update({symbol: {} for symbol in requested})
     await bot.update_first_timestamps(requested)
     if requested:
-        lookup.assert_awaited_once_with(requested, exchange="binance")
+        lookup.assert_awaited_once_with({symbol: [("binance", bot.markets_dict[symbol])] for symbol in requested})
     else:
         lookup.assert_not_awaited()
 
@@ -124,7 +132,7 @@ async def test_known_alias_repairs_symbol_without_fetch_or_losing_positive_fact(
     bot.first_timestamps = {"LONG": FIRST, symbol: 0.0}
     bot.coin_to_symbol = lambda value, **_kwargs: symbol if value == "LONG" else value
     lookup = AsyncMock(side_effect=AssertionError("known factual aliases need no lookup"))
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     await bot.update_first_timestamps([symbol] if explicit else None)
     assert bot.first_timestamps == {"LONG": FIRST, symbol: FIRST}
     lookup.assert_not_awaited()
@@ -141,15 +149,15 @@ async def test_only_required_unknown_fact_retries_while_known_and_unused_facts_s
     unused = "SHORT00/USDT:USDT"
     bot.approved_coins_minus_ignored_coins["long"].add(known)
     bot.first_timestamps = {required: unknown, known: FIRST, unused: 0.0}
-    lookup = AsyncMock(side_effect=[{required: 0.0}, {required: FIRST}])
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    lookup = AsyncMock(side_effect=[{}, {required: SimpleNamespace(timestamp_ms=FIRST, is_provisional=False)}])
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
 
     await bot.update_first_timestamps()
     await bot.update_first_timestamps()
     await bot.update_first_timestamps()
 
     assert lookup.await_count == 2
-    assert all(call.args[0] == [required] for call in lookup.await_args_list)
+    assert all(list(call.args[0]) == [required] for call in lookup.await_args_list)
     assert bot.first_timestamps == {required: FIRST, known: FIRST, unused: 0.0}
 
 
@@ -159,7 +167,7 @@ async def test_fake_harness_only_reads_required_side_candles(monkeypatch, positi
     ages = tuple(2.5 if side == positive_side else 0.0 for side in SIDES)
     bot = _bot(ages=ages, exchange="fake")
     lookup = AsyncMock(side_effect=AssertionError("fake discovery must remain offline"))
-    monkeypatch.setattr(live, "get_first_timestamps_unified", lookup)
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
     bot.cca = SimpleNamespace(fetch_ohlcv=AsyncMock(return_value=[[FIRST, 1, 1, 1, 1, 1]]))
 
     await bot.update_first_timestamps()
@@ -172,3 +180,69 @@ async def test_fake_harness_only_reads_required_side_candles(monkeypatch, positi
     )
     assert bot.first_timestamps == {symbol: FIRST for symbol in expected}
     lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provisional_asset_age_refresh_preserves_evidence_until_improved(monkeypatch):
+    bot = _bot()
+    symbol = "LONG/USDT:USDT"
+    lookup = AsyncMock(side_effect=[
+        {symbol: SimpleNamespace(timestamp_ms=FIRST, is_provisional=True)},
+        {},
+        {symbol: SimpleNamespace(timestamp_ms=FIRST + 1000, is_provisional=False)},
+        {symbol: SimpleNamespace(timestamp_ms=FIRST - 1000, is_provisional=False)},
+    ])
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
+    await bot.update_first_timestamps()
+    assert bot.first_timestamps[symbol] == FIRST
+    assert bot._required_first_timestamp_symbols() == []
+
+    bot._provisional_first_timestamp_retry_after[symbol] = 0
+    await bot.update_first_timestamps()
+    assert bot.first_timestamps[symbol] == FIRST
+    assert bot._required_first_timestamp_symbols() == [symbol]
+
+    await bot.update_first_timestamps()
+    assert bot.first_timestamps[symbol] == FIRST
+    assert symbol in bot._provisional_first_timestamp_retry_after
+    bot._provisional_first_timestamp_retry_after[symbol] = 0
+
+    await bot.update_first_timestamps()
+    assert bot.first_timestamps[symbol] == FIRST - 1000
+    assert bot._required_first_timestamp_symbols() == []
+
+
+@pytest.mark.asyncio
+async def test_inflight_age_result_is_ignored_when_market_changes(monkeypatch):
+    bot = _bot()
+    symbol = "LONG/USDT:USDT"
+
+    async def lookup(markets):
+        assert markets[symbol] == [("binance", {})]
+        bot.markets_dict[symbol] = {"id": "different-contract"}
+        return {symbol: SimpleNamespace(timestamp_ms=FIRST, is_provisional=False)}
+
+    monkeypatch.setattr(live, "resolve_asset_inception", lookup)
+    await bot.update_first_timestamps()
+    assert bot.first_timestamps[symbol] is None
+    assert bot._required_first_timestamp_symbols() == [symbol]
+
+
+@pytest.mark.parametrize("identity_field", ["instIdCode", "launchTime", "preMktSwTime"])
+def test_market_refresh_invalidates_age_when_instrument_identity_changes(identity_field):
+    bot = _bot()
+    symbol = "LONG/USDT:USDT"
+    bot.markets_dict[symbol] = {"id": "LONGUSDT", "info": {identity_field: 1}}
+    bot.first_timestamps[symbol] = FIRST
+    bot._provisional_first_timestamp_retry_after = {symbol: 100.0}
+    bot._first_timestamp_refresh_retry_after = 500.0
+    bot._invalidate_replaced_inception_markets(
+        {symbol: {"id": "LONGUSDT", "info": {identity_field: 1, "quoteVolume": "20"}}}
+    )
+    assert bot.first_timestamps[symbol] == FIRST
+    bot._invalidate_replaced_inception_markets(
+        {symbol: {"id": "LONGUSDT", "info": {identity_field: 2}}}
+    )
+    assert symbol not in bot.first_timestamps
+    assert symbol not in bot._provisional_first_timestamp_retry_after
+    assert bot._first_timestamp_refresh_retry_after == 0

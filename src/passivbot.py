@@ -45,6 +45,7 @@ from candlestick_manager import (
 from fill_events_manager import (
     FillEventCacheContractError,
     FillEventsManager,
+    FillRefreshWork,
     PNL_SOURCE_SYNTHETIC_DEGRADED,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
@@ -90,6 +91,7 @@ from live.diagnostic_safety import (
     exception_text_contains,
     exception_type_name_contains,
 )
+from live.close_replacement_diagnostics import observe_account as observe_close_replacements
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
 from live.console_health import (
@@ -129,7 +131,7 @@ from live.market_snapshot import (
 )
 from live.planning_snapshot import PlanningSnapshot, PlanningSnapshotUnavailable
 from passivbot_exceptions import RestartBotException, FatalBotException
-from live import exchange_params
+from live import exchange_params, planner_inputs
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
 from config import get_template_config, load_input_config, prepare_config
@@ -144,12 +146,7 @@ from config.access import (
 from config.coerce import (
     normalize_hsl_signal_mode,
 )
-from config.bot import normalize_twel_enforcer_policy
-from config.strategy import (
-    build_runtime_strategy_side,
-    get_active_strategy_side,
-    normalize_strategy_kind,
-)
+from config.strategy import normalize_strategy_kind
 from config.shared_bot import get_grouped_bot_value
 from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from config.pnl_lookback import PnlsLookback
@@ -182,7 +179,7 @@ from utils import (
 from prettytable import PrettyTable
 from uuid import uuid4
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from collections import defaultdict, Counter
 from sortedcontainers import SortedDict
 
@@ -239,8 +236,6 @@ from config_utils import (
 from procedures import (
     load_broker_code,
     load_user_info,
-    get_first_timestamps_unified,
-    print_async_exception,
 )
 from utils import get_file_mod_ms
 from warmup_utils import (
@@ -248,6 +243,7 @@ from warmup_utils import (
     compute_per_coin_warmup_minutes,
     live_warmup_cap_minutes,
 )
+from asset_inception import market_inception_identity, resolve_asset_inception
 from config.age_policy import minimum_coin_age_days, inception_timestamp_ms
 from config.activation import side_activation
 from config.forager_hysteresis import forager_score_hysteresis
@@ -299,6 +295,8 @@ FILL_EVENT_FETCH_LIMIT_DEFAULT = 20
 PENDING_PNL_AUTHORITATIVE_RETRY_BASE_SECONDS = 1.0
 FIRST_TIMESTAMP_REFRESH_TIMEOUT_SECONDS = 60.0
 FIRST_TIMESTAMP_REFRESH_RETRY_SECONDS = 30.0
+FIRST_TIMESTAMP_REFRESH_MAX_RETRY_SECONDS = 15 * 60.0
+FIRST_TIMESTAMP_PROVISIONAL_RECHECK_SECONDS = 15 * 60.0
 FIRST_TIMESTAMP_REFRESH_BATCH_SIZE = 10
 PENDING_PNL_AUTHORITATIVE_RETRY_MAX_SECONDS = 60.0
 FILL_COVERAGE_AUTHORITATIVE_RETRY_BASE_SECONDS = 30.0
@@ -500,30 +498,12 @@ bot = None
 
 
 def _force_exit_after_repeated_signal(sig):
-    """Exit immediately after a second shutdown signal during graceful cleanup."""
-    try:
-        logging.warning("[shutdown] repeated signal received; forcing immediate exit")
-    except Exception:
-        pass
-    try:
-        sys.stderr.write(
-            "\nRepeated shutdown signal received. Forcing immediate exit.\n"
-        )
-        sys.stderr.flush()
-    except Exception:
-        pass
-    try:
-        logging.shutdown()
-    finally:
-        try:
-            exit_code = 128 + int(sig)
-        except Exception:
-            exit_code = 130
-        os._exit(exit_code)
+    """Exit without cleanup or I/O that could wait on a blocked thread."""
+    os._exit(128 + int(sig))
 
 
 def signal_handler(sig, frame):
-    """Handle SIGINT by signalling the running bot to stop gracefully."""
+    """Request graceful shutdown for a running bot."""
     bot = globals().get("bot")
     if bot is not None and (
         getattr(bot, "stop_signal_received", False)
@@ -550,9 +530,6 @@ def signal_handler(sig, frame):
             loop.call_soon_threadsafe(lambda: None)
     elif loop is not None:
         loop.call_soon_threadsafe(loop.stop)
-
-
-signal.signal(signal.SIGINT, signal_handler)
 
 
 def get_function_name():
@@ -1440,6 +1417,10 @@ class Passivbot:
         self.cca = None
         self.ccp = None
         self.create_ccxt_sessions()
+        from exchanges.retry_after import install_ccxt_retry_after
+
+        install_ccxt_retry_after(self.cca)
+        install_ccxt_retry_after(self.ccp)
         self.debug_mode = False
         self.live_event_debug_profiles = normalize_live_event_debug_profiles(
             os.environ.get(
@@ -3478,9 +3459,11 @@ class Passivbot:
         """Initialize symbol and execution metadata without account/history refresh."""
         # Reuse existing ccxt session when available (ensures shared options such as fetchMarkets types).
         cc_instance = getattr(self, "cca", None)
-        self.markets_dict = await load_markets(
+        markets = await load_markets(
             self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote
         )
+        Passivbot._invalidate_replaced_inception_markets(self, markets)
+        self.markets_dict = markets
         if hasattr(self, "refresh_and_log_user_abstraction_state"):
             await self.refresh_and_log_user_abstraction_state()
         # ineligible symbols cannot open new positions
@@ -3494,7 +3477,6 @@ class Passivbot:
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
         # await self.init_flags()
         self.init_coin_overrides()
-        # await self.update_tickers()
         self.refresh_approved_ignored_coins_lists()
         self.set_market_specific_settings()
         self._assert_supported_live_state()
@@ -3901,19 +3883,6 @@ class Passivbot:
         self._mem_log_prev = {"timestamp": now_ms, "rss": rss}
         if cache_bytes is not None:
             self._mem_log_prev["cm_cache_bytes"] = cache_bytes
-
-    def _order_plan_summary_is_interesting(
-        self,
-        *,
-        total_pre_cancel: int,
-        total_cancel: int,
-        total_pre_create: int,
-        total_create: int,
-        total_skipped: int,
-    ) -> bool:
-        """Return True when an order-plan summary is worth emitting at INFO."""
-        actual_work = total_cancel + total_create
-        return actual_work >= 4 or (actual_work > 0 and total_skipped >= 4)
 
     def _begin_order_wave(
         self, to_cancel: list[dict], to_create: list[dict]
@@ -5042,6 +5011,19 @@ class Passivbot:
             elapsed_s,
         )
 
+    def _invalidate_replaced_inception_markets(self, markets):
+        previous = getattr(self, "markets_dict", {}) or {}
+        timestamps = getattr(self, "first_timestamps", {})
+        provisional = getattr(self, "_provisional_first_timestamp_retry_after", {})
+        for symbol in list(timestamps):
+            current_market = markets.get(symbol)
+            if current_market is None or market_inception_identity(
+                current_market
+            ) != market_inception_identity(previous.get(symbol)):
+                timestamps.pop(symbol)
+                provisional.pop(symbol, None)
+                self._first_timestamp_refresh_retry_after = 0.0
+
     def _repair_first_timestamp_aliases(self):
         if not hasattr(self, "first_timestamps"):
             self.first_timestamps = {}
@@ -5055,20 +5037,30 @@ class Passivbot:
             ):
                 self.first_timestamps[symbolf] = self.first_timestamps[symbol]
 
+    def _first_timestamp_needs_refresh(self, symbol, now):
+        if inception_timestamp_ms(self.first_timestamps.get(symbol)) is None:
+            return True
+        provisional = getattr(self, "_provisional_first_timestamp_retry_after", {})
+        return symbol in provisional and now >= provisional[symbol]
+
     def _required_first_timestamp_symbols(self):
+        now = time.monotonic()
         return sorted({
             symbol
             for side in ("long", "short")
             if self.is_pside_enabled(side)
             and minimum_coin_age_days(self.config, side) > 0
             for symbol in self.approved_coins_minus_ignored_coins[side]
-            if inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
+            if self._first_timestamp_needs_refresh(symbol, now)
         })
 
     async def _first_timestamp_refresh_task(self, *, deadline):
         """Acquire a bounded batch sequence without delaying protective planning."""
+        symbols = self._required_first_timestamp_symbols()
+        # Resume after the last dispatched batch if a previous run timed out.
+        cursor = bisect.bisect_right(symbols, getattr(self, "_last_first_timestamp_symbol", ""))
+        symbols = symbols[cursor:] + symbols[:cursor]
         try:
-            symbols = self._required_first_timestamp_symbols()
             for offset in range(0, len(symbols), FIRST_TIMESTAMP_REFRESH_BATCH_SIZE):
                 if (
                     Passivbot._shutdown_requested(self)
@@ -5083,6 +5075,7 @@ class Passivbot:
                     if symbol in required
                 ]
                 if batch:
+                    self._last_first_timestamp_symbol = batch[-1]
                     await self.update_first_timestamps(batch)
         except asyncio.CancelledError:
             raise
@@ -5092,9 +5085,15 @@ class Passivbot:
                 bounded_exception_type(exc),
             )
         finally:
-            self._first_timestamp_refresh_retry_after = (
-                asyncio.get_running_loop().time() + FIRST_TIMESTAMP_REFRESH_RETRY_SECONDS
-            )
+            unresolved = set(self._required_first_timestamp_symbols())
+            delay = FIRST_TIMESTAMP_REFRESH_RETRY_SECONDS
+            if unresolved and unresolved == set(symbols):
+                delay = min(
+                    FIRST_TIMESTAMP_REFRESH_MAX_RETRY_SECONDS,
+                    2 * getattr(self, "_first_timestamp_refresh_delay", delay / 2),
+                )
+            self._first_timestamp_refresh_delay = delay
+            self._first_timestamp_refresh_retry_after = asyncio.get_running_loop().time() + delay
 
     def _schedule_first_timestamp_refresh(self):
         """Keep at most one owned acquisition, including cancellation-resistant work."""
@@ -5143,15 +5142,15 @@ class Passivbot:
         self._repair_first_timestamp_aliases()
         if symbols is None:
             symbols = self._required_first_timestamp_symbols()
+        now = time.monotonic()
         symbols = [
-            symbol
-            for symbol in sorted(set(symbols))
-            if inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
+            symbol for symbol in sorted(set(symbols))
+            if self._first_timestamp_needs_refresh(symbol, now)
         ]
         if not symbols:
-            first_timestamps = {}
-        elif self.exchange == "fake":
-            first_timestamps = {}
+            return
+        first_timestamps = {}
+        if self.exchange == "fake":
             for symbol in symbols:
                 symbolf = self.coin_to_symbol(symbol, verbose=False)
                 try:
@@ -5167,20 +5166,53 @@ class Passivbot:
                     candles = []
                 first_timestamps[symbol] = int(candles[0][0]) if candles else 0.0
         else:
-            first_timestamps = await get_first_timestamps_unified(
-                symbols, exchange=self.exchange
-            )
+            market_symbols = {
+                symbol: self.coin_to_symbol(symbol, verbose=False) for symbol in symbols
+            }
+            markets = {
+                symbol: [(self.exchange, self.markets_dict[market_symbol])]
+                for symbol, market_symbol in market_symbols.items()
+                if market_symbol in self.markets_dict
+            }
+            identities = {
+                symbol: market_inception_identity(venues[0][1])
+                for symbol, venues in markets.items()
+            }
+            evidence = await resolve_asset_inception(markets) if markets else {}
+            if not hasattr(self, "_provisional_first_timestamp_retry_after"):
+                self._provisional_first_timestamp_retry_after = {}
+            provisional = self._provisional_first_timestamp_retry_after
+            for symbol, fact in evidence.items():
+                if symbol not in markets:
+                    continue
+                market_symbol = market_symbols[symbol]
+                current_market = self.markets_dict.get(market_symbol)
+                if market_inception_identity(current_market) != identities[symbol]:
+                    continue
+                for key in {symbol, market_symbol}:
+                    first_timestamps[key] = fact.timestamp_ms
+                    prior = inception_timestamp_ms(self.first_timestamps.get(key))
+                    retains_earlier_provisional = (
+                        key in provisional and prior is not None and prior < fact.timestamp_ms
+                    )
+                    if fact.is_provisional or retains_earlier_provisional:
+                        provisional[key] = (
+                            time.monotonic() + FIRST_TIMESTAMP_PROVISIONAL_RECHECK_SECONDS
+                        )
+                    else:
+                        provisional.pop(key, None)
         for symbol, value in first_timestamps.items():
-            if (inception_timestamp_ms(self.first_timestamps.get(symbol)) is None
-                    and inception_timestamp_ms(value) is not None):
-                self.first_timestamps[symbol] = value
+            if inception_timestamp_ms(value) is not None:
+                old_value = inception_timestamp_ms(self.first_timestamps.get(symbol))
+                self.first_timestamps[symbol] = value if old_value is None else min(value, old_value)
         self._repair_first_timestamp_aliases()
         for symbol in symbols:
             if symbol not in self.first_timestamps:
                 logging.info(
-                    f"warning: unable to get first timestamp for {symbol}. Setting to zero."
+                    "[age] inception unavailable | symbol=%s action=retry_unknown",
+                    Passivbot._log_symbol(symbol),
                 )
-                self.first_timestamps[symbol] = 0.0
+                self.first_timestamps[symbol] = None
 
     async def audit_required_candle_disk_coverage(
         self, symbols: Optional[Iterable[str]] = None
@@ -9635,33 +9667,6 @@ class Passivbot:
             minimum_coin_age_days(self.config, pside),
         )
 
-    async def update_tickers(self):
-        """Fetch latest ticker data and fill in missing bid/ask/last values."""
-        if not hasattr(self, "tickers"):
-            self.tickers = {}
-        tickers = None
-        try:
-            tickers = await self.cca.fetch_tickers()
-            for symbol in tickers:
-                if tickers[symbol]["last"] is None:
-                    if (
-                        tickers[symbol]["bid"] is not None
-                        and tickers[symbol]["ask"] is not None
-                    ):
-                        tickers[symbol]["last"] = np.mean(
-                            [tickers[symbol]["bid"], tickers[symbol]["ask"]]
-                        )
-                else:
-                    for oside in ["bid", "ask"]:
-                        if (
-                            tickers[symbol][oside] is None
-                            and tickers[symbol]["last"] is not None
-                        ):
-                            tickers[symbol][oside] = tickers[symbol]["last"]
-            self.tickers = tickers
-        except Exception as e:
-            logging.error(f"Error with {get_function_name()} {e}")
-
     async def prepare_planning_universe(self):
         """Build the final symbol universe before refreshing market data."""
         await self.update_effective_min_cost()
@@ -10965,6 +10970,11 @@ class Passivbot:
             self._request_authoritative_confirmation(
                 {"balance", "positions", "open_orders", "fills"}
             )
+        if getattr(self, "_console_close_replacements", None):
+            run_diagnostic_step(
+                "observe confirmed close replacements",
+                lambda: observe_close_replacements(self, refreshed_surfaces, int(utc_ms())),
+            )
 
     def _mark_account_critical_state_dirty(
         self,
@@ -11465,6 +11475,7 @@ class Passivbot:
         """Return True when a WS batch only confirms recent local creates/cancels."""
         if not upd_list:
             return False
+        cancel_wave = hsl_live.active_ordinary_cancel_wave(self)
         recognized = 0
         for order in upd_list:
             if not isinstance(order, dict):
@@ -11473,11 +11484,16 @@ class Passivbot:
                 return False
             status = str(order.get("status") or "").lower()
             if status == "open":
-                if not self.order_matches_recent_execution(order):
+                if cancel_wave is not None or not self.order_matches_recent_execution(order):
                     return False
                 recognized += 1
                 continue
             if status in ("canceled", "cancelled"):
+                if cancel_wave is not None and (
+                    not cancel_wave.matches_submission(order)
+                    or not self.cca.ordinary_cancel_echo_has_no_fill(order)
+                ):
+                    return False
                 if not self.order_matches_bot_cancellation(order):
                     return False
                 recognized += 1
@@ -11509,7 +11525,8 @@ class Passivbot:
                 )
                 if _log_key != last_log_key or now - last_log_ts >= 5.0:
                     presentation_echo = ws_presentation_self_echo(self, upd_list)
-                    (logging.debug if presentation_echo else logging.info)(_log_msg)
+                    routine_hint = _cause in {"open_hint", "cancel_hint", "replace_hint"}
+                    (logging.debug if presentation_echo or routine_hint else logging.info)(_log_msg)
                     self._ws_order_update_last_log_key = _log_key
                     self._ws_order_update_last_log_ts = now
                 self._mark_account_critical_state_dirty(
@@ -12182,6 +12199,7 @@ class Passivbot:
         lookback_config_value = None
         enriched_events: list[tuple[object, object]] = []
         account_confirmation_requested = False
+        refresh_work = None
 
         def request_account_confirmation() -> None:
             nonlocal account_confirmation_requested
@@ -12194,7 +12212,7 @@ class Passivbot:
             return []
 
         async def refresh_evidence(operation, *, confirms_tail=True, **kwargs):
-            nonlocal fill_capture_interval
+            nonlocal fill_capture_interval, refresh_work
             started_ms = int(utc_ms())
             sync = position_fill_sync.state(self)
             if not sync.fetch_ready():
@@ -12204,6 +12222,7 @@ class Passivbot:
                 result = await operation(**kwargs)
                 if result is False:
                     raise position_fill_sync.FetchSkipped()
+                refresh_work = result if isinstance(result, FillRefreshWork) else None
                 if confirms_tail:
                     sync.finish_fetch(receipt)
                 fill_capture_interval = (
@@ -12734,6 +12753,7 @@ class Passivbot:
                 coverage_before=coverage_status,
                 coverage_after=post_refresh_coverage_status,
                 overlap_minutes=overlap_minutes,
+                refresh_work=asdict(refresh_work) if refresh_work is not None else None,
                 level=logging.getLevelName(structured_event_level).lower(),
             )
 
@@ -13896,10 +13916,8 @@ class Passivbot:
             self.open_orders = {}
         if self.stop_signal_received:
             return False
-        res = None
         try:
-            res = await self.fetch_open_orders()
-            return await self._apply_open_orders_snapshot(res)
+            return await self._apply_open_orders_snapshot(await self.fetch_open_orders())
         except RateLimitExceeded:
             self._health_rate_limits = (
                 int(getattr(self, "_health_rate_limits", 0) or 0) + 1
@@ -13908,11 +13926,6 @@ class Passivbot:
                 "[rate] hit rate limit while fetching open orders; retrying next cycle"
             )
             return False
-        except Exception as e:
-            logging.error(f"error with {get_function_name()} {e}")
-            print_async_exception(res)
-            traceback.print_exc()
-            raise
 
     def get_exchange_time(self):
         """Return current exchange time in milliseconds."""
@@ -14549,49 +14562,30 @@ class Passivbot:
         c_mult = float(self.c_mults[symbol])
         if min_qty <= 0.0 and qty_step > 0.0:
             min_qty = qty_step
-        calc_min_entry_qty = getattr(pbr, "calc_min_entry_qty_py", None)
-        if calc_min_entry_qty is not None:
-            min_entry_qty = float(
-                calc_min_entry_qty(price, c_mult, qty_step, min_qty, min_cost)
-            )
-        else:
-            if price <= 0.0 or c_mult <= 0.0:
-                min_entry_qty = min_qty
-            else:
-                min_cost_qty = min_cost / price / c_mult
-                if qty_step > 0.0:
-                    min_cost_qty = (
-                        math.ceil(max(0.0, min_cost_qty) / qty_step) * qty_step
-                    )
-                min_entry_qty = max(min_qty, min_cost_qty)
+        min_entry_qty = pbr.calc_min_entry_qty_py(price, c_mult, qty_step, min_qty, min_cost)
         return float(pbr.qty_to_cost(min_entry_qty, price, c_mult))
 
     async def update_effective_min_cost(self, symbol=None):
-        """Update the effective minimum order cost for one or all symbols."""
+        """Refresh the legacy minimum-cost filter from an explicit market snapshot."""
         if not hasattr(self, "effective_min_cost"):
             self.effective_min_cost = {}
-        if symbol is None:
-            symbols = sorted(self.get_symbols_approved_or_has_pos())
-        else:
-            symbols = [symbol]
+        symbols = sorted(self.get_symbols_approved_or_has_pos()) if symbol is None else [symbol]
+        for requested in symbols:
+            self.effective_min_cost.pop(requested, None)
         last_prices = await self._get_live_last_prices(
             symbols, max_age_ms=600_000, context="effective_min_cost"
         )
-        for symbol in symbols:
-            try:
-                self.effective_min_cost[symbol] = (
-                    self._calc_effective_min_cost_at_price(
-                        symbol, float(last_prices[symbol])
-                    )
+        for requested in symbols:
+            price = last_prices.get(requested)
+            if price is None or not math.isfinite(price) or price <= 0.0:
+                logging.warning(
+                    "[entry] effective minimum cost unavailable | symbol=%s reason=market_price",
+                    Passivbot._log_symbol(requested),
                 )
-            except Exception as e:
-                logging.error(
-                    "error with %s for %s: %s",
-                    get_function_name(),
-                    Passivbot._log_symbol(symbol),
-                    e,
-                )
-                traceback.print_exc()
+                continue
+            self.effective_min_cost[requested] = self._calc_effective_min_cost_at_price(
+                requested, price
+            )
 
     async def calc_ideal_orders(self):
         """Compute desired entry and exit orders for every active symbol."""
@@ -14848,190 +14842,9 @@ class Passivbot:
         )
         return self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
 
-    def _strategy_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
-        config = getattr(self, "config", {})
-        strategy_kind = normalize_strategy_kind(
-            get_optional_config_value(config, 'bot.portfolio.strategy_kind')
-        )
-        strategy_cfg = get_active_strategy_side(
-            config.get("bot", {}).get(pside, {}),
-            strategy_kind=strategy_kind,
-            pside=pside,
-        )
-        symbol_override = (
-            getattr(self, "coin_overrides", {})
-            .get(symbol, {})
-            .get("bot", {})
-            .get(pside, {})
-            if symbol is not None
-            else {}
-        )
-        return build_runtime_strategy_side(
-            strategy_cfg,
-            strategy_kind=strategy_kind,
-            pside=pside,
-            override_side=symbol_override,
-        )
-
-    def _strategy_value(self, pside: str, key: str, symbol: str | None = None) -> Any:
-        strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
-        current = strategy_cfg
-        for part in key.split("."):
-            if not isinstance(current, dict) or part not in current:
-                raise KeyError(f"missing required strategy key {pside}.{key}")
-            current = current[part]
-        return current
-
-    def _bot_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
-        """Build a dict matching Rust `BotParams` for JSON orchestrator input."""
-        # Values which are configured globally (not per symbol) live under bot_value.
-        global_keys = {
-            "n_positions",
-            "total_wallet_exposure_limit_ratio",
-            "risk_twel_enforcer_enabled",
-            "risk_twel_enforcer_policy",
-            "risk_twel_enforcer_threshold_ratio",
-        }
-        bool_keys = {
-            "risk_wel_enforcer_enabled",
-            "risk_twel_enforcer_enabled",
-            "unstuck_enabled",
-            "unstuck_ema_gating_enabled",
-        }
-        string_keys = {
-            "risk_twel_enforcer_policy",
-        }
-        strategy_keys = {
-            "close_grid_qty_fraction",
-            "close_trailing_retracement_base_fraction",
-            "close_trailing_qty_fraction",
-            "close_trailing_threshold_base_fraction",
-            "close_log_range_1h_coefficient",
-            "close_log_range_1m_coefficient",
-            "entry_grid_reentry_qty_multiplier",
-            "entry_grid_threshold_base_fraction",
-            "entry_log_range_ema_span_1h_candles",
-            "entry_log_range_ema_span_minutes",
-            "entry_log_range_1h_coefficient",
-            "entry_log_range_1m_coefficient",
-            "entry_exposure_ratio_coefficient",
-            "entry_initial_ema_distance_fraction",
-            "entry_initial_qty_fraction",
-            "entry_trailing_reentry_qty_multiplier",
-            "entry_trailing_retracement_base_fraction",
-            "entry_trailing_threshold_base_fraction",
-            "ema_span_0_minutes",
-            "ema_span_1_minutes",
-        }
-        # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
-        fields = [
-            "close_grid_qty_fraction",
-            "close_trailing_retracement_base_fraction",
-            "close_trailing_qty_fraction",
-            "close_trailing_threshold_base_fraction",
-            "close_log_range_1h_coefficient",
-            "close_log_range_1m_coefficient",
-            "entry_grid_reentry_qty_multiplier",
-            "entry_grid_threshold_base_fraction",
-            "entry_log_range_ema_span_1h_candles",
-            "entry_log_range_ema_span_minutes",
-            "entry_log_range_1h_coefficient",
-            "entry_log_range_1m_coefficient",
-            "entry_exposure_ratio_coefficient",
-            "entry_initial_ema_distance_fraction",
-            "entry_initial_qty_fraction",
-            "entry_trailing_reentry_qty_multiplier",
-            "entry_trailing_retracement_base_fraction",
-            "entry_trailing_threshold_base_fraction",
-            "forager_log_range_ema_span_minutes",
-            "forager_volume_ema_span_minutes",
-            "forager_score_weights",
-            "risk_entry_cooldown_minutes",
-            "entry_cooldown_min_duration_minutes",
-            "entry_cooldown_max_duration_minutes",
-            "entry_cooldown_weights_minutes",
-            "rms_directionality_ema_span_minutes",
-            "n_positions",
-            "total_wallet_exposure_limit_ratio",
-            "wallet_exposure_limit_ratio",
-            "risk_wel_enforcer_enabled",
-            "risk_wel_enforcer_threshold_ratio",
-            "risk_twel_enforcer_enabled",
-            "risk_twel_enforcer_policy",
-            "risk_twel_enforcer_threshold_ratio",
-            "risk_we_excess_allowance_fraction",
-            "unstuck_enabled",
-            "unstuck_close_fraction",
-            "unstuck_ema_gating_enabled",
-            "unstuck_ema_distance_fraction",
-            "unstuck_ema_span_0_minutes",
-            "unstuck_ema_span_1_minutes",
-            "unstuck_loss_allowance_fraction",
-            "unstuck_exposure_trigger_ratio",
-        ]
-        out: dict[str, object] = {}
-        strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
-        strategy_cfg = (
-            strategy_getter(pside, symbol) if callable(strategy_getter) else {}
-        )
-        for key in fields:
-            if key in global_keys:
-                val = self.bot_value(pside, key)
-            elif key in strategy_keys:
-                if key in strategy_cfg:
-                    val = strategy_cfg[key]
-                elif callable(strategy_getter):
-                    val = 0.0
-                else:
-                    val = (
-                        self.bp(pside, key, symbol)
-                        if symbol is not None
-                        else self.bp(pside, key)
-                    )
-            else:
-                val = (
-                    self.bp(pside, key, symbol)
-                    if symbol is not None
-                    else self.bp(pside, key)
-                )
-            out_key = key
-            if key == "forager_score_weights":
-                if not isinstance(val, dict):
-                    raise TypeError(
-                        f"bot.{pside}.forager_score_weights must be a dict, got {type(val).__name__}"
-                    )
-                out[out_key] = {
-                    "volume": float(val["volume"]),
-                    "ema_readiness": float(val["ema_readiness"]),
-                    "log_range": float(val["log_range"]),
-                    "rms_directionality": float(val["rms_directionality"]),
-                }
-            elif key == "entry_cooldown_weights_minutes":
-                out[out_key] = {
-                    name: float(val[name]) for name in ("exposure_ratio", "adverse_directionality")
-                }
-            elif key == "entry_cooldown_max_duration_minutes":
-                out[out_key] = None if val is None else float(val)
-            elif key == "n_positions":
-                out[out_key] = int(round(val or 0.0))
-            elif key in bool_keys:
-                out[out_key] = bool(val)
-            elif key in string_keys:
-                if key == "risk_twel_enforcer_policy":
-                    out[out_key] = normalize_twel_enforcer_policy(
-                        val,
-                        path=f"bot.{pside}.risk.total_exposure_enforcer.policy",
-                    )
-            else:
-                out[out_key] = float(val or 0.0)
-        policy = hsl_live.policy(self, pside, symbol)
-        # The order kernel consumes only execution policy; the shared
-        # hsl evaluator owns the signal and controller.
-        out.update(
-            hsl_enabled=policy["enabled"],
-            hsl_panic_close_order_type=policy["panic_close_order_type"],
-        )
-        return out
+    _strategy_params_to_rust_dict = planner_inputs.strategy_params_to_rust_dict
+    _strategy_value = planner_inputs.strategy_value
+    _bot_params_to_rust_dict = planner_inputs.bot_params_to_rust_dict
 
     def _unstuck_ema_required(
         self, pside: str, symbol: str, mode: Optional[str]
@@ -17779,22 +17592,45 @@ class Passivbot:
             await hsl.wait_for_ordinary_fill_refresh()
         market_epoch = self._ensure_freshness_ledger().epoch
         market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
-        if await hsl.refresh_ordinary_account(
+        confirmed = await hsl.refresh_ordinary_account(
             prepared_account, allow_new_refresh=hsl_enabled
-        ):
-            if not hsl_enabled or self._ensure_freshness_ledger().epoch != market_epoch:
-                # A confirming read may change the epoch or spend the first
-                # quotes' freshness headroom. Reuse only quotes accepted by the
-                # canonical provider, retaining their real acquisition timestamps.
-                market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
-            hsl.require_ordinary_account(prepared_account)
-        else:
+        )
+        renew_quotes = confirmed and (
+            not hsl_enabled or self._ensure_freshness_ledger().epoch != market_epoch
+        )
+        if not confirmed:
             prepared_account = None
-        # Remote acquisition may renew the factual fill tape. Rebuild every
-        # fill-derived trailing input from the current cohort, without remote
-        # I/O, before consuming HSL or native strategy inputs. An observation
-        # replaced after this point still invalidates even an equal payload.
-        receipts = await hsl.prepare_ordinary_consumption(prepared_account)
+        joined_epoch = None
+        for attempt in range(2):
+            try:
+                if joined_epoch is not None:
+                    market_snapshots = await self._get_orchestrator_market_snapshots(
+                        symbols, record_surface=False
+                    )
+                elif renew_quotes:
+                    # Use the canonical provider and retain real quote acquisition times.
+                    market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+                if prepared_account is not None:
+                    hsl.require_ordinary_account(prepared_account, joined_epoch=joined_epoch)
+                # Rebuild trailing inputs from the current fill cohort after quote I/O.
+                receipts = await hsl.prepare_ordinary_consumption(
+                    prepared_account, joined_epoch=joined_epoch,
+                    preparation=preparation if joined_epoch is not None else None,
+                )
+                if joined_epoch is not None:
+                    self._record_market_snapshot_surface(symbols, market_snapshots)
+                break
+            except hsl_live.OrdinaryPlanDeferred as exc:
+                if attempt or hsl_enabled or exc.reason != "account_refresh_in_progress":
+                    raise
+                # Another owner read can start while renewing quotes or reading
+                # local candles. Join it once and revalidate the same preparation.
+                await hsl.refresh_ordinary_account(
+                    prepared_account, allow_new_refresh=False,
+                    join_timeout_s=self._live_market_snapshot_max_age_ms() / 1000,
+                )
+                joined_epoch = self._ensure_freshness_ledger().epoch
+                hsl.require_ordinary_account(prepared_account, joined_epoch=joined_epoch)
         return Passivbot._calculate_prepared_ideal_orders(
             self, preparation, market_snapshots, receipts
         )
@@ -17864,8 +17700,6 @@ class Passivbot:
         # Complete slow preparatory work before capturing the ticker snapshot
         # used for Rust planning. This keeps the planning snapshot fresh through
         # the create-side safety guard instead of aging it during EMA loading.
-        if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:
-            await self.update_effective_min_cost()
         warmed_forager_normal_symbols = await self._warmup_new_forager_normal_symbols(
             symbols
         )
@@ -18063,11 +17897,7 @@ class Passivbot:
                 and symbol not in ema_unavailable_symbols
                 and not exchange_cooldown_blocks_symbol
             )
-            effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
-            if effective_min_cost <= 0.0:
-                effective_min_cost = self._calc_effective_min_cost_at_price(
-                    symbol, mprice
-                )
+            effective_min_cost = self._calc_effective_min_cost_at_price(symbol, mprice)
 
             def side_input(pside: str) -> dict:
                 mode = self._mode_override_to_orchestrator_mode(
@@ -18195,18 +18025,15 @@ class Passivbot:
             )
         except Exception as e:
             elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
-            msg = str(e)
-            if "MissingEma" in msg:
-                match = re.search(r"symbol_idx\s*:\s*(\d+)", msg)
-                if match:
-                    idx = int(match.group(1))
-                    symbol = idx_to_symbol.get(idx)
-                    if symbol:
-                        logging.error(
-                            "[ema] Missing EMA for %s (symbol_idx=%d)",
-                            Passivbot._log_symbol(symbol),
-                            idx,
-                        )
+            if isinstance(e, getattr(pbr, "MissingEmaError", ())):
+                idx = e.args[1]
+                symbol = idx_to_symbol.get(idx)
+                if symbol:
+                    logging.error(
+                        "[ema] Missing EMA for %s (symbol_idx=%d)",
+                        Passivbot._log_symbol(symbol),
+                        idx,
+                    )
             self._emit_rust_orchestrator_returned_event(
                 rust_call_id=rust_call_id,
                 status="failed",
@@ -20576,15 +20403,41 @@ async def main():
     global bot
     bot = None
     context = {"stage": "cli", "incident_id": f"process-{int(utc_ms())}"}
+    loop = asyncio.get_running_loop()
+    live_task = asyncio.current_task()
+    shutdown_requested = False
+
+    def request_shutdown(sig):
+        if bot is None:
+            live_task.cancel()
+        else:
+            signal_handler(sig, None)
+
+    def schedule_shutdown(sig, frame):
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            _force_exit_after_repeated_signal(sig)
+        shutdown_requested = True
+        loop.call_soon_threadsafe(request_shutdown, sig)
+
+    previous_handlers = {}
     try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            previous_handlers[sig] = signal.signal(sig, schedule_shutdown)
         await _run_live(context)
+    except asyncio.CancelledError:
+        if not shutdown_requested:
+            raise
+        logging.info("[shutdown] stopped during %s", context["stage"])
     except Exception as exc:
-        # Pre-loop failures remain terminal. SystemExit prevents a second, raw
-        # interpreter traceback without changing the unsuccessful exit status.
+        # Avoid a second, raw interpreter traceback for startup failures.
         _log_process_failure(
             "passivbot startup error", exc, action="stop", context=context
         )
         raise SystemExit(1) from None
+    finally:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
 
 async def _run_live(startup_context: dict):
@@ -20793,6 +20646,7 @@ async def _run_live(startup_context: dict):
     cooldown_secs = 60
     restarts = []
     failure_state = {}
+    current_io_retry = hsl_live.CurrentIoRetry()
     while True:
 
         startup_context["stage"] = "setup_bot"
@@ -20800,9 +20654,13 @@ async def _run_live(startup_context: dict):
         bot = setup_bot(config)
         globals()["bot"] = bot
         bot._process_failure_state = failure_state
+        bot._current_io_retry_state = current_io_retry
         startup_context["stage"] = "bot_lifecycle"
         fatal_error = None
         try:
+            retry_delay = current_io_retry.retry_at - time.monotonic()
+            if retry_delay > 0.0:
+                await bot._sleep_unless_shutdown(retry_delay, stage="current_io_retry")
             await bot.start_bot()
         except FatalBotException as e:
             fatal_error = e
@@ -20840,30 +20698,23 @@ async def _run_live(startup_context: dict):
             logging.info("Bot stopped via signal; exiting main loop.")
             break
         if fatal_error is not None:
-            break
-
-        logging.info(f"restarting bot...")
-        startup_context["stage"] = "restart_cooldown"
-        print()
-        for z in range(cooldown_secs, -1, -1):
-            if bot is not None and getattr(bot, "stop_signal_received", False):
-                break
-            print(f"\rcountdown {z}...  ")
-            await asyncio.sleep(1)
-        print()
-        if bot is not None and getattr(bot, "stop_signal_received", False):
-            logging.info(
-                "Bot stopped via signal during restart cooldown; exiting main loop."
-            )
-            break
+            raise SystemExit(1)
 
         startup_context["stage"] = "restart_budget"
-        restarts.append(utc_ms())
-        restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
+        now_ms = utc_ms()
+        restarts = [x for x in restarts if x > now_ms - 1000 * 60 * 60 * 24]
         max_restarts = int(require_live_value(bot.config, "max_n_restarts_per_day"))
-        if len(restarts) > max_restarts:
-            _log_restart_budget_exhausted(restarts, max_restarts, failure_state)
-            break
+        if len(restarts) >= max_restarts:
+            _log_restart_budget_exhausted([*restarts, now_ms], max_restarts, failure_state)
+            raise SystemExit(1)
+
+        startup_context["stage"] = "restart_cooldown"
+        # The old bot is already closed. A stop during this wait cancels the
+        # lifecycle task without starting a second shutdown on that instance.
+        bot = None
+        logging.info("[restart] waiting %ds before constructing a replacement", cooldown_secs)
+        await asyncio.sleep(cooldown_secs)
+        restarts.append(utc_ms())
 
 
 if __name__ == "__main__":

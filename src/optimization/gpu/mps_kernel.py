@@ -26,7 +26,10 @@ from optimization.gpu.decimal import (
     _tm_modifier_masks,
 )
 from optimization.gpu.replay_progress import TemporalReplayProgress
-from optimization.gpu.autotune import record_compilation, record_replay_chunk, ReplayDurationController
+from optimization.gpu.autotune import (
+    CudaReplayScratchLimit, ReplayDurationController, ReplayScratchLimit, cuda_max_initial_chunk_bars,
+    record_compilation, record_replay_chunk,
+)
 from optimization.gpu.runtime import (
     gpu_device,
     compile_shader,
@@ -52,6 +55,7 @@ from optimization.gpu.model import (
     MPS_TM_MULTICOIN_CHUNK_BARS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
     CUDA_FACTUAL_HSL_REPLAY_CHUNK_BARS,
+    CUDA_MAX_PACKED_REPLAY_THREADS,
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
@@ -765,12 +769,18 @@ def _ema_anchor_multicoin_shader_library(
     core_ew_half_life_days: float = 180.0,
     cuda_tick_windows: bool = False,
     compact_hourly_ranges: bool = False,
+    cuda_global_replay_side_state: bool = False,
 ):
     device = gpu_device(torch)
     if cuda_tick_windows and (device != "cuda" or not temporal_chunking):
         raise ValueError("EMA Anchor tick windows require temporal CUDA replay")
     if compact_hourly_ranges and not cuda_tick_windows:
         raise ValueError("Compact hourly shaders require streamed tick windows")
+    if cuda_global_replay_side_state and (
+        device != "cuda" or not temporal_chunking or not hsl_factual_only
+        or hsl_fact_capacity or hsl_native_cache_capacity
+    ):
+        raise ValueError("Global side state requires temporal CUDA forward-risk replay")
     import passivbot_rust
 
     source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
@@ -787,6 +797,8 @@ def _ema_anchor_multicoin_shader_library(
         if "#if PASSIVBOT_EMA_MULTICOIN_CHUNKED" not in source:
             raise RuntimeError("GPU source is missing the EMA replay-state contract")
         source = "#define PASSIVBOT_EMA_MULTICOIN_CHUNKED 1\n" + source
+    if cuda_global_replay_side_state:
+        source = _with_cuda_global_replay_side_state(source)
     # Keep diagnostics for forced delist panic-loss parity even when the HSL
     # controllers and their per-candle scans are compiled away.
     source = _with_hsl_disabled(source, hsl_disabled)
@@ -812,6 +824,14 @@ def _ema_anchor_multicoin_shader_library(
     return compile_shader(source, cuda_coin_capacity=cuda_coin_capacity)
 
 
+def _with_cuda_global_replay_side_state(source):
+    from optimization.gpu.cuda_kernel import CUDA_GLOBAL_REPLAY_SIDE_STATE
+
+    if f"#if {CUDA_GLOBAL_REPLAY_SIDE_STATE}\n" not in source:
+        raise RuntimeError("GPU source is missing the global replay side-state contract")
+    return f"#define {CUDA_GLOBAL_REPLAY_SIDE_STATE} 1\n" + source
+
+
 @lru_cache(maxsize=32)
 def _trailing_martingale_multicoin_shader_library(
     dynamic_wel_by_tradability: bool = True,
@@ -835,12 +855,18 @@ def _trailing_martingale_multicoin_shader_library(
     compact_hourly_ranges: bool = False,
     core_metric_mask: int = 0,
     core_ew_half_life_days: float = 180.0,
+    cuda_global_replay_side_state: bool = False,
 ):
     device = gpu_device(torch)
     if metal_tick_windows and (device not in {"mps", "cuda"} or not temporal_chunking):
         raise ValueError("Tick-window shaders require temporal GPU replay")
     if compact_hourly_ranges and not metal_tick_windows:
         raise ValueError("Compact hourly shaders require streamed tick windows")
+    if cuda_global_replay_side_state and (
+        device != "cuda" or not temporal_chunking or not hsl_factual_only
+        or hsl_fact_capacity or hsl_native_cache_capacity or hsl_native_coin_cache
+    ):
+        raise ValueError("Global side state requires temporal CUDA forward-risk replay")
     import passivbot_rust
 
     source = _with_tm_loss_gate_disabled(
@@ -866,6 +892,8 @@ def _trailing_martingale_multicoin_shader_library(
                 "MPS source is missing the multicoin replay-state contract"
             )
         source = "#define PASSIVBOT_TM_MULTICOIN_CHUNKED 1\n" + source
+    if cuda_global_replay_side_state:
+        source = _with_cuda_global_replay_side_state(source)
     if hsl_capacity:
         source = f"#define PASSIVBOT_HSL_LOOKBACK {hsl_lookback}\n" + _with_hsl(
             source, hsl_capacity, hsl_fact_capacity
@@ -1167,12 +1195,18 @@ class _MulticoinReplayRunner:
     organillo_buffers = ()
     side_specialization = True
     cuda_whole_group_size = None
+    cuda_global_replay_side_state = False
+    cuda_global_replay_block_size = None
+    cuda_dense_replay_block_size = None
     temporal_chunk_bar_limit = MPS_TM_MULTICOIN_CHUNK_BARS
     decimal_coin_overrides = False
     specialize_metal_coin_capacity = False
     supports_metal_tick_windows = False
     supports_cuda_tick_windows = False
     windowed_tick_fields = _METAL_WINDOWED_TICKS
+    initial_cuda_chunk_bars = None
+    cuda_max_scratch_policy = False
+    mps_max_scratch_policy = False
     _validate_hsl_params = _validate_hsl_params
 
     def _use_disabled_hsl_specialization(self, matrix):
@@ -1541,17 +1575,44 @@ class _MulticoinReplayRunner:
 
 
     def _history_bytes_per_candidate(self):
+        max_mode_io_bytes = 0
+        if (getattr(self, "cuda_max_scratch_policy", False)
+                or getattr(self, "mps_max_scratch_policy", False)):
+            # Besides the state and reduction packet, include the scalar/fill
+            # outputs, parameter upload and the end word in the replay control.
+            max_mode_io_bytes = 4 * (self.scalar_cols + self._max_mode_parameter_cols + 1)
+            if self.collect_coin_fill_counts:
+                max_mode_io_bytes += 4 * self.n_coins
         return (
             4  # Fresh packed per-candidate end_steps word.
             + 4 * getattr(self, "core_packet_cols", 0)
             + self._hsl_history_bytes_per_candidate()
             + 4 * BOOTSTRAP_COUNT_COLS * self.replay_sides * self.n_coins
             + (int(self._replay_state_bytes or 0) if self._temporal_replay_enabled() else 0)
-
+            + max_mode_io_bytes
         )
 
     def _history_workspace_bytes(self):
+        if getattr(self, "cuda_max_scratch_policy", False):
+            # The resident input allowance includes this full window, but the
+            # live scratch budget sees free VRAM before it has been uploaded.
+            window_bytes = min(self.n, self.temporal_chunk_bar_limit + 2) * self.n_coins * sum(
+                (1 if name == "touch_min_qty_relation" else 4) * columns
+                for name, columns in _METAL_WINDOWED_TICKS if name in self._streamed_tick_paths
+            )
+            # Include control headers, the per-command launch range and stubs.
+            return 64 + window_bytes
+        if getattr(self, "mps_max_scratch_policy", False):
+            return 64 + self._mps_window_bytes()
         return 4 * 8
+
+    def _mps_window_bytes(self):
+        tick_paths = getattr(self, "_streamed_tick_paths", {})
+        if not tick_paths:
+            return 0
+        return min(self.n, self.temporal_chunk_bar_limit + 2) * self.n_coins * sum(
+            4 * columns for name, columns in _METAL_WINDOWED_TICKS if name in tick_paths
+        )
 
     def _history_batch_bytes(self, batch_size):
         return batch_size * self._history_bytes_per_candidate() + self._history_workspace_bytes()
@@ -1567,12 +1628,131 @@ class _MulticoinReplayRunner:
         # Clearing one buffer at its allocator still overlaps the new tensor
         # with every other old history. Release the complete prior dispatch
         # before params, outputs or any replacement histories are allocated.
+        self._clear_scratch()
+        self._scratch_shape = shape
+
+    def _clear_scratch(self):
         for name in (
             "_buffers", "_hsl_scratch_buffers",
             "_replay_states", "_sizes", "_full_end_steps",
         ):
             getattr(self, name).clear()
+        if self.cuda_max_scratch_policy or self.mps_max_scratch_policy:
+            self._core_buffers.clear()
+            self._core_output = None
+        self._scratch_shape = None
+
+    def _admit_mps_max_scratch(self, requested_width):
+        from optimization.gpu.residency import MetalReplayMemoryPressure, mps_max_available_bytes
+
+        shape = (requested_width, self._max_mode_parameter_cols, self._replay_state_bytes)
+        if shape == getattr(self, "_scratch_shape", None):
+            retained_bytes = sum(
+                tensor.nbytes
+                for outputs in (*self._buffers.values(), *self._hsl_scratch_buffers.values())
+                for tensor in outputs
+            ) + sum(
+                tensor.nbytes
+                for buffers in (self._replay_states, self._sizes, self._full_end_steps, self._core_buffers)
+                for tensor in buffers.values()
+            )
+        else:
+            # Shape changes release the old workspace before testing the new
+            # one. The returned buffers have already been consumed by the owner.
+            self._clear_scratch()
+            retained_bytes = 0
+        requested_bytes = self._history_batch_bytes(requested_width)
+        # The mapped input window and its uploaded tensors can overlap until
+        # the command completes. Only the extra source pages are host-only.
+        pending_host_bytes = self._mps_window_bytes()
+        available = mps_max_available_bytes(torch, pending_host_bytes=pending_host_bytes)
+        if available + retained_bytes < min(requested_bytes, self._max_mode_scratch_ceiling_bytes):
+            # Previous shapes can leave unused allocator reservations. One
+            # reclaim makes the subsequent sample authoritative for this retry.
+            torch.mps.empty_cache()
+            available = mps_max_available_bytes(torch, pending_host_bytes=pending_host_bytes)
+        self.hsl_scratch_budget_bytes = min(self._max_mode_scratch_ceiling_bytes, available + retained_bytes)
+        limit = self._history_batch_limit()
+        if limit < requested_width:
+            if retained_bytes:
+                # A narrower shape cannot reuse these tensors. Release them
+                # and calculate the actual capacity before returning a limit.
+                self._clear_scratch()
+                torch.mps.empty_cache()
+                self.hsl_scratch_budget_bytes = min(
+                    self._max_mode_scratch_ceiling_bytes,
+                    mps_max_available_bytes(torch, pending_host_bytes=pending_host_bytes),
+                )
+                limit = self._history_batch_limit()
+            if limit < 1:
+                raise MetalReplayMemoryPressure("Metal replay scratch cannot admit one candidate")
+            if limit < requested_width:
+                raise ReplayScratchLimit(requested_width, limit, device="Metal")
         self._scratch_shape = shape
+
+    def _refresh_max_mode_scratch_budget(self, requested_width, *, pending_stack_bytes=0):
+        from optimization.gpu.residency import CudaReplayMemoryPressure, cuda_max_vram_reserve_bytes
+
+        device = self.bars.device
+        free, total = map(int, torch.cuda.mem_get_info(device))
+        reserve = cuda_max_vram_reserve_bytes(total)
+        free_after_stack = free - pending_stack_bytes
+        # Allow reuse of this owner's existing tensors and keep the original
+        # allowance as a ceiling. A pressure change can shrink a batch before
+        # any of its replacement tensors are allocated.
+        replaceable = sum(
+            tensor.nbytes
+            for outputs in (*self._buffers.values(), *self._hsl_scratch_buffers.values())
+            for tensor in outputs
+        ) + sum(
+            tensor.nbytes
+            for buffers in (self._replay_states, self._sizes, self._full_end_steps, self._core_buffers)
+            for tensor in buffers.values()
+        )
+        minimum_bytes = self._history_batch_bytes(1)
+        requested_bytes = min(self._max_mode_scratch_ceiling_bytes, self._history_batch_bytes(requested_width))
+        release_scratch = False
+        reusable_scratch = 0 if pending_stack_bytes else replaceable
+        if free_after_stack < reserve or free_after_stack - reserve + reusable_scratch < requested_bytes:
+            unused = torch.cuda.memory_reserved(device) - torch.cuda.memory_allocated(device)
+            release_scratch = ((pending_stack_bytes or free_after_stack < reserve) and replaceable > 0
+                               and free_after_stack + unused + replaceable
+                               >= reserve + minimum_bytes)
+            if release_scratch:
+                # The preceding results have already been reduced to host
+                # values. During stack growth, measure what the allocator can
+                # actually return before crediting prior Torch workspaces.
+                self._clear_scratch()
+                reusable_scratch = 0
+            if unused > 0 or release_scratch:
+                # A previous shape can leave unused allocator reservations.
+                # Release them once before clamping or refusing this replay.
+                torch.cuda.empty_cache()
+                free, total = map(int, torch.cuda.mem_get_info(device))
+                reserve = cuda_max_vram_reserve_bytes(total)
+                free_after_stack = free - pending_stack_bytes
+        physical_allowance = free_after_stack - reserve + reusable_scratch
+        if pending_stack_bytes and (free_after_stack < reserve or minimum_bytes > physical_allowance):
+            raise CudaReplayMemoryPressure(
+                f"CUDA replay needs an estimated {pending_stack_bytes / 2**20:.1f} MiB of additional "
+                f"driver stack and {minimum_bytes / 2**20:.1f} MiB of scratch for one candidate. "
+                f"Free VRAM is {free / 2**20:.1f} MiB with a required "
+                f"{reserve / 2**20:.1f} MiB max-mode reserve."
+            )
+        if free_after_stack < reserve:
+            raise CudaReplayMemoryPressure("CUDA free VRAM fell below the max-mode replay reserve")
+        allowance = min(self._max_mode_scratch_ceiling_bytes, physical_allowance)
+        if minimum_bytes > allowance:
+            raise CudaReplayMemoryPressure(
+                "CUDA replay state and workspace exceed free VRAM above the max-mode reserve"
+            )
+        if release_scratch or requested_bytes > allowance < self.hsl_scratch_budget_bytes:
+            logging.info(
+                "GPU max scratch pressure | requested_candidates=%d prior_scratch_released=%s "
+                "free_mib=%.1f pending_stack_mib=%.1f allowance_mib=%.1f",
+                requested_width, release_scratch, free / 2**20, pending_stack_bytes / 2**20, allowance / 2**20,
+            )
+        self.hsl_scratch_budget_bytes = allowance
 
     def _history_batch_limit(self):
         resident = self._history_bytes_per_candidate()
@@ -1725,6 +1905,29 @@ class _MulticoinReplayRunner:
         if self._replay_state_bytes < 1:
             raise RuntimeError("GPU replay state has an invalid compiled size")
 
+    def _cuda_temporal_block_size(self, batch_size):
+        if not self.cuda_global_replay_side_state:
+            return 1
+        if self.cuda_global_replay_block_size is not None:
+            return self.cuda_global_replay_block_size
+        if not self.cuda_max_scratch_policy or batch_size < 512:
+            return 1
+        # Packed blocks improve lane use. Keep enough blocks to cover the
+        # device with two waves before choosing a wider block.
+        sm_count = torch.cuda.get_device_properties(self.bars.device).multi_processor_count
+        min_blocks = max(128, 2 * sm_count)
+        dense_block_size = self.cuda_dense_replay_block_size
+        if dense_block_size is not None and self.replay_sides == 1:
+            # Denser directional blocks are useful once enough can run in
+            # parallel, with narrower packs for larger or smaller grids.
+            dense_blocks = batch_size // dense_block_size
+            if 2 * min_blocks <= dense_blocks < 4 * min_blocks:
+                return dense_block_size
+        max_block_size = batch_size // min_blocks
+        if max_block_size >= CUDA_MAX_PACKED_REPLAY_THREADS:
+            return CUDA_MAX_PACKED_REPLAY_THREADS
+        return 4 if max_block_size >= 4 else 1
+
     def _dispatch_replay(self, library, kernel_args, end_steps, *, batch_size, scalars):
         self._last_temporal_dispatch = None
         tick_paths = getattr(self, "_streamed_tick_paths", {})
@@ -1789,15 +1992,27 @@ class _MulticoinReplayRunner:
         dispatch_count = 0
         max_dispatch_seconds = 0.0
         submission_seconds = synchronization_wait_seconds = 0.0
-        controller = ReplayDurationController(chunk_bars) if adaptive else None
+        initial_bars = chunk_bars
+        controller = None
+        trading_start = None
+        if adaptive:
+            if self.initial_cuda_chunk_bars is None:
+                controller = ReplayDurationController(chunk_bars)
+            else:
+                initial_bars = cuda_max_initial_chunk_bars(chunk_bars, self.initial_cuda_chunk_bars, batch_size)
+                controller = ReplayDurationController(chunk_bars, initial_bars=initial_bars)
+                trading_start = max(self.requested_start_idx, max(self.run_config.warmup_bars, 1) + 1)
         adaptive_adjustments = 0
         min_processed_bars, max_processed_bars = chunk_bars, 0
-        replay_progress = TemporalReplayProgress(batch_size, stop_k - 1, history_chunk_bars=chunk_bars)
+        replay_progress = TemporalReplayProgress(batch_size, stop_k - 1, history_chunk_bars=initial_bars)
         replay_started = time.perf_counter()
         next_progress = replay_started + 30.0
-        # Serial candidates need independent CUDA blocks to spread across SMs.
-        # Preserve the existing Apple SIMD-width scheduling.
-        threads_per_threadgroup = 1 if self.bars.device.type == "cuda" else min(batch_size, 32)
+        # Shared replay state has one candidate owner per CUDA block. The
+        # global replay specialization can group independent candidates.
+        if self.bars.device.type == "cuda":
+            threads_per_threadgroup = self._cuda_temporal_block_size(batch_size)
+        else:
+            threads_per_threadgroup = min(batch_size, 32)
         if profile_pipeline:
             launch_profile = _replay_launch_profile(
                 kernel, self.replay_kernel_name, (batch_size, 1, 1),
@@ -1808,7 +2023,9 @@ class _MulticoinReplayRunner:
         while True:
             self.interrupt_check()
             dispatch_bars = controller.bars if controller is not None else chunk_bars
-            completed_k = min(begin_k + dispatch_bars, stop_k)
+            warming_up = trading_start is not None and begin_k < trading_start
+            phase_end = min(trading_start, stop_k) if warming_up else stop_k
+            completed_k = min(begin_k + dispatch_bars, phase_end)
             started = time.perf_counter()
             with _metal_tick_window_arguments(
                 kernel_args, tick_paths, begin=begin_k, stop=completed_k, available=self.n,
@@ -1840,7 +2057,6 @@ class _MulticoinReplayRunner:
                 submission_seconds += submitted - started
                 synchronization_wait_seconds += completed - submitted
             max_dispatch_seconds = max(max_dispatch_seconds, dispatch_seconds)
-            completed_k = min(begin_k + dispatch_bars, stop_k)
             processed_bars = completed_k - begin_k
             min_processed_bars = min(min_processed_bars, processed_bars)
             max_processed_bars = max(max_processed_bars, processed_bars)
@@ -1869,6 +2085,12 @@ class _MulticoinReplayRunner:
                 break
             if controller is not None:
                 controller.observe(processed_bars, dispatch_seconds)
+                if warming_up and completed_k == trading_start:
+                    # Warmup may run faster than trading. Start the active
+                    # phase within the original cold-launch work allowance.
+                    controller = ReplayDurationController(
+                        chunk_bars, initial_bars=min(initial_bars, controller.bars)
+                    )
                 adaptive_adjustments += int(controller.bars != dispatch_bars)
             begin_k = completed_k
         self.interrupt_check()
@@ -1951,8 +2173,24 @@ class _MulticoinReplayRunner:
             library, scalar_cold = _cached_library_with_miss(loader, *library_args)
             cold |= scalar_cold
             self._prepare_replay_state_layout(library, library_args)
+        if self.cuda_max_scratch_policy:
+            self._max_mode_parameter_cols = matrix.shape[1]
+            pending_stack = library.pending_stack_bytes(self.replay_kernel_name, self.bars.device.index)
+            self._refresh_max_mode_scratch_budget(len(matrix), pending_stack_bytes=pending_stack)
         compiled = time.perf_counter() if profile else 0.0
-        if self._history_bytes_per_candidate():
+        if self.cuda_max_scratch_policy:
+            limit = self._history_batch_limit()
+            if len(matrix) > limit:
+                raise CudaReplayScratchLimit(len(matrix), limit)
+            if pending_stack:
+                logging.info(
+                    "GPU max CUDA stack | kernel=%s pending_stack_mib=%.1f admitted_candidates=%d",
+                    self.replay_kernel_name, pending_stack / 2**20, len(matrix),
+                )
+        elif self.mps_max_scratch_policy:
+            self._max_mode_parameter_cols = matrix.shape[1]
+            self._admit_mps_max_scratch(len(matrix))
+        elif self._history_bytes_per_candidate():
             split = self._run_history_batches(
                 params, profile=profile, end_steps=end_steps
             )
@@ -2112,6 +2350,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
         )
 
     replay_kernel_name = "passivbot_ema_anchor_multicoin"
+    cuda_dense_replay_block_size = 16
     replay_state_size_kernel_name = "passivbot_ema_multicoin_replay_state_bytes"
 
     def _temporal_replay_enabled(self):
@@ -2190,6 +2429,7 @@ class MpsEmaAnchorMulticoinRunner(_MulticoinReplayRunner):
             self.core_metric_mask, self.core_ew_half_life_days,
             bool(getattr(self, "_streamed_tick_paths", {})),
             bool(getattr(self, "compact_hourly_ranges", False)),
+            self.cuda_global_replay_side_state,
         )
 
 
@@ -2532,6 +2772,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             bool(getattr(self, "_streamed_tick_paths", {})),
             bool(getattr(self, "compact_hourly_ranges", False)),
             self.core_metric_mask, self.core_ew_half_life_days,
+            self.cuda_global_replay_side_state,
         )
         return _trailing_martingale_multicoin_shader_library, args
 

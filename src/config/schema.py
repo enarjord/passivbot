@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-from .gpu import GPU_SCREENING_DEFAULTS
+from .gpu import GPU_SCREENING_DEFAULTS, GPU_TUNING_DEFAULT
 from .prefilter import PREFILTER_DEFAULTS
 from .optimize_bounds import get_optimize_bounds_defaults
 from .bot_defaults import get_common_bot_defaults
@@ -125,7 +125,7 @@ def _build_template_config():
                         "max_drawdown_fraction": 1.0,
                         "memory_ema_span_minutes": 43200.0,
                     },
-                    "unstuck": {"memory_ema_span_minutes": 96141.557},
+                    "unstuck": {"memory_ema_span_minutes": 85511.137},
                 },
                 "global": get_common_bot_defaults(),
                 "long": _side_bot_prototype(),
@@ -241,8 +241,9 @@ def _build_template_config():
                     "population_size": 128,
                     "seed": None,
                     "gpu": {
-                        "tuning_mode": "auto",
+                        "tuning_mode": GPU_TUNING_DEFAULT,
                         "batch_size": None,
+                        "search_cohort_size": None,
                         "max_dispatch_candidate_bars": None,
                         "checkpoint_interval_seconds": 5.0,
                         "screening": deepcopy(GPU_SCREENING_DEFAULTS),

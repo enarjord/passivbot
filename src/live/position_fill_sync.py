@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from functools import wraps
 import logging
 import time
+from typing import Callable
 
 SETTLE_SECONDS = 5.0
 MAX_WAIT_SECONDS = 15.0
@@ -32,6 +33,8 @@ class WriteContext:
     bot: object
     order: dict
     guarded: bool
+    action: str | None
+    recheck: Callable[[dict], bool] | None
     submitted: bool = False
     callbacks: list = field(default_factory=list)
 
@@ -49,15 +52,17 @@ def check_transport_admission(*, is_write=True):
     context = _write_context.get()
     if context is None:
         return
-    if not permits(context.bot, context.order):
+    settling = not permits(context.bot, context.order, context.action)
+    if settling or (
+        is_write and context.recheck is not None and not context.recheck(context.order)
+    ):
         if context.submitted:
             # A prior attempt may already exist at the exchange. Preserve its
             # ambiguous submission provenance instead of reporting "never sent".
             from ccxt.base.errors import NetworkError
 
-            raise NetworkError(
-                "position/fill settling deferred a submitted request retry"
-            )
+            reason = "position/fill settling" if settling else "current write admission"
+            raise NetworkError(f"{reason} deferred a submitted request retry")
         raise WriteDeferred()
     if is_write and not context.submitted:
         context.submitted = True
@@ -67,7 +72,7 @@ def check_transport_admission(*, is_write=True):
 
 
 @contextmanager
-def connector_context(bot, order):
+def connector_context(bot, order, action=None, *, recheck=None):
     client = getattr(bot, "cca", None)
     # CCXT fetch2 awaits its limiter before entering fetch. Install once; task
     # context keeps unrelated account reads and sibling writes independent.
@@ -82,13 +87,16 @@ def connector_context(bot, order):
 
         client.fetch = guarded_fetch
         client._position_fill_transport_guard = True
-    token = _write_context.set(
-        WriteContext(
-            bot, order, bool(getattr(client, "_position_fill_transport_guard", False))
-        )
+    context = WriteContext(
+        bot,
+        order,
+        bool(getattr(client, "_position_fill_transport_guard", False)),
+        action,
+        recheck,
     )
+    token = _write_context.set(context)
     try:
-        yield
+        yield context
     finally:
         _write_context.reset(token)
 
@@ -185,12 +193,16 @@ def fetch_ready(bot):
     return state(bot).fetch_ready()
 
 
-def permits(bot, order):
+def permits(bot, order, action=None):
+    # A current HSL protection plan does not need fill history to stop or
+    # reduce exposure. Recognition is by identity within the active dispatch.
+    batch = getattr(getattr(bot, "_hsl_live", None), "_protective_batch", None)
+    if batch is not None and batch.contains(order, action):
+        return True
     gate = getattr(bot, "_position_fill_sync", None)
     if gate is None:
         return True
     key = (order.get("symbol"), order.get("position_side", order.get("pside")))
-    # All actions are scoped, including cancels and protective market orders.
     # Aggregate HSL decisions consume every contributing position on that scope.
     keys = {key}
     config = bot.config

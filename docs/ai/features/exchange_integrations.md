@@ -3,6 +3,14 @@
 Only task-specific, high-impact contracts and quirks are listed here. Authenticated verification
 requires explicit user approval; prefer offline request-construction tests.
 
+
+## Broker Attribution
+
+Changes to broker-code or broker-agreement attribution require explicit approval. Registry
+loading must fail visibly on missing registries, invalid data, or unknown exchanges. Every
+relevant order request must carry the required field, header, or tag. Test changes at the CCXT
+or raw signed-request boundary.
+
 ## Supported Live-Exchange Boundary
 
 The supported production live connectors are Binance, Bybit, Bitget, Bitunix, OKX, Gate.io,
@@ -44,6 +52,28 @@ restart deliberately clears the state and retries immediately.
 Future connectors encountering an equivalent venue rule must add their own exact classifier. Do
 not generalize one exchange's code, match human-readable messages, persist cooldowns across runs, or
 make held positions wholly nontradable.
+
+## HTTP Retry Delays
+
+Live CCXT clients and the native Bitunix transport carry a valid HTTP `Retry-After`
+delay on the transport exception from that response. Parse nonnegative integer
+seconds or an HTTP date, relative to the response `Date` when available and the
+local wall clock otherwise. Preserve the exchange's error classification and avoid
+an inline retry of the request when the response requires a positive delay. The
+owner schedules current-account transport recovery. Other retry policies retain
+their own input readiness and scope. Never read shared last-response headers to
+associate a retry delay with a request.
+
+## CCXT Position Snapshot Readiness
+
+The shared CCXT position normalizer, also used by OKX and Bybit, requires a
+finite contract count on every position row. Explicit zero contracts are flat.
+Held rows require a symbol, a finite positive entry price, and a canonical
+long/short side. Bybit validates held rows before pagination deduplication and
+rejects a provided native hedge index if it contradicts the normalized side.
+Bybit follows the exchange cursor even if the current page contributes no held
+positions. A malformed row or incomplete pagination makes the whole positions
+surface unavailable.
 
 ## Private Order Websocket Normalization
 
@@ -353,6 +383,26 @@ sessions; do not suppress arbitrary error messages or bypass authentication.
 
 Primary reference: [OKX WebSocket port migration](https://www.okx.com/docs-v5/log_en/).
 
+### Account wallet balance
+
+Use the unfiltered REST trading-account balance for one account-wide USD-equivalent
+wallet value. Subtract each currency's unrealized PnL from `totalEq` after
+converting it to USD with that detail row's `eqUsd / eq`. Detail `upl` includes
+both cross and isolated PnL. Account `upl` covers only cross margin. Use every
+currency detail, regardless of its collateral flag, to match the scope of
+`totalEq`.
+
+A missing or malformed account total, missing or malformed detail, duplicate
+currency, unknown detail PnL, or unproven conversion for nonzero PnL makes the
+balance unavailable. An explicit zero PnL needs no conversion. An empty detail
+list represents a zero wallet only with explicit zero account equity and gross
+position notional and no contradictory reported isolated equity or account PnL.
+A unified quote-currency total cannot prove the account-wide balance.
+Staged and direct capture use the same parser.
+
+Primary references: [OKX trading-account balance](https://www.okx.com/docs-v5/en/#trading-account-rest-api-get-balance)
+and [OKX equity and PnL formulas](https://www.okx.com/help/iii-single-currency-margin-cross-margin-trading#asset-fields).
+
 ### Long/short-mode close semantics
 
 Problem:
@@ -368,6 +418,19 @@ Handling in Passivbot:
    one-way `position_side` against side plus close-only effect.
 3. Prefer the raw exchange `info` field over a CCXT top-level default when proving close-only
    semantics.
+
+### Net-mode fill attribution
+
+Use native transaction-detail subtypes that identify an opening or closing position side,
+and reject conflicts with the execution side, reduce-only evidence, or realized PnL.
+An explicit reduce-only flag or a finite nonzero realized PnL identifies a reduction when
+the fill lacks a side-specific subtype. A generic buy/sell subtype, a false reduce-only
+flag, and zero realized PnL cannot distinguish an opening trade from a break-even close.
+Reject unresolved history before advancing fill coverage. Recheck the preserved raw
+evidence when loading existing net-mode cache rows and use the cache rebuild path when
+the original sides cannot be recovered.
+
+[OKX transaction details](https://www.okx.com/docs-v5/en/#order-book-trading-trade-get-transaction-details-last-3-days)
 
 ## Gate.io Futures
 

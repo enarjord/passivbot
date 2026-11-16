@@ -688,6 +688,75 @@ async def test_quote_read_can_finish_after_the_wave_time_slice():
     assert SYMBOL in result and started == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["position_side", "portfolio"])
+@pytest.mark.parametrize("network_error", [False, True], ids=["unavailable", "network"])
+async def test_hsl_reuses_held_quote_after_transient_refresh_failure_until_expiry(
+    monkeypatch, mode, network_error
+):
+    from dataclasses import replace
+    from ccxt.base.errors import NetworkError
+    from live.market_snapshot import MarketSnapshotUnavailable
+    from test_hsl_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    import utils
+
+    peer = "PEER/USDT:USDT"
+    symbols = {SYMBOL, peer}
+    max_age_ms = 10_000
+    now = NOW
+    error = NetworkError if network_error else MarketSnapshotUnavailable
+    refresh_failed = False
+    sample = quotes()[SYMBOL]
+
+    async def read(symbols, *, record_surface):
+        assert record_surface is False
+        (symbol,) = symbols
+        if symbol == SYMBOL and refresh_failed:
+            raise error("offline quote outage")
+        return {symbol: replace(sample, symbol=symbol, fetched_ms=now - 100)}
+
+    monkeypatch.setattr(utils, "utc_ms", lambda: now)
+    bot = make_bot(mode)
+    bot.get_exchange_time = lambda: now
+    bot.approved_coins_minus_ignored_coins = {"long": symbols, "short": set()}
+    bot._live_market_snapshot_max_age_ms = lambda: max_age_ms
+    bot._get_orchestrator_market_snapshots = read
+    bot.positions[peer] = {"long": dict(size=1.0, price=100.0)}
+    bot.c_mults[peer] = 1.0
+    bot.qty_steps[peer] = 0.1
+    ledger = bot._ensure_freshness_ledger()
+    instance = hsl_live.owner(bot)
+
+    async def capture():
+        for surface in ("balance", "positions", "open_orders"):
+            ledger.stamp(surface, now_ms=now - 200)
+        return instance.capture(await instance.acquire_quotes(symbols))
+
+    assert (await capture()).permission(SYMBOL, "long")[0] == "panic"
+    old_quote = instance.quotes[SYMBOL]
+
+    refresh_failed = True
+    now = old_quote.fetched_ms + max_age_ms
+    wave = await capture()
+    assert instance.quotes[SYMBOL] is old_quote
+    assert old_quote.fetched_ms in wave.mark_observed_ms
+    assert wave.permission(peer, "long")[0] == "panic"
+    order = {"symbol": peer, "position_side": "long"}
+    instance.bind(wave, (), (order,))
+    assert instance.admit(order)
+
+    now += 1
+    assert not instance.admit(order)
+    wave = await capture()
+    assert wave.permission(peer, "long")[0] == "unavailable"
+    assert [item.reason for item in wave.unavailable] == ["current_mark_unavailable"]
+
+    refresh_failed = False
+    wave = await capture()
+    assert instance.quotes[SYMBOL].fetched_ms > old_quote.fetched_ms
+    assert wave.permission(peer, "long")[0] == "panic"
+
+
 def test_planner_flat_padding_does_not_invalidate_an_unchanged_protective_position(
     monkeypatch,
 ):

@@ -10,8 +10,44 @@ import json
 import logging
 from types import SimpleNamespace
 
+from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_tuning_mode
 from optimization.gpu.datasets import PreparedGpuDataset
 from optimization.gpu.executor import GpuBacktestService
+
+
+_DEFAULT = object()
+
+
+def cuda_initial_candidate_width():
+    """Seed the CUDA max search with work for packed replay blocks.
+
+    This is a startup demand estimate. The worker admits only compatible work
+    within its prepared memory limits and tunes each dataset from warm replays.
+    """
+    import cupy
+    import torch
+    from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES, CUDA_MAX_PACKED_REPLAY_THREADS
+    from optimization.gpu.runtime import gpu_device
+
+    if gpu_device(torch) != "cuda":
+        raise ValueError("CUDA wave sizing requires an NVIDIA CUDA device")
+    attributes = cupy.cuda.Device(torch.cuda.current_device()).attributes
+    blocks = attributes["MultiProcessorCount"] * attributes["MaxBlocksPerMultiprocessor"]
+    candidates = 2 * blocks * CUDA_MAX_PACKED_REPLAY_THREADS
+    return min(CUDA_MAX_BATCH_CANDIDATES, 1 << (candidates.bit_length() - 1))
+
+
+def max_candidate_widths(device):
+    """Return the optimizer startup width and physical ceiling for max tuning."""
+    from optimization.gpu.model import (
+        CUDA_MAX_BATCH_CANDIDATES, MPS_MAX_BATCH_CANDIDATES, MPS_MAX_INITIAL_BATCH_CANDIDATES,
+    )
+
+    if device == "mps":
+        return MPS_MAX_INITIAL_BATCH_CANDIDATES, MPS_MAX_BATCH_CANDIDATES
+    if device == "cuda":
+        return cuda_initial_candidate_width(), CUDA_MAX_BATCH_CANDIDATES
+    raise ValueError(f"Unsupported max GPU device {device!r}")
 
 
 def _metal_system_headroom():
@@ -41,32 +77,54 @@ class NativeBacktestService:
 
     _required_device = None
 
-    def __init__(self, *, batch_size=64, max_pending=1024, max_batch_delay=None,
+    def __init__(self, *, batch_size=_DEFAULT, max_pending=_DEFAULT, max_batch_delay=None,
                  max_dispatch_candidate_bars=500_000_000, interrupt_check=None,
-                 tuning_mode="auto", input_memory_budget=None, on_inputs_prepared=None,
-                 auto_request_capacity=None):
+                 tuning_mode=GPU_TUNING_DEFAULT, input_memory_budget=None, on_inputs_prepared=None,
+                 auto_request_capacity=None, auto_batch_size_limit=None, max_cohort_width=None,
+                 host_preparation=None):
         from optimization.gpu.autotune import is_auto
         from optimization.gpu.execution_tuning import ExecutionBatchTuner
+        from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES, CUDA_MAX_INITIAL_BATCH_CANDIDATES
 
-        if isinstance(tuning_mode, str):
-            tuning_mode = tuning_mode.strip().lower()
-        if not isinstance(tuning_mode, str) or tuning_mode not in {"auto", "refresh", "off"}:
-            raise ValueError("GPU tuning mode must be auto, refresh, or off")
+        tuning_mode = resolve_gpu_tuning_mode(tuning_mode)
+        self._max_throughput = tuning_mode == "max"
+        self._max_cohort_width = max_cohort_width
+        if batch_size is _DEFAULT:
+            batch_size = None if self._max_throughput else 64
+        if max_pending is _DEFAULT:
+            max_pending = CUDA_MAX_BATCH_CANDIDATES if self._max_throughput else 1024
+        if max_cohort_width is not None and (
+            not self._max_throughput or type(max_cohort_width) is not int or max_cohort_width < 1
+        ):
+            raise ValueError("GPU max cohort width must be a positive integer in max mode")
         automatic = is_auto(batch_size) and tuning_mode != "off"
         diagnostics = logging.getLogger().isEnabledFor(logging.INFO)
-        self._batch_tuner = (ExecutionBatchTuner(headroom=self._headroom, diagnostics=diagnostics)
-                             if automatic else None)
+        self._batch_tuner = (
+            ExecutionBatchTuner(
+                initial=(max_cohort_width or CUDA_MAX_INITIAL_BATCH_CANDIDATES) if self._max_throughput else 64,
+                headroom=self._max_headroom if self._max_throughput else self._headroom,
+                diagnostics=diagnostics,
+                expandable_producer=max_cohort_width is not None,
+                max_throughput=self._max_throughput,
+                host_preparation=host_preparation,
+            ) if automatic else None
+        )
         requested_width = max_pending if automatic else (64 if is_auto(batch_size) else batch_size)
+        if auto_batch_size_limit is not None:
+            if type(auto_batch_size_limit) is not int or auto_batch_size_limit < 1:
+                raise ValueError("automatic batch size limit must be a positive integer")
+            if automatic:
+                requested_width = min(requested_width, auto_batch_size_limit)
         if auto_request_capacity is not None and (
             type(auto_request_capacity) is not int or auto_request_capacity < 1
         ):
             raise ValueError("automatic request capacity must be a positive integer")
         # Candidate-major admission can place several scenario requests per
-        # candidate in the queue. Expand transport capacity independently of
-        # the original dispatch ceiling when width tuning is active.
+        # candidate in the queue. Transport capacity is independent of the
+        # dispatch width in automatic policies and CUDA max.
         request_capacity = (
             max(max_pending, auto_request_capacity)
-            if automatic and auto_request_capacity is not None else max_pending
+            if (automatic or self._max_throughput) and auto_request_capacity is not None else max_pending
         )
         self._batch_policy = self._batch_tuner or ExecutionBatchTuner(initial=requested_width, enabled=False)
         if (isinstance(max_dispatch_candidate_bars, bool)
@@ -90,12 +148,21 @@ class NativeBacktestService:
                              else max_batch_delay),
             worker_context=self._worker_scope,
             batch_policy=self._batch_policy,
+            accumulate_after_preparation=self._max_throughput,
             diagnostics=diagnostics,
         )
         self._batch_size = self._executor.batch_size
 
     def diagnostics_snapshot(self):
         return self._executor.diagnostics_snapshot()
+
+    @property
+    def cohort_width(self):
+        return self._batch_tuner.cohort_width if self._batch_tuner is not None else None
+
+    @property
+    def accepted_cohort_width(self):
+        return self._batch_tuner.accepted_cohort_width if self._batch_tuner is not None else None
 
     @staticmethod
     def _headroom():
@@ -110,6 +177,21 @@ class NativeBacktestService:
         else:
             free, total = torch.cuda.mem_get_info()
         return free >= max(256 * 1024**2, total * 0.2)
+
+    @staticmethod
+    def _max_headroom():
+        import torch
+        from optimization.gpu.residency import cuda_max_vram_reserve_bytes
+
+        free, total = torch.cuda.mem_get_info()
+        return free > cuda_max_vram_reserve_bytes(total)
+
+    @staticmethod
+    def _mps_max_headroom():
+        import torch
+        from optimization.gpu.residency import mps_max_available_bytes
+
+        return mps_max_available_bytes(torch, require_system_telemetry=False) > 0
 
     @staticmethod
     def _dispatch_ceiling(replay):
@@ -132,17 +214,42 @@ class NativeBacktestService:
             from optimization.gpu.residency import (
                 capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
             )
-            capture = (capture_mps_input_memory_budget if device == "mps"
-                       else capture_cuda_input_memory_budget)
-            self._input_memory_budget = capture(torch)
-        if self._batch_tuner is not None and device == "mps":
-            # Device selection stays on the owner, before prepared replay limits
-            # create a controller and clamp its initial width.
-            from optimization.gpu.model import MPS_TM_MULTICOIN_CHUNK_CANDIDATES
-            self._batch_tuner.initial = MPS_TM_MULTICOIN_CHUNK_CANDIDATES
+            if device == "mps":
+                if self._max_throughput:
+                    self._input_memory_budget = capture_mps_input_memory_budget(torch, max_throughput=True)
+                else:
+                    self._input_memory_budget = capture_mps_input_memory_budget(torch)
+            elif self._max_throughput:
+                self._input_memory_budget = capture_cuda_input_memory_budget(torch, max_throughput=True)
+            else:
+                self._input_memory_budget = capture_cuda_input_memory_budget(torch)
+        if device == "cuda":
+            from optimization.gpu.residency import CudaInputMemoryBudget
+
+            if (not isinstance(self._input_memory_budget, CudaInputMemoryBudget)
+                    or self._input_memory_budget.max_throughput != self._max_throughput):
+                raise ValueError("CUDA input memory budget does not match the GPU tuning mode")
+        if device == "mps":
+            if self._max_throughput:
+                from optimization.gpu.residency import MpsInputMemoryBudget
+
+                if (not isinstance(self._input_memory_budget, MpsInputMemoryBudget)
+                        or not self._input_memory_budget.max_throughput):
+                    raise ValueError("Metal input memory budget does not match the GPU tuning mode")
+            if self._batch_tuner is not None:
+                # Select width on the owner before the prepared replay clamps it.
+                from optimization.gpu.model import MPS_TM_MULTICOIN_CHUNK_CANDIDATES
+
+                if self._max_throughput:
+                    initial, ceiling = max_candidate_widths(device)
+                    self._batch_tuner.initial = min(self._max_cohort_width or initial, ceiling)
+                    self._batch_tuner.headroom = self._mps_max_headroom
+                    self._batch_tuner.probe_inner_growth = True
+                else:
+                    self._batch_tuner.initial = MPS_TM_MULTICOIN_CHUNK_CANDIDATES
         scope = metal_residency_scope if device == "mps" else cuda_residency_scope
         memory_options = ({"input_memory_budget": self._input_memory_budget}
-                          if device == "cuda" else {})
+                          if device == "cuda" or self._max_throughput else {})
         try:
             with scope(**memory_options) as residency:
                 self._residency = residency
@@ -179,15 +286,23 @@ class NativeBacktestService:
                     input_memory_budget=self._input_memory_budget,
                     factual_capacity_hints=capacity_hints,
                     automatic_scratch_budget=self._batch_tuner is not None,
+                    max_throughput=self._max_throughput,
                 )
                 try:
+                    def constrain(*, split=False):
+                        transport = None
+                        if self._max_throughput and self._batch_tuner is not None:
+                            transport = (replay.data["stream_tick_inputs"], replay.data["compact_hourly_ranges"])
+                        self._batch_policy.constrain(dataset_id, self._dispatch_ceiling(replay),
+                                                     split=split, transport=transport)
+
                     if self._on_inputs_prepared is not None:
                         self._on_inputs_prepared()
                     # Discover physical limits after claiming one ownership request.
                     # The executor fills the first dispatch up to the prepared
                     # ceiling before simulation. Runners remain worker-owned.
                     self._residency.activate(replay)
-                    self._batch_policy.constrain(dataset_id, self._dispatch_ceiling(replay))
+                    constrain()
                     self._batch_policy.width(dataset_id, self._batch_size)
                     def evaluate(candidates):
                         results = replay.evaluate_results(candidates)
@@ -195,11 +310,11 @@ class NativeBacktestService:
                         # Successful replay may have learned a larger factual
                         # history, or switched effective HSL policies off/on.
                         # Apply its current physical limit before another claim.
-                        self._batch_policy.constrain(dataset_id, self._dispatch_ceiling(replay))
+                        constrain(split=self._max_throughput and replay.last_evaluation_split)
                         return results
                     yield SimpleNamespace(evaluate=evaluate)
                 finally:
-                    del replay
+                    replay = None
 
         self._executor.register_dataset_factory(dataset_id, factory)
         self._factual_capacities[dataset_id] = capacity_hints

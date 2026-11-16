@@ -30,7 +30,9 @@ to the caller. It does not mean every failed symbol fetch must crash the whole b
 6. Validate a produced trading decision before downstream policy consumes it. A malformed Rust
    ideal-order batch is fatal before reconciliation; prior ideals, actual orders, and partial output
    are not fallbacks. When submitted inputs deterministically define an output field, validate the
-   exact result against the full input policy rather than checking only a coarse permission flag.
+   exact result against the full input policy. Reuse native arithmetic for exact numeric checks
+   that share order sizing or rounding formulas. Python checks the result against the submitted
+   input and owns fatal batch rejection.
 
 ## Forbidden Patterns
 
@@ -57,9 +59,45 @@ Account-critical surfaces are required before any exchange action:
 
 The reduced Rust full-position close API does not need balance to size a close: it
 accepts signed size, book, tick size and execution policy. This numerical API does
-not waive live admission requirements. HSL must derive its current decision from
-fresh account facts, including balance, before each protective write. Malformed
-or incomplete close batches are fatal.
+not waive live admission requirements. All writes need fresh account facts,
+including balance. A dedicated HSL protection batch can submit its bound
+cancellations and reduce-only panic closes against the same confirmed account
+observation. Recheck that observation and current Rust permission before each
+submission. If a changed fact or permission is observed, defer affected actions. An
+unacknowledged or ambiguous outcome stops the batch and requires a fresh account
+read, as does completion of a submitted batch. Malformed or incomplete close
+batches are fatal.
+
+Ordinary creates and cancels recheck current write admission at guarded
+transport boundaries after connector queueing. A denial before submission
+does not record an attempt or itself request post-write confirmation.
+A later denial cannot erase a prior submission attempt or its confirmation
+requirement.
+
+A connector may explicitly support a bounded ordinary cancellation wave while HSL
+is disabled and no panic or risk-critical create is planned. Submit the selected
+cancels serially from one confirmed ordinary plan,
+with current write admission checked after transport queueing. A continuation may
+enter transport only before account expiry and within one configured execution-delay
+interval from the wave start. The initial cancellation and submitted requests retain their normal
+transport timeouts. Stop after an unacknowledged or ambiguous response, changed
+required facts, or newly applicable protection. When at least one member entered
+transport, request fresh account confirmation after the wave. Creates in the same
+plan wait for a fresh ordinary plan. This does not change the reconciliation or
+create-only replacement churn contracts.
+
+The live execution owner backs off transport failures, including exchange backpressure,
+with an interruptible bounded schedule and logs persistent outages. A valid request-local
+HTTP `Retry-After` on a current I/O transport failure can extend that wait. The owner
+uses a monotonic deadline and does not retry the failed cycle before it expires. Ordinary
+readiness deferrals keep their existing cadence. An outage does not authorize action on an
+expired cohort.
+During startup preparation the same deadline gates current-account refreshes for protection.
+The independent preparation task can complete while that deadline is pending.
+A completed ordinary preparation with missing quotes or a plain transport failure defers
+only that ordinary plan. Protection still refreshes its own inputs on schedule.
+Exchange backpressure, explicit request-local retry delays and nonce errors retain their
+owner-level recovery policies.
 
 Market snapshots must be fresh for the symbols acted upon. Candles and EMAs are required only for
 order classes whose strategy or risk decision consumes them. Stale flat-symbol candles must not

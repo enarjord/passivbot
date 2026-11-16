@@ -2199,14 +2199,14 @@ async def test_ensure_loaded_persists_repaired_hyperliquid_fee_notional(tmp_path
             "c_mult": 1.0,
             "raw": [
                 {
-                    "source": "fetch_my_trades",
+                    "source": "legacy",
                     "data": {
                         "cost": 106.72464,
                         "fee": {"currency": "USDC", "cost": 0.048026},
                     },
                 },
                 {
-                    "source": "fetch_my_trades",
+                    "source": "legacy",
                     "data": {
                         "cost": 257.26712,
                         "fee": {"currency": "USDC", "cost": 0.11577},
@@ -4189,7 +4189,7 @@ async def test_hyperliquid_fetcher_basic(monkeypatch):
                 "id": "tid-hl-1",
                 "timestamp": base_ts,
                 "symbol": "BTC/USDC:USDC",
-                "side": "buy",
+                "side": "sell",
                 "amount": 0.1,
                 "price": 30000.0,
                 "info": {
@@ -4204,7 +4204,7 @@ async def test_hyperliquid_fetcher_basic(monkeypatch):
                 "id": "tid-hl-1b",
                 "timestamp": base_ts,
                 "symbol": "BTC/USDC:USDC",
-                "side": "buy",
+                "side": "sell",
                 "amount": 0.2,
                 "price": 30000.0,
                 "info": {
@@ -4248,7 +4248,7 @@ async def test_hyperliquid_fetcher_uses_cache():
                 "side": "sell",
                 "amount": 0.5,
                 "price": 2000.0,
-                "info": {"closedPnl": "-2.0", "dir": "Close Short"},
+                "info": {"closedPnl": "-2.0", "dir": "Close Long"},
             }
         ]
     ]
@@ -4264,6 +4264,183 @@ async def test_hyperliquid_fetcher_uses_cache():
     event = events[0]
     assert event["client_order_id"] == "cached-id"
     assert event["pb_order_type"] == "entry_initial_normal_long"
+
+
+def _hyperliquid_flip_trade(side, start):
+    return {
+        "id": "101",
+        "timestamp": 1_700_000_000_000,
+        "symbol": "BTC/USDC:USDC",
+        "side": side,
+        "amount": 3.0,
+        "price": 100.0,
+        "cost": 300.0,
+        "fee": {"currency": "USDC", "cost": 0.36},
+        "info": {
+            "coin": "BTC",
+            "tid": 101,
+            "time": 1_700_000_000_000,
+            "side": "A" if side == "sell" else "B",
+            "startPosition": str(start),
+            "sz": "3.0",
+            "px": "100.0",
+            "closedPnl": "5.0",
+            "feeToken": "USDC",
+            "fee": "0.30",
+            "builderFee": "0.06",
+            "dir": "ambiguous display",
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side,start", [("sell", 2), ("buy", -2)])
+async def test_hyperliquid_flip_is_idempotent_through_overlap_and_restart(tmp_path, side, start):
+    trade = _hyperliquid_flip_trade(side, start)
+    timestamp = trade["timestamp"]
+    api = _FakeHyperliquidAPI([[trade], [trade], [trade], [trade]])
+    fetcher = HyperliquidFetcher(api)
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=fetcher, cache_path=tmp_path
+    )
+
+    for _ in range(2):
+        await manager.refresh(start_ms=timestamp - 1, end_ms=timestamp + 1)
+        close, opening = manager.get_events()
+        assert [close.id, opening.id] == ["101:close", "101:open"]
+        assert [close.source_ids, opening.source_ids] == [["101:close"], ["101:open"]]
+        assert [close.position_side, opening.position_side] == (
+            ["long", "short"] if side == "sell" else ["short", "long"]
+        )
+        assert [abs(close.qty), abs(opening.qty)] == [2.0, 1.0]
+        assert [close.psize, opening.psize] == [0.0, 1.0]
+        assert [close.pprice, opening.pprice] == [0.0, 100.0]
+        assert [close.pnl, opening.pnl] == [5.0, 0.0]
+        assert [close.fee_paid, opening.fee_paid] == pytest.approx([-0.2, -0.1])
+        assert [close.fee_notional, opening.fee_notional] == [200.0, 100.0]
+    snapshot = manager.get_events()
+
+    restarted = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=fetcher, cache_path=tmp_path
+    )
+    await restarted.ensure_loaded()
+    assert restarted.get_events() == snapshot
+    await restarted.refresh(start_ms=timestamp - 1, end_ms=timestamp + 1)
+    assert restarted.get_events() == snapshot
+    assert restarted._empty_refresh_proof is not None
+    await restarted.refresh(start_ms=timestamp - 1, end_ms=timestamp + 1)
+    assert restarted.get_events() == snapshot
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_replays_a_legacy_flip_before_new_overlap(tmp_path):
+    trade = _hyperliquid_flip_trade("sell", 2)
+    timestamp = trade["timestamp"]
+    # Legacy cache represented the entire execution as one short opening.
+    legacy = dict(HyperliquidFetcher._normalize_trade_components(trade)[1])
+    legacy.update(
+        id="101", source_ids=["101"], qty=-3.0, pnl=5.0,
+        fees=trade["fee"], raw=[{"source": "fetch_my_trades", "data": trade}],
+    )
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(legacy)])
+    fetcher = HyperliquidFetcher(_FakeHyperliquidAPI([[trade]]))
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=fetcher, cache_path=tmp_path
+    )
+
+    await manager.ensure_loaded()
+    assert [event.id for event in cache.load()] == ["101:close", "101:open"]
+    await manager.refresh(start_ms=timestamp - 1, end_ms=timestamp + 1)
+    assert [event.id for event in manager.get_events()] == ["101:close", "101:open"]
+    assert sum(event.fee_paid for event in manager.get_events()) == pytest.approx(-0.3)
+
+
+def test_hyperliquid_flip_fee_fallback_uses_component_notional():
+    trade = _hyperliquid_flip_trade("sell", 2)
+    trade.pop("fee")
+    trade["info"].pop("fee")
+
+    legs = HyperliquidFetcher._normalize_trade_components(trade)
+
+    fees = [
+        fem._normalize_fee_paid_from_payload(
+            leg, fallback_fee_fraction=0.001, quote_currency="USDC"
+        )[0]
+        for leg in legs
+    ]
+    assert fees == pytest.approx([-0.2, -0.1])
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_rejects_incomplete_cached_flip(tmp_path):
+    trade = _hyperliquid_flip_trade("sell", 2)
+    [close, _opening] = HyperliquidFetcher._normalize_trade_components(trade)
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(close)])
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=_StaticFetcher([]), cache_path=tmp_path
+    )
+
+    with pytest.raises(FillEventCacheContractError, match="cached Hyperliquid position flip"):
+        await manager.ensure_loaded()
+    assert not manager.get_coverage_status(start_ms=trade["timestamp"] - 1)["ready"]
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_removes_legacy_spot_without_advancing_checkpoint(tmp_path):
+    trade = _hyperliquid_flip_trade("sell", 2)
+    [legacy, _opening] = HyperliquidFetcher._normalize_trade_components(trade)
+    trade["symbol"] = "PURR/USDC"
+    trade["info"]["coin"] = "@107"
+    legacy.update(
+        id="101", source_ids=["101"], symbol=trade["symbol"],
+        raw=[{"source": "fetch_my_trades", "data": trade}],
+    )
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(legacy)])
+    cache.update_metadata_from_events(cache.load())
+    checkpoint = cache.load_metadata()["last_refresh_ms"]
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=_StaticFetcher([]), cache_path=tmp_path
+    )
+
+    await manager.ensure_loaded()
+    assert manager.get_events() == cache.load() == []
+    metadata = manager.cache.load_metadata()
+    assert metadata["last_refresh_ms"] == checkpoint
+    assert metadata["oldest_event_ts"] == metadata["newest_event_ts"] == 0
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_filters_spot_before_position_replay():
+    trade = _hyperliquid_flip_trade("sell", 2)
+    spot = deepcopy(trade)
+    spot["symbol"] = "PURR/USDC"
+    spot["info"]["coin"] = "@107"
+    api = _FakeHyperliquidAPI([[spot, trade]])
+    fetcher = HyperliquidFetcher(api)
+    events = await fetcher.fetch(trade["timestamp"] - 1, trade["timestamp"] + 1, {})
+    assert [event["id"] for event in events] == ["101:close", "101:open"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["closedPnl", "startPosition"])
+async def test_hyperliquid_uncertain_flip_does_not_confirm_history(tmp_path, missing):
+    trade = _hyperliquid_flip_trade("sell", 2)
+    del trade["info"][missing]
+    timestamp = trade["timestamp"]
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test",
+        fetcher=HyperliquidFetcher(_FakeHyperliquidAPI([[trade]])), cache_path=tmp_path,
+    )
+
+    with pytest.raises(fem.FillEventDataError, match="Hyperliquid"):
+        await manager.refresh(start_ms=timestamp - 1, end_ms=timestamp + 1)
+
+    assert manager.cache.load() == []
+    assert manager.cache.load_metadata()["last_refresh_ms"] == 0
+    assert not manager.get_coverage_status(start_ms=timestamp - 1)["ready"]
 
 
 # ---------------------------------------------------------------------------
@@ -6436,6 +6613,134 @@ async def test_manager_refresh_registers_gap_and_reraises_fetch_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("uta", [False, True], ids=["classic", "uta"])
+async def test_bitget_pagination_cap_preserves_unproven_coverage(tmp_path, uta):
+    day_ms = 24 * 60 * 60 * 1000
+    start_ms = day_ms
+    end_ms = 13_000 * day_ms
+    timestamp = str(end_ms - 1)
+    if uta:
+        row = {
+            "execId": "first-fill",
+            "orderId": "first-order",
+            "createdTime": timestamp,
+            "symbol": "BTCUSDT",
+            "side": "sell",
+            "tradeSide": "open",
+            "execQty": "1",
+            "execPrice": "100",
+            "execPnl": "0",
+        }
+    else:
+        row = {
+            "tradeId": "first-fill",
+            "cTime": timestamp,
+            "symbol": "BTCUSDT",
+            "tradeSide": "open",
+            "posMode": "hedge_mode",
+            "side": "sell",
+            "baseVolume": "1",
+            "price": "100",
+            "profit": "0",
+        }
+    api = _FakeBitgetAPI([[row]], options={"uta": uta})
+    manager = FillEventsManager(
+        exchange="bitget",
+        user="test",
+        fetcher=BitgetFetcher(api, symbol_resolver=lambda symbol: symbol),
+        cache_path=tmp_path,
+    )
+
+    with pytest.raises(
+        fem.AuthoritativeSurfaceUnavailable, match=r"incomplete history after pagination cap \(400\)"
+    ):
+        await manager.refresh(start_ms=start_ms, end_ms=end_ms)
+
+    assert len(api.history_calls) == 400
+    assert manager.cache.load() == []
+    metadata = manager.cache.load_metadata()
+    assert metadata["last_refresh_ms"] == 0
+    assert not metadata.get("covered_start_ms")
+    [gap] = manager.cache.get_known_gaps()
+    assert (gap["start_ts"], gap["end_ts"], gap["reason"]) == (
+        start_ms,
+        end_ms,
+        GAP_REASON_FETCH_FAILED,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("full_pages", [False, True], ids=["empty_windows", "full_pages"])
+async def test_bybit_trade_pagination_cap_rejects_incomplete_history(full_pages):
+    def fetch_page(*, params):
+        return [{"timestamp": params["endTime"] - 1}] if full_pages else []
+
+    api = types.SimpleNamespace(fetch_my_trades=AsyncMock(side_effect=fetch_page))
+    fetcher = BybitFetcher(api, trade_limit=1)
+    end_ms = 1_700_000_000_000
+
+    with pytest.raises(
+        fem.AuthoritativeSurfaceUnavailable, match=r"incomplete history after pagination cap \(200\)"
+    ):
+        await fetcher.fetch(1, end_ms, {})
+
+    assert api.fetch_my_trades.await_count == 200
+
+
+@pytest.mark.asyncio
+async def test_bybit_short_final_page_crossing_start_completes_at_cap():
+    day_ms = 24 * 60 * 60 * 1000
+    start_ms = 1_700_000_000_000
+    end_ms = start_ms + 27 * day_ms // 4
+
+    def fetch_page(*, params):
+        if api.fetch_my_trades.await_count == 200:
+            return [{"timestamp": start_ms - 1}]
+        return [{"timestamp": params["endTime"] - i} for i in (1, 2)]
+
+    api = types.SimpleNamespace(fetch_my_trades=AsyncMock(side_effect=fetch_page))
+    fetcher = BybitFetcher(api, trade_limit=2)
+
+    trades = await fetcher._fetch_my_trades(start_ms, end_ms)
+
+    assert len(trades) == 399
+    assert trades[0]["timestamp"] == start_ms - 1
+    assert api.fetch_my_trades.await_count == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [False, True], ids=["unproven", "reaches_end"])
+async def test_hyperliquid_final_page_must_prove_coverage(complete):
+    def fetch_page(*, since, limit, params):
+        timestamp = since + 1
+        return [
+            {
+                "id": str(timestamp),
+                "timestamp": timestamp,
+                "symbol": "BTC/USDC:USDC",
+                "side": "buy",
+                "amount": 1.0,
+                "price": 100.0,
+                "info": {"dir": "Open Long"},
+            }
+        ]
+
+    api = types.SimpleNamespace(fetch_my_trades=AsyncMock(side_effect=fetch_page))
+    fetcher = HyperliquidFetcher(api, trade_limit=1)
+    if complete:
+        events = await fetcher.fetch(1, 200, {})
+        assert len(events) == 199
+        assert events[-1]["timestamp"] == 200
+    else:
+        with pytest.raises(
+            fem.AuthoritativeSurfaceUnavailable, match=r"incomplete history after pagination cap \(200\)"
+        ):
+            await fetcher.fetch(1, 202, {})
+
+    assert api.fetch_my_trades.await_count == 200
+
+
+@pytest.mark.asyncio
 async def test_manager_pnl_repair_failure_does_not_invalidate_fill_coverage(
     tmp_path: Path,
 ):
@@ -6597,6 +6902,17 @@ async def test_okx_fetcher_basic_fetch(monkeypatch):
     assert len(batches) >= 1
 
 
+@pytest.mark.parametrize("pos_side", [None, "", "both"])
+def test_okx_fetcher_rejects_unresolved_position_side(pos_side):
+    raw = _make_okx_fill(trade_id="tid", ts=1_000, pos_side=pos_side)
+    if pos_side is None:
+        del raw["posSide"]
+    fetcher = OkxFetcher(object())
+
+    with pytest.raises(fem.FillEventDataError, match="OKX fill posSide"):
+        fetcher._normalize_fill(raw)
+
+
 @pytest.mark.asyncio
 async def test_okx_fetcher_pagination_with_billid_cursor(monkeypatch):
     """Test pagination using billId cursor for backward traversal."""
@@ -6632,6 +6948,64 @@ async def test_okx_fetcher_pagination_with_billid_cursor(monkeypatch):
     # Second call should have 'after' param with billId from oldest fill in first batch
     assert "after" in api.fills_calls[1]
     assert api.fills_calls[1]["after"] == "bill-2"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["recent", "history", "combined"])
+async def test_okx_fetcher_shares_pagination_cap_between_endpoints(scope):
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    historical = scope != "recent"
+    page_start = now_ms - (OkxFetcher._THREE_DAYS_MS if historical else 0) - 60_000
+    batches = [
+        [_make_okx_fill(trade_id=f"trade-{i}", ts=page_start - i)]
+        for i in range(400)
+    ]
+    api = _FakeOkxAPI(
+        fills_batches=[] if historical else batches,
+        fills_history_batches=batches if historical else [],
+    )
+    fetcher = OkxFetcher(api, trade_limit=1)
+    start_ms = page_start - (399 if historical else 400)
+    end_ms = page_start if scope == "history" else now_ms
+
+    if scope == "history":
+        # The final available page proves the requested start and no recent
+        # endpoint is required.
+        events = await fetcher.fetch(start_ms, end_ms, {})
+        assert len(events) == 400
+        assert events[0]["timestamp"] == start_ms
+    else:
+        # Recent-only history remains incomplete, or the historical endpoint
+        # used the shared budget and the recent endpoint has not been read.
+        with pytest.raises(
+            fem.AuthoritativeSurfaceUnavailable,
+            match=r"incomplete /fills history after pagination cap \(400\)",
+        ):
+            await fetcher.fetch(start_ms, end_ms, {})
+
+    assert len(api.fills_history_calls) == (400 if historical else 0)
+    assert len(api.fills_calls) == (0 if historical else 400)
+
+
+@pytest.mark.asyncio
+async def test_okx_full_final_page_crossing_start_completes_at_cap():
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    newest_ms = now_ms - 60_000
+    batches = [
+        [_make_okx_fill(trade_id=f"trade-{i}", ts=newest_ms - 2 * i)]
+        for i in range(400)
+    ]
+    api = _FakeOkxAPI(batches)
+    fetcher = OkxFetcher(api, trade_limit=1)
+    start_ms = newest_ms - 797  # Falls between the final two fills.
+    emitted = []
+
+    events = await fetcher.fetch(start_ms, now_ms, {}, on_batch=emitted.extend)
+
+    assert len(api.fills_calls) == 400
+    assert len(events) == len(emitted) == 399
+    assert events[0]["timestamp"] == start_ms + 1
+    assert all(event["timestamp"] >= start_ms for event in emitted)
 
 
 @pytest.mark.asyncio
@@ -6676,72 +7050,94 @@ async def test_okx_fetcher_dual_endpoint_old_and_recent(monkeypatch):
     assert len(api.fills_calls) == 1
 
 
+@pytest.mark.parametrize(
+    "side,pnl,evidence,expected",
+    [
+        ("buy", "0", {"subType": "3"}, "long"),
+        ("sell", "0", {"subType": "4"}, "short"),
+        ("sell", "0", {"subType": "5"}, "long"),
+        ("buy", "0", {"subType": "6"}, "short"),
+        ("sell", "0", {"reduceOnly": "true"}, "long"),
+        ("buy", "0", {"reduceOnly": True}, "short"),
+        ("sell", "100", {}, "long"),
+        ("buy", "-50", {}, "short"),
+    ],
+)
+def test_okx_net_fill_requires_position_side_evidence(side, pnl, evidence, expected):
+    raw = _make_okx_fill("net-fill", 1_700_000_000_000, side=side, pnl=pnl, pos_side="net")
+    raw.update(evidence)
+
+    assert OkxFetcher(object())._normalize_fill(raw)["position_side"] == expected
+
+
+@pytest.mark.parametrize(
+    "pnl,evidence",
+    [
+        ("0", {}),
+        ("0", {"subType": "2", "reduceOnly": "false"}),
+        ("0", {"subType": "3"}),
+        ("0", {"subType": "4", "reduceOnly": "true"}),
+        ("5", {"subType": "4"}),
+        ("NaN", {"reduceOnly": True}),
+        ("", {"reduceOnly": True}),
+    ],
+)
+def test_okx_net_fill_rejects_ambiguous_or_contradictory_evidence(pnl, evidence):
+    raw = _make_okx_fill("net-fill", 1_700_000_000_000, side="sell", pnl=pnl, pos_side="net")
+    raw.update(evidence)
+
+    with pytest.raises(fem.FillEventDataError, match="OKX net fill"):
+        OkxFetcher(object())._normalize_fill(raw)
+
+
 @pytest.mark.asyncio
-async def test_okx_fetcher_net_mode_position_side_inference(monkeypatch):
-    """Test net mode position side inference from side + pnl."""
+async def test_okx_unattributed_net_fill_does_not_advance_coverage(tmp_path):
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-
-    fills = [
-        # Opening long: buy with no pnl -> position_side = long
-        _make_okx_fill(
-            trade_id="tid-open-long",
-            ts=now_ms - 3000,
-            side="buy",
-            pnl="0",
-            pos_side="net",
-        ),
-        # Closing long: sell with pnl -> position_side = long (was holding long)
-        _make_okx_fill(
-            trade_id="tid-close-long",
-            ts=now_ms - 2000,
-            side="sell",
-            pnl="100",
-            pos_side="net",
-        ),
-        # Opening short: sell with no pnl -> position_side = short
-        _make_okx_fill(
-            trade_id="tid-open-short",
-            ts=now_ms - 1000,
-            side="sell",
-            pnl="0",
-            pos_side="net",
-        ),
-        # Closing short: buy with pnl -> position_side = short (was holding short)
-        _make_okx_fill(
-            trade_id="tid-close-short",
-            ts=now_ms,
-            side="buy",
-            pnl="50",
-            pos_side="net",
-        ),
-    ]
-
-    api = _FakeOkxAPI([fills])
-    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
-
-    fetcher = OkxFetcher(api, trade_limit=100)
-    detail_cache: Dict[str, Tuple[str, str]] = {}
-
-    events = await fetcher.fetch(
-        since_ms=now_ms - 5000,
-        until_ms=now_ms + 1000,
-        detail_cache=detail_cache,
+    start_ms = now_ms - 1_000
+    valid = _make_okx_fill("valid", now_ms - 100)
+    ambiguous = _make_okx_fill("ambiguous", now_ms - 200, side="sell", pos_side="net")
+    out_of_range = _make_okx_fill("older", start_ms - 1, side="sell", pos_side="net")
+    api = _FakeOkxAPI([[valid, ambiguous], [valid, out_of_range]])
+    manager = FillEventsManager(
+        exchange="okx", user="test", fetcher=OkxFetcher(api), cache_path=tmp_path
     )
 
-    assert len(events) == 4
+    with pytest.raises(fem.FillEventDataError, match="position side is unproven"):
+        await manager.refresh(start_ms=start_ms, end_ms=now_ms)
 
-    # Check position side inference for net mode
-    open_long = next(ev for ev in events if ev["id"] == "tid-open-long")
-    assert open_long["position_side"] == "long"  # buy with no pnl = opening long
+    assert manager.cache.load() == []
+    assert manager.cache.load_metadata()["last_refresh_ms"] == 0
+    assert not manager.get_coverage_status(start_ms=start_ms, end_ms=now_ms)["ready"]
 
-    close_long = next(ev for ev in events if ev["id"] == "tid-close-long")
-    assert close_long["position_side"] == "long"  # sell with pnl = closing long
+    await manager.refresh(start_ms=start_ms, end_ms=now_ms)
 
-    open_short = next(ev for ev in events if ev["id"] == "tid-open-short")
-    assert open_short["position_side"] == "short"  # sell with no pnl = opening short
+    assert [event.id for event in manager.get_events()] == ["valid"]
+    assert manager.cache.load_metadata()["last_refresh_ms"] > 0
+    assert manager.cache.get_known_gaps() == []
 
-    close_short = next(ev for ev in events if ev["id"] == "tid-close-short")
-    assert close_short["position_side"] == "short"  # buy with pnl = closing short
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attributable", [True, False])
+async def test_cached_okx_net_zero_pnl_is_rechecked_before_replay(tmp_path, attributable):
+    raw = _make_okx_fill("net-fill", 1_700_000_000_000, side="sell", pos_side="short")
+    stale = OkxFetcher(object())._normalize_fill(raw)
+    stale["raw"][0]["data"]["posSide"] = "net"
+    if attributable:
+        stale["raw"][0]["data"]["subType"] = "5"
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(stale)])
+    manager = FillEventsManager(
+        exchange="okx", user="test", fetcher=_StaticFetcher([]), cache_path=tmp_path
+    )
+
+    if attributable:
+        await manager.ensure_loaded()
+        assert manager.get_events()[0].position_side == "long"
+        assert cache.load()[0].position_side == "long"
+    else:
+        with pytest.raises(FillEventCacheContractError, match="quarantine and rebuild"):
+            await manager.ensure_loaded()
+        assert not manager.get_coverage_status(start_ms=raw["ts"])["ready"]
 
 
 @pytest.mark.asyncio
@@ -8469,6 +8865,84 @@ def test_compute_psize_pprice_initial_state():
     assert result[("BTC", "long")] == (3.0, events[0]["pprice"])
 
 
+@pytest.mark.parametrize("position_side", [None, "", "unknown", "both"])
+def test_fill_reconstruction_requires_an_attributed_position_side(position_side):
+    trade = {"id": "fill", "symbol": "BTC", "side": "buy", "qty": 1.0, "price": 100.0}
+    if position_side is not None:
+        trade["position_side"] = position_side
+
+    for reconstruct in (compute_psize_pprice, fem.compute_realized_pnls_from_trades):
+        with pytest.raises(fem.FillEventDataError, match="fill position_side"):
+            reconstruct([trade])
+
+    assert "psize" not in trade
+
+
+def test_fill_event_preserves_explicit_legacy_pside():
+    event = FillEvent.from_dict(
+        {
+            "id": "fill",
+            "timestamp": 1_500,
+            "symbol": "BTC/USDC:USDC",
+            "side": "sell",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+            "pb_order_type": "unknown",
+            "pside": "SHORT",
+            "client_order_id": "",
+        }
+    )
+
+    assert event.position_side == "short"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("position_side", [None, "unknown"], ids=["missing", "unknown"])
+async def test_fill_refresh_preserves_position_side_contract_error(tmp_path, position_side):
+    fill = {
+        "id": "fill",
+        "timestamp": 1_500,
+        "symbol": "BTC/USDC:USDC",
+        "side": "sell",
+        "qty": 1.0,
+        "price": 100.0,
+        "pnl": 1.0,
+        "pb_order_type": "unknown",
+        "client_order_id": "",
+    }
+    if position_side is not None:
+        fill["position_side"] = position_side
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=_StaticFetcher([fill]), cache_path=tmp_path
+    )
+
+    with pytest.raises(fem.FillEventDataError, match="fill position_side"):
+        await manager.refresh(start_ms=1_000, end_ms=2_000)
+
+    assert manager.cache.load() == []
+    assert manager.cache.load_metadata()["last_refresh_ms"] == 0
+
+
+@pytest.mark.asyncio
+async def test_binance_income_only_record_preserves_unattributed_pnl(tmp_path):
+    fetcher = BinanceFetcher(api=object(), symbol_resolver=lambda symbol: symbol)
+    income = fetcher._normalize_income(
+        {"tradeId": "income", "time": 1_500, "symbol": "BTC/USDT:USDT", "income": "5"}
+    )
+    manager = FillEventsManager(
+        exchange="binance", user="test", fetcher=_StaticFetcher([income]), cache_path=tmp_path
+    )
+
+    await manager.refresh(start_ms=1_000, end_ms=2_000)
+
+    [event] = manager.cache.load()
+    assert event.position_side == "unknown"
+    assert event.psize == 0.0
+    assert event.pprice == 0.0
+    assert event.pnl == 5.0
+
+
 def test_hyperliquid_raw_start_position_overrides_wrong_reconstructed_psize():
     events = [
         {
@@ -8908,8 +9382,10 @@ def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
         aggregate["raw"][0]["data"]["amount"] = "invalid"
     elif mismatch == "component_price":
         aggregate["raw"][0]["data"]["price"] = "NaN"
+        mismatch = "malformed_component"
     elif mismatch == "component_position_chain":
         aggregate["raw"][0]["data"]["info"]["startPosition"] = "NaN"
+        mismatch = "malformed_component"
     elif mismatch == "component_symbol":
         aggregate["raw"][0]["data"]["symbol"] = "BTC/USDC:USDC"
     elif mismatch == "component_timestamp":
@@ -9382,3 +9858,101 @@ async def test_kucoin_slow_fetch_remains_visible(monkeypatch, caplog, elapsed, e
         assert await fetcher.fetch(1_700_000_000_000, 1_700_000_060_000, detail_cache={}) == []
     records = [r for r in caplog.records if 'KucoinFetcher: fetched 0 trade events' in r.message]
     assert len(records) == 1 and records[0].levelno == expected
+
+
+@pytest.mark.asyncio
+async def test_fill_refresh_waits_for_disk_without_blocking_loop(tmp_path, monkeypatch):
+    import asyncio
+    from threading import Event
+
+    event = {
+        "id": "fill-1",
+        "client_order_id": "client-1",
+        "timestamp": 1_500,
+        "datetime": "",
+        "symbol": "BTC/USDC:USDC",
+        "side": "buy",
+        "qty": 1.0,
+        "price": 100.0,
+        "pnl": 0.0,
+        "fees": {"currency": "USDC", "cost": 0.01},
+        "pb_order_type": "entry_grid_normal_long",
+        "position_side": "long",
+    }
+    fetcher = _StaticFetcher([event])
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="test", fetcher=fetcher, cache_path=tmp_path
+    )
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = Event()
+    original = manager.cache._stage_day_writes
+
+    def blocked_save(days):
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(3), "refresh blocked the event loop"
+        return original(days)
+
+    monkeypatch.setattr(manager.cache, "_stage_day_writes", blocked_save)
+    first = asyncio.create_task(manager.refresh())
+    second = None
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert manager._events == []
+        assert manager.cache.load_metadata()["last_refresh_ms"] == 0
+
+        first.cancel()
+        await asyncio.sleep(0)
+        first.cancel()
+        second = asyncio.create_task(manager.refresh())
+        await asyncio.sleep(0)
+        assert len(fetcher.calls) == 1
+        assert not first.done()
+    finally:
+        release.set()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await first
+        finally:
+            if second is not None:
+                await second
+
+    assert [fill.id for fill in manager._events] == ["fill-1"]
+    assert [fill.id for fill in manager.cache.load()] == ["fill-1"]
+
+
+@pytest.mark.asyncio
+async def test_metadata_failure_does_not_skip_unpublished_fills_on_incremental_retry(
+    tmp_path, monkeypatch, sample_events
+):
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    seed = dict(sample_events[0], id="prior", timestamp=now_ms - 600_000)
+    missed = dict(seed, id="missed", timestamp=now_ms - 480_000)
+    recent = dict(seed, id="recent", timestamp=now_ms - 10_000)
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(seed)])
+    cache.save_metadata({"last_refresh_ms": seed["timestamp"]})
+    fetcher = _SequencedFetcher([[missed], [missed, recent]])
+    manager = FillEventsManager(
+        exchange="bybit", user="test", fetcher=fetcher, cache_path=tmp_path
+    )
+    await manager.ensure_loaded()
+    metadata_path = manager.cache.metadata_path
+    replace = fem.os.replace
+
+    def fail_metadata_write(source, target):
+        if target == metadata_path:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return replace(source, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fem.os, "replace", fail_metadata_write)
+        with pytest.raises(FillEventCacheDiskFullError):
+            await manager.refresh_latest(last_refresh_overlap_ms=60_000)
+
+    assert [event.id for event in manager._events] == ["prior"]
+    assert manager.cache.load_metadata()["last_refresh_ms"] == seed["timestamp"]
+    await manager.refresh_latest(last_refresh_overlap_ms=60_000)
+
+    assert fetcher.calls[-1][0] <= missed["timestamp"]
+    assert [event.id for event in manager.cache.load()] == ["prior", "missed", "recent"]

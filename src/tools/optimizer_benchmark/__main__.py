@@ -30,6 +30,32 @@ def modes(values):
     return result
 
 
+def gpu_tuning_overrides(values, backend_labels):
+    result = {}
+    for label, mode in values:
+        if label not in backend_labels:
+            raise ValueError(f"GPU tuning override refers to unknown backend {label}")
+        if label in result:
+            raise ValueError(f"multiple GPU tuning overrides for backend {label}")
+        if mode not in {"auto", "conservative", "refresh", "off", "max"}:
+            raise ValueError(f"unknown GPU tuning mode {mode}")
+        result[label] = mode
+    return result
+
+
+def search_iteration_overrides(values, backend_labels):
+    result = {}
+    for label, count in values:
+        if label not in backend_labels:
+            raise ValueError(f"search iteration override refers to unknown backend {label}")
+        if label in result:
+            raise ValueError(f"multiple search iteration overrides for backend {label}")
+        if not count.isascii() or not count.isdecimal() or int(count) < 1:
+            raise ValueError("search iteration overrides require positive counts")
+        result[label] = int(count)
+    return result
+
+
 def bounded_process(command, *, cwd, environment, log, timeout, max_rss, min_available):
     import psutil
     reason = None
@@ -107,6 +133,14 @@ def run(args):
         raise ValueError("case or seed selection is empty")
     if len(args.backend) != 2 or len({item[0] for item in args.backend}) != 2:
         raise ValueError("supply two uniquely labelled --backend LABEL CHECKOUT PYTHON arguments")
+    backend_labels = {item[0] for item in args.backend}
+    gpu_tuning = gpu_tuning_overrides(getattr(args, "gpu_tuning_mode", ()), backend_labels)
+    search_iters = search_iteration_overrides(getattr(args, "search_iters_override", ()), backend_labels)
+    search_population_size = getattr(args, "search_population_size", None)
+    if (search_iters or search_population_size is not None) and not any(
+        engine.startswith("search-") for _, engine, _ in parsed_modes
+    ):
+        raise ValueError("search iteration overrides and population size require a search mode")
     preflight = {}
     for label, root, python in args.backend:
         check = subprocess.run([str(Path(python).absolute()), "-c",
@@ -136,6 +170,9 @@ def run(args):
         backends={label: dict(checkout=str(Path(root).resolve()), python=str(Path(python).absolute()),
                              commit=subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"], text=True).strip())
                   for label, root, python in args.backend},
+        gpu_tuning_overrides=gpu_tuning,
+        search_iteration_overrides=search_iters,
+        search_population_size=search_population_size,
         runtime_preflight=preflight,
         hardware=dict(platform=platform.platform(), machine=platform.machine(), processor=platform.processor(),
                       logical_cpus=os.cpu_count()), policies=policies, runs=[],
@@ -162,9 +199,14 @@ def run(args):
                     "--entry", entry["id"], "--engine", engine, "--width", size if not engine.endswith("cpu") else "8",
                     "--workers", size if engine.endswith("cpu") else str(args.search_workers),
                     "--warmup", str(args.warmup), "--repeats", str(args.repeats),
-                    "--tune-seconds", str(args.tune_seconds), "--search-iters", str(args.search_iters),
+                    "--tune-seconds", str(args.tune_seconds),
+                    "--search-iters", str(search_iters.get(label, args.search_iters)),
                     "--dispatch-budget", str(args.dispatch_budget), "--output", str(output)]
                 command += ["--harness-sha256", fingerprint]
+                if engine.endswith("gpu") and label in gpu_tuning:
+                    command.extend(["--gpu-tuning-mode", gpu_tuning[label]])
+                if engine.startswith("search-") and search_population_size is not None:
+                    command.extend(["--search-population-size", str(search_population_size)])
                 if args.phase_profile:
                     command.append("--phase-profile")
                 if getattr(args, "host_profile", False):
@@ -210,6 +252,8 @@ def main(argv=None):
     execute.add_argument("--backend", nargs=3, action="append", required=True, metavar=("LABEL", "CHECKOUT", "PYTHON"))
     execute.add_argument("--output", required=True)
     execute.add_argument("--modes", nargs="+", default=["cpu:1", "cpu:4", "gpu:1", "gpu:8", "gpu:auto"])
+    execute.add_argument("--gpu-tuning-mode", nargs=2, action="append", default=[],
+                         metavar=("LABEL", "MODE"), help="Override GPU tuning for one backend label")
     execute.add_argument("--warmup", type=int, default=1)
     execute.add_argument("--repeats", type=int, default=3)
     execute.add_argument("--timeout", type=float, default=180)
@@ -217,6 +261,10 @@ def main(argv=None):
     execute.add_argument("--min-available-gib", type=float, default=1)
     execute.add_argument("--tune-seconds", type=float, default=0)
     execute.add_argument("--search-iters", type=int, default=64)
+    execute.add_argument("--search-iters-override", nargs=2, action="append", default=[],
+                         metavar=("LABEL", "COUNT"), help="Set a search budget for one backend label")
+    execute.add_argument("--search-population-size", type=int,
+                         help="Retain this many survivors in search modes and keep all frozen seeds")
     execute.add_argument("--search-workers", type=int, default=4)
     execute.add_argument("--dispatch-budget", type=int, default=50_000_000)
     execute.add_argument("--phase-profile", action="store_true", help="Diagnostic GPU phase timings; adds synchronization overhead")
@@ -261,6 +309,8 @@ def main(argv=None):
             raise ValueError("time and memory limits must be positive and finite")
         if not 0 <= args.tune_seconds < float("inf") or args.search_iters < 1 or args.dispatch_budget < 1:
             raise ValueError("require finite nonnegative tuning duration, positive iterations and dispatch budget")
+        if args.search_population_size is not None and args.search_population_size < 2:
+            raise ValueError("search population size must be at least two")
         return run(args)
     except (ValueError, KeyError) as error:
         parser.error(str(error))

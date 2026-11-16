@@ -162,6 +162,19 @@ def extract_config_values(candidate: ParetoCandidate) -> Dict[str, float]:
     return values
 
 
+def extract_bot_parameter_values(candidate: ParetoCandidate) -> Dict[str, float]:
+    """Read authored numeric bot parameters, including per-coin bot overrides."""
+    bot = candidate.entry.get("bot")
+    values = _flatten_numeric(bot, "bot") if isinstance(bot, Mapping) else {}
+    overrides = candidate.entry.get("coin_overrides")
+    if isinstance(overrides, Mapping):
+        for coin, override in overrides.items():
+            bot_override = override.get("bot") if isinstance(override, Mapping) else None
+            if isinstance(bot_override, Mapping):
+                values.update(_flatten_numeric(bot_override, f"coin_overrides.{coin}.bot"))
+    return values
+
+
 def _merge_metric_fact(values, source, key, output_name=None):
     name = key if output_name is None else output_name
     copied = copy_metric_value(source, key, output_name=name)

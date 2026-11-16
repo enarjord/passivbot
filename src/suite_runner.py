@@ -499,7 +499,7 @@ def _reconcile_suite_coin_sources(
 def _coalesce_master_coins(
     coins: Sequence[str], sources: Dict[str, str], exchanges: Sequence[str]
 ) -> list[str]:
-    """Use one dataset identity per resolved market, preferring forced-source keys."""
+    """Coalesce approved markets, using forced-source keys for matching identities."""
     source_assignments = {}
     for source_coin, exchange in sorted(sources.items()):
         exchange = to_standard_exchange_name(str(exchange))
@@ -524,7 +524,6 @@ def _coalesce_master_coins(
         try:
             source_symbol = coin_to_symbol(source_coin, exchange, verbose=False)
         except UnknownMarketIdentifier:
-            coalesced.add(source_coin)
             continue
         equivalent = set()
         for coin in coalesced:
@@ -533,8 +532,9 @@ def _coalesce_master_coins(
                     equivalent.add(coin)
             except (MarketIdentifierExchangeMismatch, UnknownMarketIdentifier):
                 continue
-        coalesced.difference_update(equivalent)
-        coalesced.add(source_coin)
+        if equivalent:
+            coalesced.difference_update(equivalent)
+            coalesced.add(source_coin)
 
     representatives = {}
     for coin in sorted(coalesced):
@@ -1615,15 +1615,18 @@ def apply_scenario(
     for field, value in (("approved_coins", scenario.coins), ("ignored_coins", scenario.ignored_coins)):
         if value is not None:
             replacement_paths.extend(("bot", side, "universe", field) for side in ("long", "short"))
+    # These columns define the available-members ceiling persisted in optimizer
+    # checkpoints. Keep their order stable across fresh Python processes.
+    columns = tuple(filtered_coins)
     if prepared_universe is None:
         _materialize_scenario_universe(
             cfg, prepared_base, available_coins=available_coins,
-            exchanges=scenario_exchanges, columns=set(filtered_coins), replacement_paths=replacement_paths,
+            exchanges=scenario_exchanges, columns=columns, replacement_paths=replacement_paths,
         )
     else:
         _install_prepared_scenario_universe(
             cfg, prepared_universe, available_coins=available_coins,
-            exchanges=scenario_exchanges, columns=set(filtered_coins),
+            exchanges=scenario_exchanges, columns=columns,
         )
     validate_suite_side_coin_lists(cfg, scenario_exchanges)
 

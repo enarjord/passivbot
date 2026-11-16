@@ -223,12 +223,19 @@ def test_repeat_is_admitted_exactly_at_boundary():
     assert "repeats=2 over=300s" in sink.write(event())
 
 
-def test_replaced_observation_is_durable_and_does_not_fake_current_outage():
+@pytest.mark.parametrize("unavailable", [0, 1])
+def test_replaced_observation_is_durable_and_does_not_fake_current_outage(unavailable):
     clock, logger, durable = Clock(), Logger(), ListEventSink()
     sink = ConsoleSummarySink(logger, admission=ConsoleAdmission(clock=clock))
     pipeline = LiveEventPipeline(console_sink=sink, structured_sinks=[durable])
+    counts = dict(
+        green=2 - unavailable, red=0, inactive=0,
+        unavailable=unavailable, estimated=2 - unavailable,
+    )
+    level = "warning" if unavailable else "info"
+    current = event(level=level, data=dict(counts=counts))
     try:
-        pipeline.emit(event())
+        pipeline.emit(current)
         for n in range(1, 101):
             clock.now = n * 3
             pipeline.emit(
@@ -237,43 +244,55 @@ def test_replaced_observation_is_durable_and_does_not_fake_current_outage():
                     data=dict(
                         observation_status="stale",
                         console_replaced_observation=True,
+                        stale_reasons=["input_expired", "account_generation_changed"],
+                        counts=counts,
                         age_ms=12000,
                     ),
                 )
             )
-            pipeline.emit(event())
+            pipeline.emit(current)
             assert pipeline.flush()
         visible = [line for level, line in logger.lines if level >= 20]
         assert len(durable.events) == 201
-        assert not any("HSL stale" in line for line in visible)
-        assert not any("prior observations replaced" in line for line in visible)
+        assert len(visible) == 2
+        assert all("observation=current" in line for line in visible)
+        assert all(f"unavailable_scopes={unavailable}" in line for line in visible)
         assert any("count=100 max_sample_age=12.0s" in line for _, line in logger.lines)
-        # Current staleness and recovery are still immediate, irrespective of the reminder.
-        pipeline.emit(event(level="warning", data=dict(observation_status="stale")))
-        pipeline.emit(event())
+        # Current staleness and recovery are still immediate.
+        pipeline.emit(
+            event(
+                level="warning",
+                data=dict(
+                    observation_status="stale", stale_reasons=["input_expired"], counts=counts
+                ),
+            )
+        )
+        pipeline.emit(current)
         assert pipeline.flush()
         visible = [line for level, line in logger.lines if level >= 20]
-        assert any("HSL stale" in line for line in visible)
-        assert "HSL current" in visible[-1]
+        assert any("observation=stale" in line for line in visible)
+        assert "observation=current" in visible[-1]
     finally:
         pipeline.close()
 
 
 @pytest.mark.parametrize(
-    "counts", [dict(red=1, unavailable=0), dict(red=0, unavailable=1)]
+    "change",
+    [
+        dict(counts=dict(red=1, unavailable=0)),
+        dict(account_unavailable=["positions"]),
+        dict(stale_reasons=["clock_before_capture"]),
+    ],
 )
-def test_replacement_marker_cannot_hide_red_or_unavailable(counts):
+def test_replacement_marker_cannot_hide_red_account_outage_or_bad_clock(change):
     logger = Logger()
-    ConsoleSummarySink(logger).write(
-        event(
-            level="warning",
-            data=dict(
-                observation_status="stale",
-                console_replaced_observation=True,
-                counts=counts,
-            ),
-        )
+    data = dict(
+        observation_status="stale",
+        console_replaced_observation=True,
+        stale_reasons=["input_expired"],
     )
+    data.update(change)
+    ConsoleSummarySink(logger).write(event(level="warning", data=data))
     assert logger.lines[0][0] == 30
 
 

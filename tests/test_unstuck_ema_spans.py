@@ -229,7 +229,7 @@ def test_defaults_and_runtime_mapping():
     runtime = compile_runtime_config(
         prepare_config(c, verbose=False), runtime="backtest"
     )
-    assert runtime["bot"]["long"]["unstuck_ema_span_0_minutes"] == 513.39957
+    assert runtime["bot"]["long"]["unstuck_ema_span_0_minutes"] == 431.30526
     bounds = flatten_optimize_bounds(
         c["optimize"]["bounds"], strategy_kind="trailing_martingale"
     )

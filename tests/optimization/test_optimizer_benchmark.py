@@ -21,7 +21,7 @@ from tools.optimizer_benchmark.catalogue import (Case, PAIRWISE_FLAGS, catalogue
     declared_gpu_support, pairwise_rows, select_cases)
 from tools.optimizer_benchmark.workloads import array_digest, digest, freeze, load_manifest
 from tools.optimizer_benchmark.report import numerical_comparison, summary, tuning_comparison, validate_policies
-from tools.optimizer_benchmark.__main__ import modes, read_worker_report
+from tools.optimizer_benchmark.__main__ import gpu_tuning_overrides, modes, read_worker_report, search_iteration_overrides
 from tools.optimizer_benchmark.worker import strict_json, instrument_replay, cohort_digest
 from tools.optimizer_benchmark import worker
 
@@ -314,6 +314,13 @@ def test_invalid_execution_modes_are_rejected(invalid):
         modes(invalid)
 
 
+@pytest.mark.parametrize("overrides", [[("old", "bad")], [("missing", "max")],
+                                      [("new", "off"), ("new", "max")]])
+def test_invalid_gpu_tuning_overrides_are_rejected(overrides):
+    with pytest.raises(ValueError, match="GPU tuning"):
+        gpu_tuning_overrides(overrides, {"old", "new"})
+
+
 def test_nonfinite_json_evidence_is_retained():
     result = strict_json(dict(nan=float("nan"), positive=float("inf"), negative=-float("inf")))
     assert json.loads(json.dumps(result, allow_nan=False)) == dict(nan="NaN", positive="Infinity", negative="-Infinity")
@@ -546,7 +553,7 @@ def test_gpu_instrumentation_hooks_are_restored_after_failed_setup(monkeypatch):
     from optimization.gpu.autotune import BatchController
     from optimization.gpu.service import SharedAccountReplay
     original_observe, original_init = BatchController.observe, SharedAccountReplay.__init__
-    def failing(*_args):
+    def failing(*_args, **_kwargs):
         BatchController.observe = object()
         SharedAccountReplay.__init__ = object()
         raise RuntimeError("setup failed")
@@ -583,6 +590,8 @@ def test_tuning_and_cohort_clocks_exclude_the_same_setup(monkeypatch, tmp_path):
     monkeypatch.setattr(datasets, "PreparedGpuDataset", lambda **kwargs: kwargs)
     class Service:
         def __init__(self, **kwargs):
+            assert kwargs["tuning_mode"] == "max"
+            assert kwargs["batch_size"] is None
             clock[0] += 200.0
             self._batch_tuner = SimpleNamespace(controllers={"fixture": controller})
         def __enter__(self): return self
@@ -598,7 +607,8 @@ def test_tuning_and_cohort_clocks_exclude_the_same_setup(monkeypatch, tmp_path):
     arrays = (np.zeros((2, 1, 4)), np.ones(2), np.arange(2))
     config = {"optimize": {"gpu": {}}, "backtest": {"coins": {"fake": ["BTC"]}}}
     entry = dict(id="fixture", configs=[config], metrics=["cagr_fraction_strategy_equity"], markets={}, exchange="fake")
-    report = worker.gpu_runs(entry, arrays, "auto", 1, 0, 0, 100)
+    report = worker.gpu_runs(entry, arrays, "auto", 1, 0, 0, 100, tuning_mode="max")
+    assert report["tuning_mode"] == "max"
     assert report["parameter_seconds"] == 100.0
     assert report["setup_seconds"] == 200.0
     assert report["first_tuning_window_seconds"] == 2.0
@@ -713,20 +723,30 @@ def test_search_matches_backend_signature_and_prepares_recording_contract(frozen
     def inspect_call(**kwargs):
         inspect.signature(runner).bind(**kwargs)
         assert kwargs["config"][optimize.CONTRACT_CACHE_KEY] is prepared[0]
+        assert kwargs["config"]["optimize"]["gpu"]["tuning_mode"] == ("max" if engine == "search-gpu" else "off")
         assert kwargs["ignore_sigint_in_worker"] is worker.initialize_optimizer_worker
         assert not {"constraint_fitness_cls", "record_individual_result", "run_evolution"} & kwargs.keys()
         raise BackendReached
     monkeypatch.setattr(backends, "get_backend_runner", lambda _name: inspect_call)
     args = SimpleNamespace(engine=engine, workers=1, search_iters=8, width="8", dispatch_budget=100000)
+    if engine == "search-gpu":
+        args.gpu_tuning_mode = "max"
     with pytest.raises(BackendReached):
         worker.search_run(entry, arrays, args)
 
 
-@pytest.mark.parametrize("start_method", [None, "forkserver"])
-def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, start_method):
+@pytest.mark.parametrize("start_method,case", [
+    (None, None),
+    ("forkserver", None),
+    (None, "trailing_martingale/both/forager/base/oscillating"),
+])
+def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, start_method, case):
     if start_method is not None and start_method not in multiprocessing.get_all_start_methods():
         pytest.skip(f"{start_method} multiprocessing unavailable")
     directory, manifest = frozen
+    if case is not None:
+        directory = directory / "canonical-forager-seeds"
+        manifest = freeze(directory, patterns=[case], candidates=8, bars=128, coins=4)
     entry = manifest["entries"][0]
     # Network rejection belongs to the worker process, including the Rust
     # verification pass; it must not alter the pytest process's socket methods.
@@ -742,14 +762,43 @@ def test_prepared_cpu_search_completes_and_verifies_saved_objectives(frozen, sta
     subprocess.run([*invocation,
                     "--backend", str(root), "--workload", str(directory),
                     "--entry", entry["id"], "--engine", "search-cpu", "--workers", "1",
-                    "--search-iters", "8", "--output", str(output)],
+                    "--search-iters", "8", "--search-population-size", "4", "--output", str(output)],
                    cwd=root, env=dict(os.environ, PYTHONPATH=str(root / "src")),
                    check=True, timeout=60)
     report = json.loads(output.read_text())
     assert report["status"] == "completed", report
-    assert report["samples"][0]["completed"] == 8
+    assert report["samples"][0]["completed"] == report["completed_distinct_candidates"] == 12
+    assert report["completed_distinct_authored_candidates"] == report["search"]["starting_individuals"] == 8
+    assert len(report["completed_authored_metrics_sha256"]) == 64
+    assert report["search"]["population_size"] == 4
     assert report["persisted_bytes"] > 0
     assert report["rust_reference_verification"]["status"] == "passed"
+
+
+def test_authored_projection_uses_the_legacy_result_builder_signature(monkeypatch):
+    import optimize
+    from optimization import callback
+    from optimization.bounds import Bound
+
+    evaluator = SimpleNamespace(
+        config={"bot": {}}, bounds=[Bound(0, 1)], sig_digits=2,
+        key_paths=[("bot.param", ("bot", "param"))],
+    )
+    seeds = [{"bot": {"param": value}} for value in (1.5, 0.42)]
+
+    def canonicalize(vector, template, bounds, sig_digits, key_paths, overrides_list):
+        assert template is evaluator.config and bounds is evaluator.bounds
+        assert sig_digits == 2 and key_paths is evaluator.key_paths and not overrides_list
+        return {"bot": {"param": vector[0] / 2}}
+
+    def legacy_result_builder(*, vector, metrics, template, build_config_fn, overrides_fn, overrides_list=None):
+        assert metrics is None
+        prepared = build_config_fn(vector, overrides_fn, list(overrides_list or ()), template)
+        return {"bot": {"param": round(prepared["bot"]["param"], 1)}}
+
+    monkeypatch.setattr(optimize, "_canonicalize_optimizer_individual", canonicalize)
+    monkeypatch.setattr(callback, "build_pymoo_record_entry", legacy_result_builder)
+    assert worker._authored_result_vectors(seeds, evaluator) == {(0.5,), (0.2,)}
 
 
 @pytest.mark.parametrize("profiling", [None, "host_profile", "phase_profile_enabled"])
@@ -806,7 +855,10 @@ def test_seed_filtered_run_preserves_frozen_population(tmp_path, real_runtime, m
     monkeypatch.setattr(cli.subprocess, "check_output", check_output)
 
     def bounded(command, **kwargs):
-        dispatched.append(command[command.index("--entry") + 1])
+        dispatched.append((command[command.index("--entry") + 1],
+                           command[command.index("--gpu-tuning-mode") + 1],
+                           command[command.index("--search-iters") + 1],
+                           command[command.index("--search-population-size") + 1]))
         output = Path(command[command.index("--output") + 1])
         output.write_text(json.dumps(dict(status="unsupported", reason="test worker")))
         return dict(exit_code=0, termination_reason=None, wall_seconds=0.0)
@@ -816,7 +868,9 @@ def test_seed_filtered_run_preserves_frozen_population(tmp_path, real_runtime, m
     command = ["run", "--workload", str(directory), "--seed", str(selected_seed),
                "--backend", "before", str(tmp_path), sys.executable,
                "--backend", "after", str(tmp_path), sys.executable,
-               "--modes", "cpu:1", "--output", str(destination)]
+               "--gpu-tuning-mode", "before", "auto", "--gpu-tuning-mode", "after", "max",
+               "--modes", "search-gpu:auto", "--search-population-size", "4", "--search-iters", "20",
+               "--search-iters-override", "after", "16", "--output", str(destination)]
     if expected_status == 0:
         assert cli.main(command) == 0
     else:
@@ -826,14 +880,30 @@ def test_seed_filtered_run_preserves_frozen_population(tmp_path, real_runtime, m
     assert (directory / "manifest.json").read_bytes() == original
     expected_ids = [entry["id"] for entry in manifest["entries"]
                     if entry["seed"] == selected_seed]
-    assert dispatched == [identity for identity in expected_ids for _ in range(2)]
+    assert dispatched == [(identity, mode, budget, "4")
+                          for identity in expected_ids for mode, budget in (("auto", "20"), ("max", "16"))]
     if expected_status == 0:
         report = json.loads((destination / "report.json").read_text())
         assert report["workload_sha256"] == manifest["sha256"]
         assert report["selection"]["entry_ids"] == expected_ids
         assert report["selection"]["seeds"] == [selected_seed]
+        assert report["gpu_tuning_overrides"] == {"before": "auto", "after": "max"}
+        assert report["search_iteration_overrides"] == {"after": 16}
+        assert report["search_population_size"] == 4
     else:
         assert not destination.exists()
+
+
+@pytest.mark.parametrize("overrides", [
+    [("missing", "64")],
+    [("max", "64"), ("max", "48")],
+    [("max", "0")],
+    [("max", "-1")],
+    [("max", "1.0")],
+])
+def test_invalid_search_iteration_overrides_are_rejected(overrides):
+    with pytest.raises(ValueError):
+        search_iteration_overrides(overrides, {"conservative", "max"})
 
 
 def test_retired_v7_is_absent_from_catalogue_and_rejected_by_public_freeze(tmp_path):

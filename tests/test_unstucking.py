@@ -340,3 +340,22 @@ def test_unstucking_requires_exposure_when_threshold_above_one():
     assert math.isclose(price, 95.0)
     expected_order_type = pbr.order_type_snake_to_id("close_unstuck_short")
     assert order_type_id == expected_order_type
+
+
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
+@pytest.mark.parametrize(
+    ("side", "position_size", "current_price"),
+    [("long", 0.05, 90.0), ("short", -0.05, 110.0)],
+)
+def test_allowance_scaled_unstuck_dust_close_is_capped(side, position_size, current_price):
+    position = _build_position(
+        side=side,
+        position_size=position_size,
+        current_price=current_price,
+        min_qty=0.1,
+        unstuck_ema_gating_enabled=False,
+    )
+    result = pbr.calc_unstucking_close_py(1000.0, 0.1, 0.1, [position])
+
+    assert result is not None
+    assert result[2] == pytest.approx(-position_size)

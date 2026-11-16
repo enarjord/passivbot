@@ -73,7 +73,7 @@ async def test_download_cli_applies_side_sources_before_offline_preparation(monk
 
     captured = []
     source = authored_source()
-    monkeypatch.setattr(ohlcv_download, "load_input_config", lambda _path: (source, "", deepcopy(source)))
+    monkeypatch.setattr(ohlcv_download, "load_input_config", lambda _path, **kwargs: (source, "", deepcopy(source)))
     async def prepared_only(config, *, for_optimize=False):
         assert for_optimize is False
         captured.append(config)
@@ -94,7 +94,7 @@ async def test_download_cli_decodes_directional_convenience_sources(monkeypatch,
     import ohlcv_download
     source = authored_source()
     captured = []
-    monkeypatch.setattr(ohlcv_download, 'load_input_config', lambda _path: (source, '', deepcopy(source)))
+    monkeypatch.setattr(ohlcv_download, 'load_input_config', lambda _path, **kwargs: (source, '', deepcopy(source)))
     async def prepared_only(config, *, for_optimize=False):
         assert for_optimize is False
         captured.append(config)
@@ -194,7 +194,7 @@ async def test_download_rejects_null_sources_before_mutation(monkeypatch, flag, 
     monkeypatch.setattr(
         ohlcv_download,
         "load_input_config",
-        lambda _path: (source, "", deepcopy(source)),
+        lambda _path, **kwargs: (source, "", deepcopy(source)),
     )
 
     async def unexpected(*args, **kwargs):
@@ -246,7 +246,7 @@ async def test_download_empty_source_or_explicit_side_null(monkeypatch, side_nul
     monkeypatch.setattr(
         ohlcv_download,
         "load_input_config",
-        lambda _path: (source, "", deepcopy(source)),
+        lambda _path, **kwargs: (source, "", deepcopy(source)),
     )
     observed = []
 
