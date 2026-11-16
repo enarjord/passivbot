@@ -11,6 +11,7 @@ import aiohttp
 import pytest
 from ccxt.base.errors import (
     AuthenticationError,
+    ExchangeError,
     InsufficientFunds,
     InvalidOrder,
     NetworkError,
@@ -24,6 +25,14 @@ from custom_endpoint_overrides import (
     ResolvedEndpointOverride,
 )
 from exchanges.bitunix import BitunixBot, BitunixClient, BitunixOrderStream
+from live.bitunix_create_journal import (
+    BitunixCreateAttempt,
+    BitunixCreateJournal,
+    BitunixCreateJournalError,
+)
+from live.bitunix_create_recovery import BitunixCreateRecovery
+from live.hsl_live import ProtectiveBatch
+from live.position_fill_sync import WriteDeferred, connector_context, defer_submission
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 from fill_events_manager import (
     BitunixFetcher,
@@ -2275,6 +2284,221 @@ class _RecordingSession:
     def request(self, *args, **kwargs):
         self.call = (args, kwargs)
         return _ResponseContext(self.response)
+
+
+def _tracked_create_fixture(tmp_path, response):
+    client = _prepared_client()
+    journal = BitunixCreateJournal(tmp_path / "account" / "create_attempts.sqlite3")
+    bot = SimpleNamespace(
+        cca=client, _ensure_freshness_ledger=lambda: SimpleNamespace(epoch=7)
+    )
+    client.ordinary_create_recovery = BitunixCreateRecovery(bot, journal)
+    response_text = (
+        AsyncMock(side_effect=response)
+        if isinstance(response, BaseException)
+        else AsyncMock(return_value=response)
+    )
+    session = _RecordingSession(
+        SimpleNamespace(status=200, headers={}, text=response_text)
+    )
+    client._get_session = AsyncMock(return_value=session)
+    client._throttle = AsyncMock()
+    return bot, journal, session
+
+
+def _tracked_create_order(*, panic=False):
+    return {
+        "symbol": "BTC/USDT:USDT",
+        "position_side": "long",
+        "_dedicated_protective_market_panic": panic,
+    }
+
+
+async def _send_tracked_create(
+    bot, order, *, market=False, client_id="test-close-long"
+):
+    return await bot.cca.create_order(
+        order["symbol"],
+        "market" if market else "limit",
+        "sell",
+        0.002,
+        None if market else 51_000.0,
+        {
+            "positionSide": "LONG",
+            "reduceOnly": True,
+            "positionId": "position-1",
+            "clientOrderId": client_id,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_bitunix_persists_exact_attempt_before_signed_post_and_through_ack(
+    tmp_path, monkeypatch
+):
+    bot, journal, session = _tracked_create_fixture(
+        tmp_path, '{"code":0,"data":{"orderId":"venue-1","clientId":"test-close-long"}}'
+    )
+    order = _tracked_create_order()
+    request = session.request
+    observed = []
+
+    def observe_durable_attempt(*args, **kwargs):
+        assert args[0] == "POST" and args[1].endswith(BitunixClient.PLACE_ORDER_PATH)
+        assert kwargs["headers"]["sign"]
+        (attempt,) = BitunixCreateJournal(journal.path).load()
+        assert attempt == BitunixCreateAttempt.from_wire(
+            json.loads(kwargs["data"]), submitted_at_ms=attempt.submitted_at_ms
+        )
+        assert (attempt.position_side, attempt.side, attempt.position_id) == (
+            "long",
+            "sell",
+            "position-1",
+        )
+        observed.append(attempt)
+        return request(*args, **kwargs)
+
+    monkeypatch.setattr(session, "request", observe_durable_attempt)
+    submitted = []
+    with connector_context(bot, order, "create", recheck=lambda _: True):
+        assert defer_submission(lambda: submitted.append(True))
+        result = await _send_tracked_create(bot, order)
+
+    assert result["id"] == "venue-1"
+    assert submitted == [True]
+    assert len(observed) == 1
+    assert journal.load() == tuple(observed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response", "error"),
+    [
+        (asyncio.TimeoutError(), NetworkError),
+        (asyncio.CancelledError(), asyncio.CancelledError),
+        ("invalid JSON", NetworkError),
+        ('{"code":0,"data":{"clientId":"test-close-long"}}', ExchangeError),
+        ('{"code":30042,"msg":"duplicate client ID","data":null}', InvalidOrder),
+    ],
+)
+async def test_bitunix_ambiguous_place_result_retains_attempt(
+    tmp_path, response, error
+):
+    bot, journal, session = _tracked_create_fixture(tmp_path, response)
+    order = _tracked_create_order()
+
+    with connector_context(bot, order, "create", recheck=lambda _: True) as context:
+        with pytest.raises(error):
+            await _send_tracked_create(bot, order)
+        assert context.submitted
+
+    assert session.call is not None
+    (attempt,) = BitunixCreateJournal(journal.path).load()
+    assert attempt.client_id == "test-close-long"
+
+
+@pytest.mark.asyncio
+async def test_bitunix_known_business_rejection_releases_exact_attempt(tmp_path):
+    bot, journal, session = _tracked_create_fixture(
+        tmp_path, '{"code":20003,"msg":"insufficient balance","data":null}'
+    )
+    order = _tracked_create_order()
+    with connector_context(bot, order, "create", recheck=lambda _: True):
+        with pytest.raises(InsufficientFunds):
+            await _send_tracked_create(bot, order)
+    assert session.call is not None
+    assert journal.path.exists()
+    assert journal.load() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("denial", ["queue", "journal", "expired_after_fsync"])
+async def test_bitunix_no_post_or_submit_bookkeeping_after_admission_failure(
+    tmp_path, monkeypatch, denial
+):
+    bot, journal, session = _tracked_create_fixture(
+        tmp_path, '{"code":0,"data":{"orderId":"venue-1"}}'
+    )
+    order = _tracked_create_order()
+    authorized = True
+    submitted = []
+    record = journal.record
+
+    async def queued(*, cancel=False):
+        nonlocal authorized
+        if denial == "queue":
+            authorized = False
+
+    def record_attempt(attempt):
+        nonlocal authorized
+        if denial == "journal":
+            raise BitunixCreateJournalError("simulated failed durability")
+        record(attempt)
+        assert BitunixCreateJournal(journal.path).load() == (attempt,)
+        if denial == "expired_after_fsync":
+            authorized = False
+
+    monkeypatch.setattr(bot.cca, "_throttle", queued)
+    monkeypatch.setattr(journal, "record", record_attempt)
+    with connector_context(
+        bot, order, "create", recheck=lambda _: authorized
+    ) as context:
+        assert defer_submission(lambda: submitted.append(True))
+        with pytest.raises(WriteDeferred):
+            await _send_tracked_create(bot, order)
+        assert not context.submitted
+
+    assert session.call is None
+    assert submitted == []
+    assert journal.load() == ()
+    assert journal.path.exists() == (denial == "expired_after_fsync")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("market", [False, True])
+async def test_bitunix_pending_attempt_allows_protective_batch_and_cancel(
+    tmp_path, market
+):
+    ordinary_ack = (
+        '{"code":0,"data":{"orderId":"venue-1","clientId":"test-close-long"}}'
+    )
+    bot, journal, session = _tracked_create_fixture(tmp_path, ordinary_ack)
+    ordinary = _tracked_create_order()
+    with connector_context(bot, ordinary, "create", recheck=lambda _: True):
+        await _send_tracked_create(bot, ordinary)
+    pending = journal.load()
+    assert len(pending) == 1
+
+    protective = _tracked_create_order(panic=True)
+    batch = ProtectiveBatch(wave=None, cancels=(), creates=(protective,))
+    bot._hsl_live = SimpleNamespace(_protective_batch=batch)
+    session.call = None
+    impostor = dict(protective)
+    with connector_context(bot, impostor, "create", recheck=lambda _: True):
+        with pytest.raises(WriteDeferred):
+            await _send_tracked_create(bot, impostor, market=market)
+    assert session.call is None
+
+    session.response.text.return_value = '{"code":0,"data":{"orderId":"venue-2"}}'
+    with connector_context(bot, protective, "create", recheck=lambda _: True):
+        result = await _send_tracked_create(
+            bot, protective, market=market, client_id="test-protection-close-long"
+        )
+    assert result["id"] == "venue-2"
+    assert json.loads(session.call[1]["data"])["orderType"] == (
+        "MARKET" if market else "LIMIT"
+    )
+    assert journal.load() == pending
+
+    bot._hsl_live._protective_batch = None
+    session.response.text.return_value = (
+        '{"code":0,"data":{"successList":[{"orderId":"stale-order"}],"failureList":[]}}'
+    )
+    with connector_context(bot, ordinary, "cancel", recheck=lambda _: True):
+        result = await bot.cca.cancel_order("stale-order", ordinary["symbol"])
+    assert result["id"] == "stale-order"
+    assert session.call[0][1].endswith("/cancel_orders")
+    assert journal.load() == pending
 
 
 @pytest.mark.asyncio

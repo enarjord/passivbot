@@ -5,6 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Recover Bitunix creates by exact client order ID after an uncertain response or restart.
+  Defer further ordinary creates while a submitted attempt remains unresolved.
+
 - Recheck ordinary live order admission after connector queueing so a stale
   create or cancel is deferred before it reaches the exchange.
 

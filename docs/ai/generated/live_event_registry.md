@@ -234,6 +234,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `state_change_detected`
 - `submitted_to_exchange`
 - `trailing_status`
+- `unresolved_create_attempt`
 - `unstuck_selection`
 - `unstuck_status`
 - `warmup_cache_decision`

@@ -9,6 +9,7 @@ import time
 import uuid
 from copy import deepcopy
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlencode
 
@@ -29,6 +30,11 @@ from custom_endpoint_overrides import CustomEndpointConfigError
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from exchanges.retry_after import retry_after_from_headers
 from live.balance_composition import normalize_bitunix_balance_composition
+from live.bitunix_create_journal import (
+    CLIENT_ORDER_ID_PATTERN as BITUNIX_CLIENT_ORDER_ID_PATTERN,
+    BitunixCreateJournal,
+)
+from live.bitunix_create_recovery import BitunixCreateRecovery
 from live.diagnostic_safety import bounded_exception_code
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 from passivbot import logging
@@ -123,6 +129,15 @@ class BitunixClient:
     DEFAULT_TAKER_FEE = 0.0006
     RESERVED_AUTH_HEADERS = frozenset({"api-key", "nonce", "timestamp", "sign"})
     ORDER_STATUS_TOKEN_RE = re.compile(r"[A-Z][A-Z0-9_]{0,31}")
+    PLACE_ORDER_PATH = "/api/v1/futures/trade/place_order"
+    # Explicit business rejections of this placement. Transport, duplicate-ID,
+    # unknown business errors and malformed responses leave recovery pending.
+    PLACE_ORDER_REJECTED = frozenset({
+        "403", "10002", "10003", "10004", "10007", "10008", "10010", "10011",
+        "20001", "20002", "20003", "20004", "20008", "20011", "20012", "20015",
+        "30001", "30002", "30003", "30004", "30013", "30014", "30015", "30016",
+        "30017", "30018", "30019", "30039", "30040",
+    })
     PENDING_STATUS_WARNING_INTERVAL_SECONDS = 300.0
 
     has = {
@@ -454,7 +469,20 @@ class BitunixClient:
         await self._throttle(cancel=cancel)
         session = await self._get_session()
         from live.position_fill_sync import check_transport_admission
-        check_transport_admission(is_write=method.upper() != "GET")
+        recovery = getattr(self, "ordinary_create_recovery", None)
+        attempt = None
+        if method == "POST" and path == self.PLACE_ORDER_PATH and recovery is not None:
+
+            def prepare(context):
+                nonlocal attempt
+                attempt = recovery.record(body, context)
+                if attempt is not None:
+                    return lambda: recovery.resolve(attempt, "not_sent")
+                return None
+
+            check_transport_admission(prepare_write=prepare)
+        else:
+            check_transport_admission(is_write=method.upper() != "GET")
         try:
             async with session.request(
                 method,
@@ -482,6 +510,12 @@ class BitunixClient:
             raise ExchangeError("Bitunix returned a non-object response")
         code = payload.get("code")
         if code not in (0, "0"):
+            if (
+                attempt is not None
+                and str(code) in self.PLACE_ORDER_REJECTED
+                and payload.get("data") in (None, {}, [])
+            ):
+                recovery.resolve(attempt, "rejected")
             self._raise_api_error(code, payload.get("msg"))
         if "data" not in payload:
             raise ExchangeError("Bitunix success response missing data")
@@ -1063,7 +1097,7 @@ class BitunixClient:
         data = _singleton_or_mapping(
             await self._request(
                 "POST",
-                "/api/v1/futures/trade/place_order",
+                self.PLACE_ORDER_PATH,
                 body=body,
                 private=True,
             ),
@@ -1686,12 +1720,17 @@ class BitunixClient:
 
     async def close(self) -> None:
         self._closed = True
-        for task in self._ticker_tasks:
-            task.cancel()
-        if self._ticker_tasks:
-            await asyncio.gather(*self._ticker_tasks, return_exceptions=True)
-        if self._session is not None and not self._session.closed:
-            await self._session.close()
+        try:
+            recovery = getattr(self, "ordinary_create_recovery", None)
+            if recovery is not None:
+                await recovery.close()
+        finally:
+            for task in self._ticker_tasks:
+                task.cancel()
+            if self._ticker_tasks:
+                await asyncio.gather(*self._ticker_tasks, return_exceptions=True)
+            if self._session is not None and not self._session.closed:
+                await self._session.close()
 
 
 class BitunixOrderStream:
@@ -2316,7 +2355,7 @@ class BitunixBot(CCXTBot):
     """Bitunix USDT-margined perpetual-futures connector."""
 
     MAX_OPEN_ORDERS = 100
-    CLIENT_ORDER_ID_PATTERN = re.compile(r"^[.A-Z:/a-z0-9_-]{1,36}$")
+    CLIENT_ORDER_ID_PATTERN = BITUNIX_CLIENT_ORDER_ID_PATTERN
 
     def __init__(self, config: dict):
         super().__init__(config)
@@ -2352,12 +2391,31 @@ class BitunixBot(CCXTBot):
             ccxt_config, getattr(self, "endpoint_override", None)
         )
         self.cca = BitunixClient(ccxt_config)
+        self.cca.ordinary_create_recovery = BitunixCreateRecovery(
+            self,
+            BitunixCreateJournal(
+                Path("var")
+                / self.exchange
+                / self.user
+                / "create_attempts.sqlite3"
+            ),
+        )
         self.cca.options.update(self.user_info.get("options", {}))
         if self.ws_enabled:
             self.ccp = BitunixOrderStream(self.cca)
         else:
             self.ccp = None
             logging.info("bitunix: WebSocket disabled, using REST polling")
+
+    def _ordinary_create_recovery_pending(self) -> bool:
+        recovery = getattr(self.cca, "ordinary_create_recovery", None)
+        return recovery is not None and recovery.pending
+
+    async def prepare_planning_universe(self):
+        recovery = getattr(self.cca, "ordinary_create_recovery", None)
+        if recovery is not None:
+            recovery.poll(self.cca._request)
+        await super().prepare_planning_universe()
 
     def _market_snapshot_ticker_strategy(self) -> str:
         if not self.ws_enabled:

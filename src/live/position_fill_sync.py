@@ -48,9 +48,12 @@ def defer_submission(callback):
     return True
 
 
-def check_transport_admission(*, is_write=True):
+def check_transport_admission(*, is_write=True, prepare_write=None):
+    """Check admission and finish any synchronous transport preparation."""
     context = _write_context.get()
     if context is None:
+        if prepare_write is not None:
+            prepare_write(None)
         return
     settling = not permits(context.bot, context.order, context.action)
     if settling or (
@@ -64,7 +67,21 @@ def check_transport_admission(*, is_write=True):
             reason = "position/fill settling" if settling else "current write admission"
             raise NetworkError(f"{reason} deferred a submitted request retry")
         raise WriteDeferred()
+    if is_write and context.submitted and prepare_write is not None:
+        from ccxt.base.errors import NetworkError
+
+        raise NetworkError("durably tracked request cannot be retried in place")
     if is_write and not context.submitted:
+        if prepare_write is not None:
+            undo = prepare_write(context)
+            # A durable write can spend time on disk after the initial check.
+            if (
+                undo is not None
+                and context.recheck is not None
+                and not context.recheck(context.order)
+            ):
+                undo()
+                raise WriteDeferred()
         context.submitted = True
         callbacks, context.callbacks = context.callbacks, []
         for callback in callbacks:

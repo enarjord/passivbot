@@ -653,6 +653,25 @@ Primary references: [place order](https://www.bitunix.com/api-docs/futures/trade
 [order detail](https://www.bitunix.com/api-docs/futures/trade/get_order_detail.html), and
 [history trades](https://www.bitunix.com/api-docs/futures/trade/get_history_trades.html).
 
+### Recovery of ordinary creations
+
+Keep the Bitunix create journal under `var/bitunix/<user>/create_attempts.sqlite3`
+in the live data directory. Keep that data directory across restarts and release switches.
+The [recovery contract](../error_contract.md#live-action-readiness) applies to one outstanding
+ordinary create. A committed pending-order cohort can adopt a working order by exact
+`clientId`. Otherwise, use exact order detail and bounded order-history queries. Query both
+canceled and non-canceled history where applicable. A terminal fill quantity must agree with
+the canonical trade data by venue order ID.
+
+Bitunix describes `20007` as a lookup miss to retry later and `30042` as a duplicate
+client ID. The API documents neither a definitive absence interval nor idempotent replay.
+Keep an unresolved slot reserved, with bounded lookup retries and operator reminders. If it
+persists, inspect the original attempt and its venue outcome before releasing it or rolling
+back to a build that cannot read the journal.
+[Order detail](https://www.bitunix.com/api-docs/futures/trade/get_order_detail.html),
+[order history](https://www.bitunix.com/api-docs/futures/trade/get_history_orders.html),
+[error codes](https://www.bitunix.com/api-docs/futures/ErrorCode/error_code.html).
+
 ### Product-admission retry policy
 
 The native connector opts structured exchange error `710003` into the existing per-symbol

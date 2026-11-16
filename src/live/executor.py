@@ -842,6 +842,29 @@ async def execute_order_plan(
                 "[order] debug mode would create orders | count=%d", len(to_create)
             )
     else:
+        recovery_pending = getattr(bot, "_ordinary_create_recovery_pending", None)
+        if to_create and callable(recovery_pending) and recovery_pending():
+            blocked = [
+                order for order in to_create
+                if protective_batch is None
+                or not protective_batch.contains(order, "create")
+            ]
+            if blocked:
+                to_create = _orders_removed_by_identity(to_create, blocked)
+                reason = ReasonCodes.UNRESOLVED_CREATE_ATTEMPT
+                _observe_close_create_defer(bot, blocked, reason)
+                _record_fresh_entry_orders(bot, "record_blocked_orders", blocked, reason)
+                if order_wave is not None:
+                    order_wave["deferred_create"] += len(blocked)
+                passivbot_cls._emit_execution_create_filter_event(
+                    bot,
+                    event_type=EventTypes.EXECUTION_CREATE_DEFERRED,
+                    status="deferred",
+                    reason_code=reason,
+                    order_count=len(blocked),
+                    symbols=_symbols_from_orders(blocked),
+                    wave=order_wave,
+                )
         to_create_mod = []
         recent_execution_deferred: list[tuple[dict, float]] = []
         for order in to_create:
