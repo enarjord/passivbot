@@ -586,6 +586,7 @@ def test_device_shape_release_preserves_native_replay(strategy, sides):
         del output
 
 
+@pytest.mark.usefixtures("torch_runtime")
 @pytest.mark.parametrize("same_shape,allowance,expected_width", [
     (True, 20, 4),
     (False, 30, 2),
