@@ -11470,6 +11470,7 @@ class Passivbot:
         """Return True when a WS batch only confirms recent local creates/cancels."""
         if not upd_list:
             return False
+        cancel_wave = hsl_live.active_ordinary_cancel_wave(self)
         recognized = 0
         for order in upd_list:
             if not isinstance(order, dict):
@@ -11478,11 +11479,16 @@ class Passivbot:
                 return False
             status = str(order.get("status") or "").lower()
             if status == "open":
-                if not self.order_matches_recent_execution(order):
+                if cancel_wave is not None or not self.order_matches_recent_execution(order):
                     return False
                 recognized += 1
                 continue
             if status in ("canceled", "cancelled"):
+                if cancel_wave is not None and (
+                    not cancel_wave.matches_submission(order)
+                    or not self.cca.ordinary_cancel_echo_has_no_fill(order)
+                ):
+                    return False
                 if not self.order_matches_bot_cancellation(order):
                     return False
                 recognized += 1

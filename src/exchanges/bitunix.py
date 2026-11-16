@@ -8,7 +8,7 @@ import re
 import time
 import uuid
 from copy import deepcopy
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable
 from urllib.parse import urlencode
 
@@ -97,6 +97,7 @@ class BitunixClient:
     """Minimal async Bitunix futures client with a CCXT-compatible live boundary."""
 
     _position_fill_transport_guard = True
+    supports_ordinary_cancel_wave = True
     id = "bitunix"
     name = "Bitunix"
     precisionMode = 4  # ccxt.TICK_SIZE
@@ -1151,6 +1152,41 @@ class BitunixClient:
             "status": "canceled",
             "info": deepcopy(data),
         }
+
+    @staticmethod
+    def ordinary_cancel_acknowledged(order, result):
+        """Prove this singleton cancel was acknowledged without a conflicting row."""
+        info = result.get("info") if isinstance(result, dict) else None
+        if not isinstance(info, dict):
+            return False
+        successes = info.get("successList")
+        failures = info.get("failureList", [])
+        return (
+            result.get("status") == "canceled"
+            and result.get("symbol") == order["symbol"]
+            and str(result.get("id")) == str(order["id"])
+            and isinstance(successes, list)
+            and len(successes) == 1
+            and isinstance(successes[0], dict)
+            and str(successes[0].get("orderId")) == str(order["id"])
+            and failures == []
+        )
+
+    @staticmethod
+    def ordinary_cancel_echo_has_no_fill(order):
+        # Normalization can default a missing cumulative fill to zero. Only
+        # explicit venue evidence can keep a wave's account receipt current.
+        info = order.get("info")
+        if not isinstance(info, dict):
+            return False
+        amounts = [info[field] for field in ("tradeQty", "dealAmount") if field in info]
+        try:
+            return bool(amounts) and all(
+                type(value) in (str, int, float) and Decimal(str(value)).is_zero()
+                for value in amounts
+            )
+        except InvalidOperation:
+            return False
 
     def _normalize_trade(self, row: dict) -> dict:
         market_id = str(row.get("symbol") or "")

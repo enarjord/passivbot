@@ -90,6 +90,10 @@ If an entry cancellation remains unacknowledged, including when the batch
 cap defers it, wait before flattening its risk scope. A still-resting
 same-position reduce-only order also blocks the affected market create.
 Same-position limit replacements still wait for cancellation confirmation.
+The separate ordinary cancellation wave in the live readiness contract requires
+all HSL scopes to be disabled, including coin overrides. A continuation cannot
+enter transport after protection becomes applicable. The execution owner returns
+to its normal refresh and protection path after the wave.
 Routine account-change reporting
 runs after protection in one owned background task with one coalesced pending receipt;
 slow or failed diagnostics cannot become a protective prerequisite. Ordinary strategy, auto-unstuck

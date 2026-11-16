@@ -58,6 +58,25 @@ def active_protective_batch(bot):
     return getattr(getattr(bot, "_hsl_live", None), "_protective_batch", None)
 
 
+def active_ordinary_cancel_wave(bot):
+    return getattr(getattr(bot, "_hsl_live", None), "_ordinary_cancel_wave", None)
+
+
+async def _submit_before_cancel_deadline(operation, bot, order, transport, deadline):
+    import asyncio
+
+    timeout = asyncio.timeout_at(deadline)
+    # The bound is for a queued sibling, not for a wire request or its response.
+    transport.callbacks.append(lambda: timeout.reschedule(None))
+    try:
+        async with timeout:
+            return await operation(bot, order)
+    except TimeoutError:
+        if timeout.expired() and not transport.submitted:
+            raise position_fill_sync.WriteDeferred() from None
+        raise
+
+
 def connector_write(action):
     """Serialize connector admission, using a fresh cohort for each ordinary write."""
 
@@ -77,6 +96,11 @@ def connector_write(action):
             try:
                 async with instance._write_lock:
                     batch = getattr(instance, "_protective_batch", None)
+                    cancel_wave = active_ordinary_cancel_wave(bot)
+                    if cancel_wave is not None and not cancel_wave.permits(
+                        bot, order, action
+                    ):
+                        return deferred()
                     if batch is not None and (
                         batch.needs_refresh or not batch.contains(order, action)
                     ):
@@ -86,7 +110,12 @@ def connector_write(action):
 
                     def recheck(order):
                         return (
-                            active_protective_batch(bot) is batch and instance.admit(order)
+                            active_protective_batch(bot) is batch
+                            and active_ordinary_cancel_wave(bot) is cancel_wave
+                            and instance.admit(order)
+                            and (
+                                cancel_wave is None or cancel_wave.permits(bot, order, action)
+                            )
                         )
 
                     with position_fill_sync.connector_context(
@@ -94,13 +123,22 @@ def connector_write(action):
                         order,
                         action,
                         recheck=recheck,
-                    ):
+                    ) as transport:
                         if action == "cancel":
                             executor.record_cancel_connector_admission(bot, order)
+                        if cancel_wave is not None:
+                            transport.callbacks.append(
+                                lambda: cancel_wave.record_submission(order)
+                            )
                         surfaces = {"balance", "positions", "open_orders"}
                         needs_confirmation = True
                         try:
-                            result = await operation(bot, order)
+                            if cancel_wave is not None and cancel_wave.continuing:
+                                result = await _submit_before_cancel_deadline(
+                                    operation, bot, order, transport, cancel_wave.deadline
+                                )
+                            else:
+                                result = await operation(bot, order)
                             if batch is not None:
                                 if action == "create":
                                     batch.needs_refresh = not bot.did_create_order(result)
@@ -124,7 +162,13 @@ def connector_write(action):
                         finally:
                             # A read made during submission cannot confirm its result.
                             if needs_confirmation:
-                                if batch is not None and active_protective_batch(bot) is batch:
+                                if cancel_wave is not None:
+                                    if transport.submitted:
+                                        if active_ordinary_cancel_wave(bot) is cancel_wave:
+                                            cancel_wave.confirmations.update(surfaces)
+                                        else:
+                                            bot._request_authoritative_confirmation(surfaces)
+                                elif batch is not None and active_protective_batch(bot) is batch:
                                     batch.confirmations.update(surfaces)
                                 else:
                                     bot._request_authoritative_confirmation(surfaces)
@@ -236,6 +280,40 @@ class ProtectiveBatch:
 
 
 @dataclass
+class OrdinaryCancelWave:
+    """Serial cancels sharing a plan when there is no active HSL policy."""
+
+    orders: tuple[dict, ...]
+    deadline: float
+    confirmations: set[str] = field(default_factory=set)
+    submitted: set[tuple[str, str]] = field(default_factory=set)
+    continuing: bool = False
+
+    def permits(self, bot, order, action):
+        import asyncio
+
+        return (
+            action == "cancel"
+            and any(order is candidate for candidate in self.orders)
+            and not runtime.enabled(bot)
+            and (
+                not self.continuing or asyncio.get_running_loop().time() < self.deadline
+            )
+        )
+
+    def record_submission(self, order):
+        self.submitted.add((order["symbol"], str(order["id"])))
+
+    def matches_submission(self, order):
+        return (order.get("symbol"), str(order.get("id"))) in self.submitted
+
+    def confirm(self, bot):
+        if self.confirmations:
+            bot._request_authoritative_confirmation(self.confirmations)
+            self.confirmations.clear()
+
+
+@dataclass
 class CurrentIoRetry:
     """Transport retry state shared by replacement bots in one live process."""
 
@@ -297,6 +375,7 @@ class Owner:
         self.quotes = {}
         self._waves = {}
         self._protective_batch = None
+        self._ordinary_cancel_wave = None
         self._retired_ordinary_receipts = weakref.WeakSet()
         self._quote_tasks = {}
         self._quote_started = {}
@@ -1368,6 +1447,7 @@ class Owner:
             return None, elapsed_ms
 
     async def _service_ordinary(self, plan, timings, *, now):
+        import asyncio
         from time import perf_counter
         from utils import utc_ms
 
@@ -1378,7 +1458,45 @@ class Owner:
             return reason
         bot._current_planning_snapshot = snapshot
         started = perf_counter()
-        await bot.execute_order_plan_to_exchange(cancels, creates)
+        cancel_wave = None
+        # Enabled scopes (including coin overrides) retain the legacy handoff.
+        # That owner evaluates protection across the account between writes.
+        if (
+            len(cancels) > 1
+            and getattr(getattr(bot, "cca", None), "supports_ordinary_cancel_wave", False)
+            and not bot.debug_mode
+            and int(bot.live_value("max_n_cancellations_per_batch")) > 1
+            and not runtime.enabled(bot)
+        ):
+            from live import executor
+            from live.order_churn_gate import connector_supports_order_churn_gate
+
+            if connector_supports_order_churn_gate(bot) and not any(
+                executor._order_is_risk_critical(order) or executor._order_is_panic(order)
+                for order in creates
+            ):
+                # Only siblings get the extra time bound. The first cancel keeps
+                # the established timeout even when the transport limiter is busy.
+                delay = max(0.05, float(bot.live_value("execution_delay_seconds")))
+                surfaces = bot._ensure_freshness_ledger().surfaces
+                oldest_ms = min(
+                    surfaces[surface].updated_ms
+                    for surface in ("balance", "positions", "open_orders")
+                )
+                account_time_left = (
+                    oldest_ms + bot._live_market_snapshot_max_age_ms() - int(utc_ms())
+                ) / 1000
+                cancel_wave = OrdinaryCancelWave(
+                    tuple(cancels),
+                    asyncio.get_running_loop().time() + min(delay, account_time_left),
+                )
+        self._ordinary_cancel_wave = cancel_wave
+        try:
+            await bot.execute_order_plan_to_exchange(cancels, creates)
+        finally:
+            self._ordinary_cancel_wave = None
+            if cancel_wave is not None:
+                cancel_wave.confirm(bot)
         if not self._shutdown_requested():
             run_diagnostic_step(
                 "record ordinary acceptance",
