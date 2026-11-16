@@ -87,17 +87,16 @@ def connector_context(bot, order, action=None, *, recheck=None):
 
         client.fetch = guarded_fetch
         client._position_fill_transport_guard = True
-    token = _write_context.set(
-        WriteContext(
-            bot,
-            order,
-            bool(getattr(client, "_position_fill_transport_guard", False)),
-            action,
-            recheck,
-        )
+    context = WriteContext(
+        bot,
+        order,
+        bool(getattr(client, "_position_fill_transport_guard", False)),
+        action,
+        recheck,
     )
+    token = _write_context.set(context)
     try:
-        yield
+        yield context
     finally:
         _write_context.reset(token)
 

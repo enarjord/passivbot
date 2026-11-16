@@ -6,6 +6,7 @@ import math
 import sys
 import time
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 
 from passivbot_exceptions import RestartBotException, FatalBotException
 from live import close_replacement_diagnostics, hsl_live, position_fill_sync
@@ -24,6 +25,11 @@ class DeferredOrderCreation:
 
 class DeferredOrderCancellation:
     """A cancellation withheld before exchange submission."""
+
+
+@dataclass(frozen=True)
+class _UnconfirmedCancelResponse:
+    response_count: int | None = None
 
 
 def _passivbot_module():
@@ -77,7 +83,9 @@ def _authoritative_full_confirmation_surfaces(bot, passivbot_cls) -> set[str]:
 
 
 def _request_authoritative_confirmation(bot, passivbot_cls, surfaces) -> None:
-    batch = hsl_live.active_protective_batch(bot)
+    batch = hsl_live.active_protective_batch(bot) or hsl_live.active_ordinary_cancel_wave(
+        bot
+    )
     if batch is not None:
         batch.confirmations.update(surfaces)
         return
@@ -583,6 +591,7 @@ async def execute_order_plan(
     protective_batch = (
         hsl_live.active_protective_batch(bot) if not configure_creations else None
     )
+    ordinary_cancel_wave = hsl_live.active_ordinary_cancel_wave(bot)
     market_panics = [
         order
         for order in to_create
@@ -679,12 +688,16 @@ async def execute_order_plan(
         try:
             res = await bot.execute_cancellations_parent(to_cancel)
         finally:
-            if cancel_first_barrier and protective_batch is None:
+            if cancel_first_barrier and protective_batch is None and (
+                ordinary_cancel_wave is None or ordinary_cancel_wave.confirmations
+            ):
                 _request_authoritative_confirmation(
                     bot,
                     passivbot_cls,
                     _authoritative_full_confirmation_surfaces(bot, passivbot_cls),
                 )
+            if ordinary_cancel_wave is not None:
+                ordinary_cancel_wave.confirm(bot)
             bot._order_wave_in_progress = None
         if order_wave is not None:
             order_wave["cancel_ms"] = int(max(0, _utc_ms() - cancel_started_ms))
@@ -748,7 +761,12 @@ async def execute_order_plan(
 
         def must_wait_for_cancel_confirmation(order: dict) -> bool:
             scope = _cancel_first_scope(bot, order)
-            return has_unscoped_cancel or scope is None or scope in cancel_scopes
+            return (
+                ordinary_cancel_wave is not None
+                or has_unscoped_cancel
+                or scope is None
+                or scope in cancel_scopes
+            )
 
         barrier_deferred = [
             order
@@ -779,7 +797,7 @@ async def execute_order_plan(
                 bot, barrier_deferred, ReasonCodes.ACCOUNT_CANCEL_FIRST_BARRIER
             )
             logging.debug(
-                "[order] cancel-first barrier deferred %d same-position creates until confirmation and replanning",
+                "[order] cancel-first barrier deferred %d creates until confirmation and replanning",
                 len(barrier_deferred),
             )
             passivbot_cls._emit_execution_create_filter_event(
@@ -1459,6 +1477,24 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     return to_return
 
 
+async def _execute_ordinary_cancels_serially(bot, orders, wave):
+    results = []
+    for index, order in enumerate(orders):
+        wave.continuing = index > 0
+        response = await bot.execute_cancellations([order])
+        result = (
+            response[0] if len(response) == 1 else _UnconfirmedCancelResponse(len(response))
+        )
+        acknowledged = bot.did_cancel_order(result, order)
+        if acknowledged and not bot.cca.ordinary_cancel_acknowledged(order, result):
+            result = _UnconfirmedCancelResponse()
+        results.append(result)
+        if not acknowledged or isinstance(result, _UnconfirmedCancelResponse):
+            results.extend(DeferredOrderCancellation() for _ in orders[index + 1 :])
+            break
+    return results
+
+
 async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
     """Submit a batch of cancellations, prioritising reduce-only orders."""
     passivbot_cls = _pb_attr("Passivbot")
@@ -1511,7 +1547,13 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
     }
     bot._execution_connector_call_context = connector_call_context
     try:
-        res = await bot.execute_cancellations(orders)
+        ordinary_cancel_wave = hsl_live.active_ordinary_cancel_wave(bot)
+        if ordinary_cancel_wave is None:
+            res = await bot.execute_cancellations(orders)
+        else:
+            res = await _execute_ordinary_cancels_serially(
+                bot, orders, ordinary_cancel_wave
+            )
     except (RestartBotException, FatalBotException):
         raise
     except Exception as exc:
@@ -1561,6 +1603,35 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
         return []
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if isinstance(ex, DeferredOrderCancellation):
+            continue
+        if isinstance(ex, _UnconfirmedCancelResponse):
+            bot.execution_scheduled = True
+            bot.state_change_detected_by_symbol.add(order["symbol"])
+            mismatch = ex.response_count is not None
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=(
+                    EventTypes.EXECUTION_AMBIGUOUS
+                    if mismatch
+                    else EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL
+                ),
+                action="cancel",
+                order=order,
+                status="degraded",
+                reason_code=(
+                    ReasonCodes.LENGTH_MISMATCH
+                    if mismatch
+                    else "requires_full_authoritative_confirmation"
+                ),
+                level="warning",
+                index=idx,
+                wave=wave,
+                extra=(
+                    {"response_count": ex.response_count, "request_count": 1}
+                    if mismatch
+                    else None
+                ),
+            )
             continue
         if not bot.did_cancel_order(ex, order):
             bot.state_change_detected_by_symbol.add(order["symbol"])

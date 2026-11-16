@@ -74,6 +74,18 @@ does not record an attempt or itself request post-write confirmation.
 A later denial cannot erase a prior submission attempt or its confirmation
 requirement.
 
+A connector may explicitly support a bounded ordinary cancellation wave while HSL
+is disabled and no panic or risk-critical create is planned. Submit the selected
+cancels serially from one confirmed ordinary plan,
+with current write admission checked after transport queueing. A continuation may
+enter transport only before account expiry and within one configured execution-delay
+interval from the wave start. The initial cancellation and submitted requests retain their normal
+transport timeouts. Stop after an unacknowledged or ambiguous response, changed
+required facts, or newly applicable protection. When at least one member entered
+transport, request fresh account confirmation after the wave. Creates in the same
+plan wait for a fresh ordinary plan. This does not change the reconciliation or
+create-only replacement churn contracts.
+
 The live execution owner backs off transport failures, including exchange backpressure,
 with an interruptible bounded schedule and logs persistent outages. A valid request-local
 HTTP `Retry-After` on a current I/O transport failure can extend that wait. The owner

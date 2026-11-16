@@ -8,6 +8,10 @@ its own version heading. See [release status](docs/releases.md).
 - Recheck ordinary live order admission after connector queueing so a stale
   create or cancel is deferred before it reaches the exchange.
 
+- Let Bitunix submit several planned cancellations from one fresh account read
+  when hard-stop-loss protection is disabled. Cancels run serially, stop on an
+  uncertain result or changed facts, and confirm account state before replanning.
+
 - Support opt-in `optimize.gpu.tuning_mode = "max"` on Apple Silicon Metal.
   It evaluates wider seed and offspring cohorts, retains the configured parent
   population size, and checks shared memory before allocating replay scratch.
