@@ -1,4 +1,6 @@
 """Actual native CUDA replays remain identical when duration changes boundaries."""
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -90,3 +92,29 @@ def test_adaptive_disabled_hsl_preserves_unequal_candidate_endpoints(
     assert runner.last_profile["adaptive_chunk_adjustments"] > 0
     assert runner.last_profile["kernel_candidate_steps"] == int((ends - 1).sum())
     assert runner.last_profile["temporal_chunk_bars_min"] == 1
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_cuda_max_warmup_transition_matches_unchunked_replay(cuda_runtime, monkeypatch, strategy):
+    from optimization.gpu import mps_kernel
+    from optimization.gpu.autotune import ReplayDurationController
+    from test_gpu_hsl_multicoin import make_proxy, raw
+    from test_gpu_side_specialization import equal_outputs
+
+    proxy = make_proxy("portfolio", strategy, ("short",), minutes=384, factual_hsl=True)
+    runner = proxy.runners["short"]
+    runner.run_config = replace(runner.run_config, warmup_bars=190)
+    candidates = [{}, {"hsl_drawdown_threshold_fraction": 1e-6}]
+    runner.max_dispatch_candidate_bars = None
+    _, expected = raw(proxy, candidates)
+
+    def controller(ceiling, *, initial_bars):
+        return ReplayDurationController(ceiling, initial_bars=initial_bars, target_seconds=60.0)
+
+    monkeypatch.setattr(mps_kernel, "ReplayDurationController", controller)
+    runner.initial_cuda_chunk_bars = 4
+    runner.max_dispatch_candidate_bars = len(candidates) * runner.n_coins * 64
+    _, adaptive = raw(proxy, candidates, profile=True)
+    equal_outputs(expected, adaptive)
+    assert runner.last_profile["temporal_chunk_bars_min"] <= 4
+    assert runner.last_profile["temporal_chunk_bars_max"] > 4

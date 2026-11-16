@@ -407,6 +407,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
     batch_size = resolve_gpu_sizing(gpu.get("batch_size"), field="batch_size")
     input_memory_budget = getattr(evaluator_for_pool, "_gpu_input_memory_budget", None)
     device = None
+    initial_width = None
     candidate_limit = 1024
     if max_throughput:
         from optimization.gpu.residency import CudaInputMemoryBudget, MpsInputMemoryBudget
@@ -418,8 +419,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
             device = "mps"
         else:
             device = gpu_device()
-        if device == "cuda" and (resume or batch_size is not None):
-            # A restored or explicit width does not need a CUDA wave estimate.
+        if device == "cuda":
             candidate_limit = CUDA_MAX_BATCH_CANDIDATES
         else:
             initial_width, candidate_limit = max_candidate_widths(device)
@@ -432,11 +432,8 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
     checkpoint_interval = float(gpu.get("checkpoint_interval_seconds", 5.0))
     if not math.isfinite(checkpoint_interval) or checkpoint_interval < 0:
         raise ValueError("GPU checkpoint interval must be finite and nonnegative")
-    if resume:
-        state = load_checkpoint(checkpoint_path, config)
-        _prepare_resumed_algorithm(state["algorithm"], problem=problem,
-                                   termination=termination, seed=seed, callback=Callback())
-    else:
+
+    def build_initial_state(startup_limit):
         starts = load_starting_individuals(
             starting_configs_path=starting_configs_path, population_size=population_size,
             get_starting_configs=get_starting_configs, configs_to_individuals=configs_to_individuals,
@@ -446,7 +443,10 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         )
         authored_seed_count = len(starts)
         if max_throughput:
-            target_width = initial_width if batch_size is None else min(batch_size, candidate_limit)
+            width = batch_size
+            if width is None:
+                width = max_candidate_widths(device)[0] if device == "cuda" else initial_width
+            target_width = min(width, startup_limit)
             plan = CudaMaxSearchBudget(population_size, target_width, cohort_limit)
             generated = plan.bootstrap_size(iters=iters, authored_seed_count=authored_seed_count)
             key_paths = getattr(optimization_shape, "key_paths", ())
@@ -464,8 +464,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         from session_artifacts import record_optimizer_search
         max_facts = (
             {"bootstrapped_individuals": len(starts), "initial_cohort_target": plan.cohort_width,
-             "generated_attempt_budget": iters}
-            if max_throughput else None
+             "generated_attempt_budget": iters} if max_throughput else None
         )
         record_optimizer_search(
             config, algorithm, population_plan, starting_individuals=authored_seed_count,
@@ -487,10 +486,32 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         state[CONTRACT_KEY] = build_evaluation_contract(config)
         state["resume_config"] = checkpoint_config(config, state[CONTRACT_KEY])
         state["anchor_plan"] = deepcopy(get_anchor_plan(config))
-    max_search_budget = state.get("max_search_budget")
+        return state
+
+    if resume:
+        state = load_checkpoint(checkpoint_path, config)
+        _prepare_resumed_algorithm(state["algorithm"], problem=problem,
+                                   termination=termination, seed=seed, callback=Callback())
+    elif device != "cuda":
+        # CUDA max uses registry memory estimates before it sizes its seed cohort.
+        state = build_initial_state(candidate_limit)
 
     with NativeDatasetRegistry(evaluator_for_pool, standalone_candle_coins=standalone_candle_coins,
                                overrides_list=overrides_list) as registry:
+        startup_limit = candidate_limit
+        if device == "cuda" and batch_size is None:
+            from optimization.native_planner_capacity import cuda_plan_parallel_window
+
+            parallel_window = cuda_plan_parallel_window(registry.planner, candidate_limit)
+            if parallel_window is not None and parallel_window < candidate_limit:
+                startup_limit = parallel_window
+                logging.info(
+                    "CUDA max host admission | startup_limit=%d serial_candidate_s=%.3f",
+                    startup_limit, registry.serial_preparation_seconds,
+                )
+        if not resume and device == "cuda":
+            state = build_initial_state(startup_limit)
+        max_search_budget = state.get("max_search_budget")
         labels = set(screening_policy["scenarios"])
         if labels:
             unknown = labels - registry.scorer.coverage.keys()
@@ -509,15 +530,17 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         # work is independent of the later evolutionary population size. Keep
         # admission bounded while allowing the service to fill wider batches.
         cohort_width = max_search_budget.cohort_width if max_search_budget is not None else population_size
-        population_window = max(2, min(cohort_width, candidate_limit))
+        population_window = max(2, min(cohort_width, startup_limit))
         pending_count = len(state["population"]) if (
             state["phase"] == "seeds" or (max_throughput and state["phase"] != "idle")
         ) else 0
-        candidate_window = max(population_window, min(pending_count, candidate_limit))
+        candidate_window = max(population_window, min(pending_count, startup_limit))
         if device == "mps":
             service_options["max_pending"] = candidate_limit
         if max_throughput and batch_size is None:
-            service_options["max_cohort_width"] = max_search_budget.target_width
+            service_options["max_cohort_width"] = min(max_search_budget.target_width, startup_limit)
+            if startup_limit < candidate_limit:
+                service_options["host_preparation"] = (startup_limit, registry.serial_preparation_seconds)
         service = NativeBacktestService(
             batch_size=batch_size, **service_options,
             max_dispatch_candidate_bars=dispatch_budget,

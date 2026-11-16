@@ -208,6 +208,8 @@ For wide physical batches, CUDA `max` groups independent candidates into four-
 or eight-thread blocks. It picks the widest of those sizes that can supply at
 least 128 blocks and two blocks per streaming multiprocessor. Smaller batches
 and kernels with block-owned replay state use one thread per block.
+Single-sided EMA Anchor also uses 16-thread blocks when that layout supplies
+at least twice and fewer than four times the minimum block count.
 CUDA retains its signed-byte relation table, while other tick fields remain int32.
 Both devices choose resident inputs for smaller
 histories and streaming when it reduces memory and full inputs exceed the captured
@@ -392,9 +394,15 @@ tensors and mutable scratch.
 
 Conservative automatic Metal widths start at 1,024 candidates, clamped by the
 prepared memory/history ceiling and service admission limit. The default CUDA policy starts
-at 64. CUDA `max` in the optimizer starts near one hardware wave of single-candidate blocks,
-rounded down to a power of two. Metal `max` starts at 3,072 candidates with
-an upper bound of 4,096 before the prepared memory and dispatch bounds are applied. The GPU
+at 64. CUDA `max` in the optimizer estimates startup demand for two waves of eight-candidate
+blocks from the device's maximum resident block count, rounded down to a power of two and
+limited by the service's maximum width. If the host can support parallel candidate preparation,
+automatic CUDA `max` starts admission and dispatch in a window that fits the largest supported
+preparation pool. It checks powers of two and three-quarter widths between them.
+The CUDA planner's budget counts registered market metadata once on
+the parent and reserves per-candidate space for queued plans. Authored seeds and pending checkpoint
+candidates are evaluated through that window. Metal `max` starts at 3,072 candidates with
+an upper bound of 4,096. Prepared memory and dispatch bounds apply to both devices. The GPU
 owner creates a controller for each prepared dataset. Explicit widths and
 tuning-off defaults retain their fixed limits. Separate per-dataset
 controllers measure successful replay, reductions and host results using actual candidate
@@ -433,7 +441,10 @@ denies a growth trial without failing completed replay work.
 A growth trial normally uses the largest compatible demand observed in that evidence
 window, so it can try an intermediate width when demand is less than twice the current
 width. Repeated full-width warm observations in the GPU `max` optimizer can propose a wider
-cohort to supply the next trial. Growth in this mode requires a three-percent increase
+cohort to supply the next trial. CUDA trials beyond the parallel preparation window require
+repeatable full-width observations and enough estimated serial preparation capacity to feed
+twice the observed replay rate. The estimate times the candidate plan already used for
+startup validation. Growth in this mode requires a three-percent increase
 in measured replay throughput. The prepared physical ceiling
 still applies. The service probes a smaller width only after a warm batch exceeded the
 proposed width. The existing conservative evidence rule requires a smaller trial to fill
@@ -469,7 +480,8 @@ Native CUDA temporal replay separately adapts history-chunk length from complete
 durations, targeting one second within existing candle/work/history ceilings. It shrinks
 slow chunks and grows only after repeated fast full chunks; partial tails do not train it.
 CUDA `max` starts with up to 128 candles at widths of 256 or below and reduces the initial
-range for wider launches. Fast warmup commands cannot increase the first trading chunk.
+range for wider launches. Warmup adapts within its own candle range. The first trading
+chunk uses the cold-launch range or a narrower range if warmup had to shrink below it.
 The controller resets for each physical replay and submits no extra simulations. Replay
 state survives each boundary, and only complete accepted simulations produce results.
 This internal duration control remains active with `tuning_mode: "off"`; that setting fixes

@@ -821,15 +821,12 @@ async def test_prepare_hlcvs_internal_raises_on_coin_fetch_failure(
             60_000,
             FakeManager(),
         )
-    first_timestamps_mock.assert_awaited_once_with(
-        ["BAD", "GOOD"], exchange="binance"
-    )
+    first_timestamps_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("inception", [None, 0.0, 1_704_067_200_000, 1_704_153_600_000])
-async def test_prepare_hlcvs_internal_retains_pre_age_warmup_and_unknown_facts(
-    sample_config, monkeypatch, inception,
+async def test_prepare_hlcvs_internal_keeps_age_out_of_candle_preparation(
+    sample_config, monkeypatch,
 ):
     start = 1_704_067_200_000
     sample_config["bot"]["long"]["universe"]["minimum_coin_age_days"] = 60.0
@@ -844,13 +841,15 @@ async def test_prepare_hlcvs_internal_retains_pre_age_warmup_and_unknown_facts(
         async def get_ohlcvs(self, coin):
             return pd.DataFrame([[start + k * 60_000, 101.0, 99.0, 100.0, 10.0] for k in range(3)], columns=["timestamp", "high", "low", "close", "volume"])
         def get_market_specific_settings(self, coin): return {"exchange": "binance"}
-    monkeypatch.setattr(hp, "get_first_timestamps_unified", AsyncMock(return_value={"NEW": inception}))
+    lookup = AsyncMock(side_effect=AssertionError("age is resolved after candle preparation"))
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", lookup)
     mss, timestamps, values = await hp.prepare_hlcvs_internal(
         sample_config, ["NEW"], "binance", start, start + 60_000, start + 120_000, FakeManager())
     assert requested == [start]
     assert timestamps.tolist() == [start, start + 60_000, start + 120_000]
     assert values["NEW"].shape == (3, 4)
-    assert mss["NEW"]["inception_timestamp_ms"] == (int(inception) if inception else None)
+    assert "inception_timestamp_ms" not in mss["NEW"]
+    lookup.assert_not_awaited()
     assert mss["NEW"]["first_valid_index"] == 0
 
 
@@ -2276,7 +2275,6 @@ def test_forced_only_exchanges_are_normalization_only_for_unforced_coins():
         coin="SOL",
         base_start_ts=0,
         end_ts=1,
-        first_timestamps_unified={"SOL": 0},
         tradfi_for_stock_perps=False,
         forced_sources={"BTC": "okx"},
         exchanges_to_consider=configured,
@@ -2286,7 +2284,6 @@ def test_forced_only_exchanges_are_normalization_only_for_unforced_coins():
         coin="BTC",
         base_start_ts=0,
         end_ts=1,
-        first_timestamps_unified={"BTC": 0},
         tradfi_for_stock_perps=False,
         forced_sources={"BTC": "okx"},
         exchanges_to_consider=configured,
@@ -2311,11 +2308,10 @@ def test_forced_only_exchanges_are_normalization_only_for_unforced_coins():
     )
 
 
-@pytest.mark.parametrize("observed", [None, 0.0, 1_750_000_000_000, 1_900_000_000_000])
-def test_plan_combined_coin_retains_authored_history_for_rust_admission(observed):
+def test_plan_combined_coin_retains_authored_history_for_rust_admission():
     plan = hp._plan_combined_coin(
         coin="NEW", base_start_ts=1_700_000_000_000, end_ts=1_800_000_000_000,
-        first_timestamps_unified={"NEW": observed}, tradfi_for_stock_perps=False,
+        tradfi_for_stock_perps=False,
         forced_sources={}, exchanges_to_consider=["bybit", "hyperliquid"],
     )
     assert plan.effective_start_ts == 1_700_000_000_000

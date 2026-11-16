@@ -19,21 +19,22 @@ _DEFAULT = object()
 
 
 def cuda_initial_candidate_width():
-    """Start near one wave of one-candidate CUDA blocks on the selected GPU.
+    """Seed the CUDA max search with work for packed replay blocks.
 
-    The hardware ceiling is an upper estimate before kernel register and
-    shared-memory limits. Warm replays tune the width for each dataset.
+    This is a startup demand estimate. The worker admits only compatible work
+    within its prepared memory limits and tunes each dataset from warm replays.
     """
     import cupy
     import torch
-    from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES
+    from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES, CUDA_MAX_PACKED_REPLAY_THREADS
     from optimization.gpu.runtime import gpu_device
 
     if gpu_device(torch) != "cuda":
         raise ValueError("CUDA wave sizing requires an NVIDIA CUDA device")
     attributes = cupy.cuda.Device(torch.cuda.current_device()).attributes
     blocks = attributes["MultiProcessorCount"] * attributes["MaxBlocksPerMultiprocessor"]
-    return min(CUDA_MAX_BATCH_CANDIDATES, 1 << (blocks.bit_length() - 1))
+    candidates = 2 * blocks * CUDA_MAX_PACKED_REPLAY_THREADS
+    return min(CUDA_MAX_BATCH_CANDIDATES, 1 << (candidates.bit_length() - 1))
 
 
 def max_candidate_widths(device):
@@ -79,7 +80,8 @@ class NativeBacktestService:
     def __init__(self, *, batch_size=_DEFAULT, max_pending=_DEFAULT, max_batch_delay=None,
                  max_dispatch_candidate_bars=500_000_000, interrupt_check=None,
                  tuning_mode=GPU_TUNING_DEFAULT, input_memory_budget=None, on_inputs_prepared=None,
-                 auto_request_capacity=None, auto_batch_size_limit=None, max_cohort_width=None):
+                 auto_request_capacity=None, auto_batch_size_limit=None, max_cohort_width=None,
+                 host_preparation=None):
         from optimization.gpu.autotune import is_auto
         from optimization.gpu.execution_tuning import ExecutionBatchTuner
         from optimization.gpu.model import CUDA_MAX_BATCH_CANDIDATES, CUDA_MAX_INITIAL_BATCH_CANDIDATES
@@ -104,6 +106,7 @@ class NativeBacktestService:
                 diagnostics=diagnostics,
                 expandable_producer=max_cohort_width is not None,
                 max_throughput=self._max_throughput,
+                host_preparation=host_preparation,
             ) if automatic else None
         )
         requested_width = max_pending if automatic else (64 if is_auto(batch_size) else batch_size)

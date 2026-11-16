@@ -72,6 +72,7 @@ class FakeService(GpuBacktestService):
         kwargs.pop("auto_request_capacity")
         kwargs.pop("auto_batch_size_limit", None)
         kwargs.pop("max_cohort_width", None)
+        kwargs.pop("host_preparation", None)
         super().__init__(**kwargs)
 
     cohort_width = None
@@ -278,12 +279,17 @@ def test_cuda_max_widens_search_without_growing_survivors(monkeypatch, tmp_path,
         assert len(records) == 24 + authored
 
 
-def test_cuda_max_resume_keeps_pending_trial_vectors_and_restarts_from_accepted_width(monkeypatch, tmp_path):
+@pytest.mark.parametrize("resume_limit,remaining_widths", [(None, [12, 4]), (8, [8, 8])])
+def test_cuda_max_resume_keeps_pending_trial_vectors_and_restarts_from_accepted_width(
+    monkeypatch, tmp_path, resume_limit, remaining_widths,
+):
     import optimization.backends.gpu_backend as backend
     import optimization.gpu.native as native
+    from optimization import native_planner_capacity as capacity
 
     guard_cpu(monkeypatch)
     monkeypatch.setattr(native, "cuda_initial_candidate_width", lambda: 8)
+    monkeypatch.setattr(capacity, "cuda_plan_parallel_window", lambda *_: None)
     requested_baselines = []
 
     class Service(FakeService):
@@ -325,13 +331,15 @@ def test_cuda_max_resume_keeps_pending_trial_vectors_and_restarts_from_accepted_
         assert paused["max_search_budget"].target_width == 12
         np.testing.assert_array_equal(paused["population"].get("X"), cohorts[2])
 
+        monkeypatch.setattr(capacity, "cuda_plan_parallel_window", lambda *_: resume_limit)
         execute(base, recorder, checkpoint, resume=True)
         done = load_checkpoint(checkpoint, base.config)
-        assert requested_baselines == [8, 12]
+        accepted = resume_limit or 12
+        assert requested_baselines == [8, accepted]
         np.testing.assert_array_equal(cohorts[3], cohorts[2])
-        assert [len(cohort) for cohort in cohorts[4:]] == [12, 4]
+        assert [len(cohort) for cohort in cohorts[4:]] == remaining_widths
         assert done["phase"] == "idle" and done["max_search_allocated"] == 40
-        assert done["max_search_budget"].target_width == 12
+        assert done["max_search_budget"].target_width == accepted
         assert len(records) == 40 and len(done["algorithm"].pop) == 4
 
 
@@ -367,6 +375,7 @@ def test_metal_max_bootstrap_and_offspring_use_metal_width_and_budget(
 
     monkeypatch.setattr(native, "max_candidate_widths", widths)
     monkeypatch.setattr(native, "cuda_initial_candidate_width", forbidden)
+    monkeypatch.setattr(native_planner_capacity, "cuda_plan_parallel_window", forbidden)
     monkeypatch.setattr(runtime, "gpu_device", forbidden)
     monkeypatch.setattr(native, "NativeBacktestService", service)
     monkeypatch.setattr(native_planner_capacity, "mps_plan_worker_count", lambda *_args, **_kwargs: 0)

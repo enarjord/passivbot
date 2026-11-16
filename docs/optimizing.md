@@ -318,7 +318,8 @@ offspring cohorts can offer more candidates per generation. At startup the optim
 evaluates all distinct supplied seeds and generates distinct bounded mutations to fill
 the cohort when the budget and search space allow. Without supplied seeds it samples
 the configured bounds. With automatic batch sizing, the selected device policy supplies
-the initial target, and warm per-scenario trials can move it during the run.
+the initial target. CUDA host memory can limit the target to keep candidate preparation parallel.
+Warm per-scenario trials can adjust the dispatch width within the run's admission limit.
 
 Set `optimize.gpu.search_cohort_size` in `max` to limit how many candidates the
 optimizer offers before the next selection step. This applies to generated startup

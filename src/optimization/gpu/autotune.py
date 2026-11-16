@@ -198,6 +198,7 @@ class BatchController:
         self.last_comparison_count = None
         self.last_comparison_samples = None
         self.last_comparison_frequency = None
+        self.last_comparison_shape_rate = None
         self.samples = deque(maxlen=window_samples)
         self._replay_durations = deque(maxlen=window_samples)
         # Only execution tuning groups actual integer batch sizes. Frequencies
@@ -267,8 +268,9 @@ class BatchController:
                 # rate combines the measured counts across the window.
                 count = max(self._durations_by_count)
                 durations = self._durations_by_count[count]
+                self.last_comparison_shape_rate = count / statistics.median(durations)
                 if self.rate_aggregation == "largest_count":
-                    rate = count / statistics.median(durations)
+                    rate = self.last_comparison_shape_rate
                 self.last_comparison_count = count
                 self.last_comparison_samples = len(durations)
                 self.last_comparison_frequency = self._count_frequencies[count]

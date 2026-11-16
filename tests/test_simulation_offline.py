@@ -361,7 +361,7 @@ async def test_combined_offline_never_swallows_missing_coin(monkeypatch, empty):
     with simulation_data_policy(OFFLINE), pytest.raises(OfflineDataError, match="BTC"):
         await hp._resolve_combined_coin(
             coin="BTC", sem=asyncio.Semaphore(1), base_start_ts=START,
-            end_ts=START + 600000, first_timestamps_unified={"BTC": START - 60000},
+            end_ts=START + 600000,
             tradfi_for_stock_perps=False,
             forced_sources={}, market_settings_sources={}, exchanges_to_consider=["binance"],
             normalization_candidate_exchanges=[], om_dict={"binance": object()},

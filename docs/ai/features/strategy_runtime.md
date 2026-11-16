@@ -209,6 +209,18 @@ history may warm indicators. Backtest and GPU preparation transport inception se
 shared candle validity and warmup. GPU side admission indices are derived by the same Rust
 predicate on the native decision clock and must have an exact integer representation.
 
+All modes use the best available first observed price for the same asset across venues. Resolve
+the venue instrument to a reviewed asset identity before joining price sources. A ticker alone
+cannot link instruments, and only verified migrations inherit predecessor history. Pre-launch
+trading, IOUs, genesis dates, and dates earlier than a verified trading boundary cannot establish
+asset inception. The resolver uses reviewed public price evidence, validated local observations,
+and verified regular trading on the selected venue as a conservative fallback. A candle's
+bucket-open timestamp may precede the actual first trade. Keep asset inception separate from
+venue candle coverage and warmup. Extend the reviewed asset catalog with public evidence for
+exact venue market IDs, asset identity, and any predecessor history. Bump the age policy version
+when earlier decisions become invalid. Unmapped instruments can use a local or venue observation
+only where the venue establishes the regular-trading boundary for that exact instrument.
+
 Live inception acquisition is an owned, bounded background maintainer and must not await network
 lookup on the protective planning path. Automatic cache fact demand is the enabled positive-age
 side's prepared approved-minus-ignored membership; optimizer preparation supplies reachable-side

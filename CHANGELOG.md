@@ -11,6 +11,17 @@ its own version heading. See [release status](docs/releases.md).
   It can prepare candidates in parallel when shared headroom permits.
   Metal users can set an explicit search cohort limit independently of dispatch sizing.
 
+- Start automatic CUDA max with an admission window that preserves parallel
+  candidate preparation when host memory allows. Use 16-thread blocks
+  for intermediate single-sided EMA Anchor dispatches that can fill enough blocks.
+
+- Start automatic CUDA max optimization with wider demand for packed replay blocks and
+  adapt warmup chunk lengths separately from active trading.
+
+- Use the earliest verified price history for the asset when applying minimum coin age in live
+  trading, backtests, and optimization. Recognize reviewed token migrations and exclude pre-launch
+  prices. Refresh old automatic age metadata while reusing cached candles.
+
 - Let CUDA max users cap generated search cohorts independently of GPU dispatch sizing.
 
 - Use more CUDA lanes for wide temporal replay batches in GPU optimizer max mode.
