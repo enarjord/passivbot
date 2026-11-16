@@ -32,8 +32,8 @@ class BitunixCreateRecovery:
         self.account_epoch = 0
         self.fill_after_ms = 0
         self.fill_receipt = None
-        self.working = None
-        self.conflicting_order_id = False
+        self.observation = None
+        self.unpersisted = None
         self.terminal = None
         self.task = None
         self.next_lookup = 0.0
@@ -55,8 +55,8 @@ class BitunixCreateRecovery:
         self.attempt = attempt
         self.account_epoch = self.bot._ensure_freshness_ledger().epoch + 1
         self.fill_after_ms = _utc_ms()
-        self.working = None
-        self.conflicting_order_id = False
+        self.observation = None
+        self.unpersisted = None
         self.terminal = None
         self.next_lookup = 0.0
         self.lookup_error = None
@@ -85,9 +85,18 @@ class BitunixCreateRecovery:
         self._bind(attempt)
         return attempt
 
-    def resolve(self, attempt, reason):
+    def resolve(self, attempt, reason, *, evidence=None):
         try:
-            self.journal.resolve(attempt.client_id)
+            values = (
+                {}
+                if evidence is None
+                else {
+                    "order_id": evidence.order_id,
+                    "filled_qty": evidence.filled_qty,
+                }
+            )
+            if not self.journal.resolve(attempt.client_id, **values):
+                return
         except BitunixCreateJournalError as exc:
             self.error = True
             self._report(type(exc).__name__)
@@ -98,6 +107,7 @@ class BitunixCreateRecovery:
             else logging.debug
         )
         self.attempt = self.terminal = None
+        self.observation = None
         self.error = False
         self.last_report = None
         level("[bitunix] ordinary create recovered | outcome=%s", reason)
@@ -105,7 +115,7 @@ class BitunixCreateRecovery:
     def poll(self, request):
         """Consume committed account evidence and schedule missing detail off the plan path."""
         try:
-            pending = self.journal.load()
+            pending = self.journal.load_pending()
         except BitunixCreateJournalError as exc:
             self.error = True
             self._report(type(exc).__name__)
@@ -115,32 +125,27 @@ class BitunixCreateRecovery:
             self._report("missing_record")
             return
         self.error = False
-        if pending and pending[0] != self.attempt:
-            self._bind(pending[0])
+        if pending is not None:
+            attempt, observation = pending
+            if attempt != self.attempt:
+                self._bind(attempt)
+            self.observation = observation
+        if self.unpersisted is not None and not self._observe_lookup(self.unpersisted):
+            return
         if self.task is not None and self.task.done():
             task, self.task = self.task, None
             attempt, evidence, error = task.result()
             if attempt == self.attempt:
                 self.lookup_error = error
-                if (
-                    evidence is not None
-                    and evidence.disposition == "terminal"
-                    and evidence != self.terminal
-                ):
-                    self._observe_terminal(evidence)
-                elif (
-                    evidence is not None
-                    and evidence.disposition == "working"
-                    and self.terminal is None
-                    and evidence != self.working
-                ):
-                    if self._matches_working(evidence):
-                        self.working = evidence
-                        self.account_epoch = (
-                            self.bot._ensure_freshness_ledger().epoch + 1
-                        )
-                        self.fill_after_ms = _utc_ms()
+                if evidence is not None and not self._observe_lookup(evidence):
+                    return
         if self.attempt is None:
+            return
+        if (
+            self.observation is not None
+            and self.observation.conflicting_order_id is not None
+        ):
+            self._report("conflicting_order_identity")
             return
         if self._resolve_from_account():
             return
@@ -170,16 +175,41 @@ class BitunixCreateRecovery:
                 self.next_lookup = max(self.next_lookup, time.monotonic() + retry)
             return attempt, None, type(exc).__name__
 
-    def _observe_terminal(self, evidence):
-        if self.terminal is not None:
-            if evidence.order_id != self.terminal.order_id:
-                self.conflicting_order_id = True
-                return
-            if evidence.filled_qty < self.terminal.filled_qty:
-                return
-        self.terminal = evidence
-        self.account_epoch = self.bot._ensure_freshness_ledger().epoch + 1
-        self.fill_after_ms = _utc_ms()
+    def _persist_observation(self, evidence):
+        try:
+            observation = self.journal.observe(
+                self.attempt.client_id, evidence.order_id, evidence.filled_qty
+            )
+        except BitunixCreateJournalError as exc:
+            self.error = True
+            self._report(type(exc).__name__)
+            return False
+        if observation is None:
+            self.error = True
+            self._report("missing_record")
+            return False
+        self.observation = observation
+        return True
+
+    def _observe_lookup(self, evidence):
+        previous = self.observation
+        if not self._persist_observation(evidence):
+            self.unpersisted = evidence
+            return False
+        self.unpersisted = None
+        terminal = (
+            evidence.disposition == "terminal"
+            and evidence != self.terminal
+            and evidence.filled_qty >= self.observation.filled_qty
+        )
+        if terminal:
+            self.terminal = evidence
+        if terminal or previous != self.observation:
+            # Evidence acquired by a separate lookup requires a later account
+            # cohort. Repeating the same proof does not reset its confirmation.
+            self.account_epoch = self.bot._ensure_freshness_ledger().epoch + 1
+            self.fill_after_ms = _utc_ms()
+        return True
 
     def _account_current(self):
         ledger = self.bot._ensure_freshness_ledger()
@@ -190,18 +220,20 @@ class BitunixCreateRecovery:
             and all(ledger.epoch >= pending.get(surface, 0) for surface in ACCOUNT)
         )
 
-    def _matches_working(self, evidence):
-        if self.working is not None and evidence.order_id != self.working.order_id:
-            self.conflicting_order_id = True
-        return not self.conflicting_order_id and (
-            self.working is None or evidence.filled_qty >= self.working.filled_qty
+    def _consistent(self, evidence):
+        return (
+            self.observation is not None
+            and self.observation.conflicting_order_id is None
+            and self.observation.order_id == evidence.order_id
+            and self.observation.filled_qty <= evidence.filled_qty
         )
 
     def _resolve_from_account(self):
         if not self._account_current():
             return False
-        detail = self.terminal or self.working
-        venue_order_id = detail.order_id if detail is not None else None
+        venue_order_id = (
+            self.observation.order_id if self.observation is not None else None
+        )
         matches = [
             row
             for row in self.bot.fetched_open_orders
@@ -209,29 +241,36 @@ class BitunixCreateRecovery:
             or venue_order_id is not None
             and row.get("id") == venue_order_id
         ]
+        observations = []
+        for row in matches:
+            evidence = parse_bitunix_create_evidence(
+                row.get("info"),
+                self.attempt,
+                confirmed_order_id=venue_order_id,
+            )
+            if evidence is not None:
+                if not self._persist_observation(evidence):
+                    self.unpersisted = evidence
+                    return True
+                observations.append(evidence)
         if self.terminal is not None:
             if (
                 not matches
-                and self._matches_working(self.terminal)
+                and self.task is None
+                and self._consistent(self.terminal)
                 and self._fills_confirmed(self.terminal, require_refresh=True)
             ):
-                self.resolve(self.attempt, "terminal")
+                self.resolve(self.attempt, "terminal", evidence=self.terminal)
                 return True
-        elif len(matches) == 1:
-            evidence = parse_bitunix_create_evidence(
-                matches[0].get("info"),
-                self.attempt,
-                confirmed_working_order_id=venue_order_id,
-            )
+        elif len(matches) == 1 and observations and self.task is None:
+            evidence = observations[0]
             if (
-                evidence is not None
-                and evidence.disposition == "working"
-                and self._matches_working(evidence)
+                evidence.disposition == "working"
+                and self._consistent(evidence)
+                and self._fills_confirmed(evidence, require_refresh=False)
             ):
-                self.working = evidence
-                if self._fills_confirmed(evidence, require_refresh=False):
-                    self.resolve(self.attempt, "working")
-                    return True
+                self.resolve(self.attempt, "working", evidence=evidence)
+                return True
         return False
 
     def _fills_confirmed(self, evidence, *, require_refresh):

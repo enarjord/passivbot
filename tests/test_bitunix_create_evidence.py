@@ -92,6 +92,8 @@ async def test_exact_bitunix_create_detail_is_positive_evidence(
         {"clientId": "other-order-with-identical-economics"},
         {"clientId": None},
         {"orderId": " "},
+        {"orderId": "1 2"},
+        {"orderId": "１２"},
         {"symbol": "ETHUSDT"},
         {"side": "BUY"},
         {"reduceOnly": 1},

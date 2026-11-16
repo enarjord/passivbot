@@ -7,21 +7,22 @@ import sqlite3
 import stat
 import tempfile
 from contextlib import closing, contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Iterator
 
 
 CLIENT_ORDER_ID_PATTERN = re.compile(r"[.A-Z:/a-z0-9_-]{1,36}")
-_WIRE_TOKEN = re.compile(r"[!-~]+")
+WIRE_TOKEN_PATTERN = re.compile(r"[!-~]+")
 _WIRE_DECIMAL = re.compile(r"[0-9]+(?:\.[0-9]+)?")
 _LIMIT_EFFECTS = {"GTC", "IOC", "FOK", "POST_ONLY"}
 _APPLICATION_ID = 0x50424352  # PBCR
 _VERSION = 1
 _SCHEMA = (
     "CREATE TABLE pending_create ("
-    "slot INTEGER PRIMARY KEY CHECK (slot = 1), attempt TEXT NOT NULL)"
+    "slot INTEGER PRIMARY KEY CHECK (slot = 1), attempt TEXT NOT NULL, "
+    "order_id TEXT, filled_qty TEXT, conflicting_order_id TEXT)"
 )
 
 
@@ -58,7 +59,7 @@ class BitunixCreateAttempt:
     def __post_init__(self) -> None:
         if not _matches(CLIENT_ORDER_ID_PATTERN, self.client_id):
             raise ValueError("Invalid Bitunix create attempt client ID")
-        if not _matches(_WIRE_TOKEN, self.symbol):
+        if not _matches(WIRE_TOKEN_PATTERN, self.symbol):
             raise ValueError("Invalid Bitunix create attempt symbol")
         if (
             self.position_side not in ("long", "short")
@@ -71,7 +72,7 @@ class BitunixCreateAttempt:
         if self.side != ("buy" if opens_with_buy != self.reduce_only else "sell"):
             raise ValueError("Invalid Bitunix create attempt action side")
         if self.reduce_only:
-            if not _matches(_WIRE_TOKEN, self.position_id):
+            if not _matches(WIRE_TOKEN_PATTERN, self.position_id):
                 raise ValueError("Bitunix close attempt requires a position ID")
         elif self.position_id is not None:
             raise ValueError("Bitunix entry attempt includes an unexpected position ID")
@@ -124,6 +125,31 @@ class BitunixCreateAttempt:
         )
 
 
+@dataclass(frozen=True)
+class BitunixCreateObservation:
+    order_id: str
+    filled_qty: Decimal
+    conflicting_order_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not _matches(WIRE_TOKEN_PATTERN, self.order_id):
+            raise ValueError("Invalid Bitunix observed order ID")
+        if (
+            not isinstance(self.filled_qty, Decimal)
+            or not self.filled_qty.is_finite()
+            or self.filled_qty < 0
+        ):
+            raise ValueError("Invalid Bitunix observed executed quantity")
+        if self.conflicting_order_id is not None and (
+            not _matches(WIRE_TOKEN_PATTERN, self.conflicting_order_id)
+            or self.conflicting_order_id == self.order_id
+        ):
+            raise ValueError("Invalid Bitunix conflicting order ID")
+
+
+PendingCreate = tuple[BitunixCreateAttempt, BitunixCreateObservation | None]
+
+
 def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
     result = dict(pairs)
     if len(result) != len(pairs):
@@ -146,7 +172,7 @@ def _connect(path: Path) -> Iterator[sqlite3.Connection]:
         yield conn
 
 
-def _read_pending(conn: sqlite3.Connection) -> tuple[BitunixCreateAttempt, ...]:
+def _read_pending(conn: sqlite3.Connection) -> PendingCreate | None:
     if (
         conn.execute("PRAGMA application_id").fetchone() != (_APPLICATION_ID,)
         or conn.execute("PRAGMA user_version").fetchone() != (_VERSION,)
@@ -154,17 +180,33 @@ def _read_pending(conn: sqlite3.Connection) -> tuple[BitunixCreateAttempt, ...]:
         != [("table", "pending_create", _SCHEMA)]
     ):
         raise BitunixCreateJournalError("Invalid Bitunix create journal schema")
-    rows = conn.execute("SELECT slot, attempt FROM pending_create").fetchall()
+    rows = conn.execute(
+        "SELECT slot, attempt, order_id, filled_qty, conflicting_order_id FROM pending_create"
+    ).fetchall()
     if not rows:
-        return ()
+        return None
     if len(rows) != 1 or rows[0][0] != 1 or not isinstance(rows[0][1], str):
         raise BitunixCreateJournalError("Invalid Bitunix create journal rows")
+    _, payload, order_id, filled_qty, conflicting_order_id = rows[0]
     try:
-        payload = json.loads(rows[0][1], object_pairs_hook=_unique_json_object)
-        return (BitunixCreateAttempt(**payload),)
+        attempt = BitunixCreateAttempt(
+            **json.loads(payload, object_pairs_hook=_unique_json_object)
+        )
+        if order_id is None and filled_qty is None and conflicting_order_id is None:
+            return attempt, None
+        if not _matches(_WIRE_DECIMAL, filled_qty):
+            raise ValueError("Invalid Bitunix journal executed quantity")
+        observation = BitunixCreateObservation(
+            order_id, Decimal(filled_qty), conflicting_order_id
+        )
+        if observation.filled_qty > Decimal(attempt.qty):
+            raise ValueError(
+                "Bitunix journal executed quantity exceeds submitted amount"
+            )
+        return attempt, observation
     except (ValueError, TypeError) as exc:
         raise BitunixCreateJournalError(
-            "Invalid Bitunix create journal attempt"
+            "Invalid Bitunix create journal pending state"
         ) from exc
 
 
@@ -205,9 +247,13 @@ class BitunixCreateJournal:
         return True
 
     def load(self) -> tuple[BitunixCreateAttempt, ...]:
+        pending = self.load_pending()
+        return (pending[0],) if pending is not None else ()
+
+    def load_pending(self) -> PendingCreate | None:
         try:
             if not self._exists():
-                return ()
+                return None
             with _connect(self.path) as conn:
                 conn.execute("BEGIN")
                 return _read_pending(conn)
@@ -263,19 +309,101 @@ class BitunixCreateJournal:
                 "Could not record the Bitunix create attempt"
             ) from exc
 
-    def resolve(self, client_id: str) -> None:
-        """Release only the ID the caller established with authoritative evidence."""
+    def observe(
+        self, client_id: str, order_id: str, filled_qty: Decimal
+    ) -> BitunixCreateObservation | None:
+        """Accumulate exact venue observations without allowing a regression."""
         if not _matches(CLIENT_ORDER_ID_PATTERN, client_id):
-            raise ValueError("Invalid Bitunix create resolution client ID")
+            raise ValueError("Invalid Bitunix observation client ID")
+        observed = BitunixCreateObservation(order_id, filled_qty)
         try:
             if not self._exists():
-                return
+                return None
             with _connect(self.path) as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 pending = _read_pending(conn)
-                if pending and pending[0].client_id == client_id:
-                    conn.execute("DELETE FROM pending_create WHERE slot = 1")
+                if pending is None or pending[0].client_id != client_id:
+                    return None
+                attempt, previous = pending
+                if observed.filled_qty > Decimal(attempt.qty):
+                    raise ValueError(
+                        "Bitunix executed quantity exceeds submitted amount"
+                    )
+                if previous is not None:
+                    if previous.order_id != order_id:
+                        observed = replace(
+                            previous,
+                            conflicting_order_id=previous.conflicting_order_id
+                            or order_id,
+                        )
+                    else:
+                        observed = replace(
+                            previous, filled_qty=max(previous.filled_qty, filled_qty)
+                        )
+                if observed != previous:
+                    conn.execute(
+                        "UPDATE pending_create SET order_id = ?, filled_qty = ?, "
+                        "conflicting_order_id = ? WHERE slot = 1",
+                        (
+                            observed.order_id,
+                            (
+                                format(observed.filled_qty, "f")
+                                if observed.filled_qty
+                                else "0"
+                            ),
+                            observed.conflicting_order_id,
+                        ),
+                    )
                     conn.commit()
+                return observed
+        except (sqlite3.Error, OSError) as exc:
+            raise BitunixCreateJournalError(
+                "Could not persist the Bitunix create observation"
+            ) from exc
+
+    def resolve(
+        self,
+        client_id: str,
+        *,
+        order_id: str | None = None,
+        filled_qty: Decimal | None = None,
+    ) -> bool:
+        """Release a proven negative or a reconciled matching venue observation."""
+        if not _matches(CLIENT_ORDER_ID_PATTERN, client_id):
+            raise ValueError("Invalid Bitunix create resolution client ID")
+        if (order_id is None) != (filled_qty is None):
+            raise ValueError(
+                "Bitunix positive resolution requires order ID and quantity"
+            )
+        proof = (
+            BitunixCreateObservation(order_id, filled_qty)
+            if order_id is not None
+            else None
+        )
+        try:
+            if not self._exists():
+                return False
+            with _connect(self.path) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                pending = _read_pending(conn)
+                if pending is None or pending[0].client_id != client_id:
+                    return False
+                attempt, observed = pending
+                if proof is None:
+                    if observed is not None:
+                        return False
+                elif (
+                    observed is None
+                    or observed.conflicting_order_id is not None
+                    or observed.order_id != proof.order_id
+                    or not observed.filled_qty
+                    <= proof.filled_qty
+                    <= Decimal(attempt.qty)
+                ):
+                    return False
+                conn.execute("DELETE FROM pending_create WHERE slot = 1")
+                conn.commit()
+                return True
         except (sqlite3.Error, OSError) as exc:
             raise BitunixCreateJournalError(
                 "Could not resolve the Bitunix create attempt"

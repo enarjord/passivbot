@@ -8,6 +8,7 @@ from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal
 
 from ccxt.base.errors import OrderNotFound
+from live.bitunix_create_journal import WIRE_TOKEN_PATTERN
 
 if TYPE_CHECKING:
     from live.bitunix_create_journal import BitunixCreateAttempt
@@ -44,7 +45,7 @@ def parse_bitunix_create_evidence(
     row: Any,
     attempt: BitunixCreateAttempt,
     *,
-    confirmed_working_order_id: str | None = None,
+    confirmed_order_id: str | None = None,
 ) -> BitunixCreateEvidence | None:
     """Validate a raw detail, pending, or historical order against the attempt."""
     if not isinstance(row, dict):
@@ -53,11 +54,10 @@ def parse_bitunix_create_evidence(
     client_id = row.get("clientId")
     if (
         not isinstance(order_id, str)
-        or not order_id
-        or order_id != order_id.strip()
+        or not WIRE_TOKEN_PATTERN.fullmatch(order_id)
         or (
             client_id != attempt.client_id
-            and not (client_id in (None, "") and order_id == confirmed_working_order_id)
+            and not (client_id in (None, "") and order_id == confirmed_order_id)
         )
         or row.get("symbol") != attempt.symbol
         or row.get("side") != attempt.side.upper()

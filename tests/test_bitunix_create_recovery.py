@@ -192,6 +192,65 @@ async def test_lookup_failure_or_miss_never_releases_restart_reservation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("later_source", ["lookup", "pending"])
+async def test_later_partial_survives_restart_with_older_terminal_detail(
+    journal, later_source
+):
+    account = Account()
+    recovery = BitunixCreateRecovery(account, journal)
+    attempt = recovery.record(BODY, None)
+    account.capture()
+    response = order_row(attempt, "CANCELED", "0")
+
+    async def lookup(*_args, **_kwargs):
+        return response
+
+    recovery.poll(lookup)
+    await recovery.task
+    recovery.poll(lookup)
+    assert recovery.terminal is not None
+
+    partial = order_row(attempt, "PART_FILLED", "0.3")
+    if later_source == "lookup":
+        account.capture()
+        response = partial
+        recovery.next_lookup = 0
+        recovery.poll(lookup)
+        await recovery.task
+        recovery.poll(lookup)
+    else:
+        account.capture([partial])
+        recovery.poll(lookup)
+    account.capture()
+    account.fill_capture(recovery, recovery.fill_after_ms + 1)
+    recovery.poll(lookup)
+    assert recovery.pending
+
+    account = Account()
+    recovery = BitunixCreateRecovery(account, BitunixCreateJournal(journal.path))
+    response = order_row(attempt, "CANCELED", "0")
+    recovery.poll(lookup)
+    account.capture()
+    recovery.poll(lookup)
+    await recovery.task
+    recovery.poll(lookup)
+    account.capture()
+    account.fill_capture(recovery, recovery.fill_after_ms + 1)
+    recovery.poll(lookup)
+    assert recovery.pending
+
+    response = order_row(attempt, "PART_FILLED_CANCELED", "0.3")
+    recovery.next_lookup = 0
+    recovery.poll(lookup)
+    await recovery.task
+    recovery.poll(lookup)
+    account.capture()
+    account.fill_capture(recovery, recovery.fill_after_ms + 1, "0.1", "0.2")
+    recovery.poll(lookup)
+    assert journal.load() == ()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("filled", ["0", "0.3"])
 async def test_terminal_requires_later_account_and_agreeing_fill_receipt(
     journal, filled

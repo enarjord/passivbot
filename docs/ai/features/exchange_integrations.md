@@ -661,7 +661,9 @@ The [recovery contract](../error_contract.md#live-action-readiness) applies to o
 ordinary create. A committed pending-order cohort can adopt a working order by exact
 `clientId`. Otherwise, use exact order detail and bounded order-history queries. Query both
 canceled and non-canceled history where applicable. A terminal fill quantity must agree with
-the canonical trade data by venue order ID.
+the canonical trade data by venue order ID. The journal retains the exact venue ID and the
+greatest observed cumulative fill across restarts. A conflicting venue ID keeps the slot
+reserved for investigation.
 
 Bitunix describes `20007` as a lookup miss to retry later and `30042` as a duplicate
 client ID. The API documents neither a definitive absence interval nor idempotent replay.

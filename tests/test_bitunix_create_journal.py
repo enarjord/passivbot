@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 from dataclasses import asdict, replace
+from decimal import Decimal
 from multiprocessing import get_context
 
 import pytest
@@ -12,6 +13,7 @@ from live.bitunix_create_journal import (
     BitunixCreateAttempt,
     BitunixCreateJournal,
     BitunixCreateJournalError,
+    BitunixCreateObservation,
 )
 
 
@@ -68,6 +70,71 @@ def test_preserves_exact_attempt_across_instances_and_resolves_exact_id(
     before.record(next_attempt)
     restarted.resolve(attempt.client_id)
     assert restarted.load() == (next_attempt,)
+
+
+def test_older_venue_observations_cannot_lower_durable_executed_quantity(
+    tmp_path, attempt
+):
+    journal = BitunixCreateJournal(tmp_path / "create_attempts.sqlite3")
+    journal.record(attempt)
+    assert journal.load_pending() == (attempt, None)
+    assert not journal.resolve(
+        attempt.client_id, order_id="venue-1", filled_qty=Decimal(0)
+    )
+    assert journal.observe(
+        attempt.client_id, "venue-1", Decimal("0.000000001")
+    ) == BitunixCreateObservation("venue-1", Decimal("0.000000001"))
+    advanced = BitunixCreateObservation("venue-1", Decimal("0.000000002"))
+    assert (
+        journal.observe(attempt.client_id, "venue-1", advanced.filled_qty) == advanced
+    )
+
+    restarted = BitunixCreateJournal(journal.path)
+    original_mtime = journal.path.stat().st_mtime_ns
+    assert restarted.observe(attempt.client_id, "venue-1", Decimal(0)) == advanced
+    assert (
+        restarted.observe(attempt.client_id, "venue-1", Decimal("0.0000000020"))
+        == advanced
+    )
+    assert restarted.observe("unrelated-id", "venue-2", Decimal(0)) is None
+    assert journal.path.stat().st_mtime_ns == original_mtime
+    assert restarted.load_pending() == (attempt, advanced)
+
+    assert not restarted.resolve(attempt.client_id)
+    assert not restarted.resolve(
+        attempt.client_id, order_id="venue-1", filled_qty=Decimal("0.000000001")
+    )
+    assert not restarted.resolve(
+        attempt.client_id, order_id="venue-2", filled_qty=advanced.filled_qty
+    )
+    assert restarted.load_pending() == (attempt, advanced)
+    assert restarted.resolve(
+        attempt.client_id, order_id=advanced.order_id, filled_qty=advanced.filled_qty
+    )
+    assert restarted.load_pending() is None
+
+
+def test_conflicting_venue_identity_blocks_resolution_after_reopen(tmp_path, attempt):
+    journal = BitunixCreateJournal(tmp_path / "create_attempts.sqlite3")
+    journal.record(attempt)
+    first_fill = Decimal("0.001")
+    journal.observe(attempt.client_id, "venue-1", first_fill)
+    conflict = BitunixCreateObservation("venue-1", first_fill, "venue-2")
+    assert journal.observe(attempt.client_id, "venue-2", Decimal(0)) == conflict
+
+    restarted = BitunixCreateJournal(journal.path)
+    assert restarted.load_pending() == (attempt, conflict)
+    original_mtime = journal.path.stat().st_mtime_ns
+    assert restarted.observe(attempt.client_id, "venue-3", Decimal(0)) == conflict
+    assert journal.path.stat().st_mtime_ns == original_mtime
+    assert not restarted.resolve(attempt.client_id)
+    assert not restarted.resolve(
+        attempt.client_id, order_id="venue-1", filled_qty=first_fill
+    )
+    assert not restarted.resolve(
+        attempt.client_id, order_id="venue-2", filled_qty=Decimal(0)
+    )
+    assert restarted.load_pending() == (attempt, conflict)
 
 
 @pytest.mark.parametrize(
@@ -177,7 +244,9 @@ def test_corrupt_file_cannot_become_empty_or_get_replaced(tmp_path, attempt, con
     assert path.read_bytes() == contents
 
 
-@pytest.mark.parametrize("tamper", ["version", "schema", "attempt", "repeat_field"])
+@pytest.mark.parametrize(
+    "tamper", ["version", "schema", "attempt", "repeat_field", "observation"]
+)
 def test_incompatible_or_malformed_durable_state_fails_closed(
     tmp_path, attempt, tamper
 ):
@@ -190,6 +259,8 @@ def test_incompatible_or_malformed_durable_state_fails_closed(
             conn.execute("PRAGMA user_version=9")
         elif tamper == "schema":
             conn.execute("CREATE TABLE extra (extra INTEGER)")
+        elif tamper == "observation":
+            conn.execute("UPDATE pending_create SET order_id = 'venue-1'")
         else:
             if tamper == "attempt":
                 payload = json.dumps({**asdict(attempt), "qty": 0})
