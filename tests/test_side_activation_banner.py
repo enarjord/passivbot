@@ -40,8 +40,12 @@ def test_startup_banner_reports_explicit_activation(
         Passivbot._log_startup_banner(bot)
 
     assert f"Mode: {mode} " in caplog.text
-    assert "Positions: 2L/2S" in caplog.text
-    assert f"TWEL: L:{twel:.0%} S:{twel:.0%}" in caplog.text
+    long_positions = "2" if long_enabled else "disabled"
+    short_positions = "2" if short_enabled else "disabled"
+    long_twel = f"{twel:.0%}" if long_enabled else "disabled"
+    short_twel = f"{twel:.0%}" if short_enabled else "disabled"
+    assert f"Max positions: L:{long_positions} S:{short_positions}" in caplog.text
+    assert f"TWEL: L:{long_twel} S:{short_twel}" in caplog.text
     assert (
         f"Long: {'enabled' if long_enabled else 'disabled'}; "
         f"Short: {'enabled' if short_enabled else 'disabled'}"

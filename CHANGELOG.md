@@ -5,6 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Show disabled sides explicitly in the live startup banner’s position and exposure limits.
+
 - Recheck ordinary live order admission after connector queueing so a stale
   create or cancel is deferred before it reaches the exchange.
 
