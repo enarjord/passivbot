@@ -83,6 +83,7 @@ def connector_write(action):
                         return deferred()
                     if not instance.admit(order):
                         return deferred()
+
                     def recheck(order):
                         return (
                             active_protective_batch(bot) is batch and instance.admit(order)
@@ -92,7 +93,7 @@ def connector_write(action):
                         bot,
                         order,
                         action,
-                        recheck=recheck if batch is not None else None,
+                        recheck=recheck,
                     ):
                         if action == "cancel":
                             executor.record_cancel_connector_admission(bot, order)
@@ -122,10 +123,8 @@ def connector_write(action):
                             raise
                         finally:
                             # A read made during submission cannot confirm its result.
-                            if batch is None:
-                                bot._request_authoritative_confirmation(surfaces)
-                            elif needs_confirmation:
-                                if active_protective_batch(bot) is batch:
+                            if needs_confirmation:
+                                if batch is not None and active_protective_batch(bot) is batch:
                                     batch.confirmations.update(surfaces)
                                 else:
                                     bot._request_authoritative_confirmation(surfaces)

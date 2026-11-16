@@ -61,7 +61,7 @@ def check_transport_admission(*, is_write=True):
             # ambiguous submission provenance instead of reporting "never sent".
             from ccxt.base.errors import NetworkError
 
-            reason = "position/fill settling" if settling else "current HSL admission"
+            reason = "position/fill settling" if settling else "current write admission"
             raise NetworkError(f"{reason} deferred a submitted request retry")
         raise WriteDeferred()
     if is_write and not context.submitted:

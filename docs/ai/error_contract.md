@@ -68,6 +68,12 @@ unacknowledged or ambiguous outcome stops the batch and requires a fresh account
 read, as does completion of a submitted batch. Malformed or incomplete close
 batches are fatal.
 
+Ordinary creates and cancels recheck current write admission at guarded
+transport boundaries after connector queueing. A denial before submission
+does not record an attempt or itself request post-write confirmation.
+A later denial cannot erase a prior submission attempt or its confirmation
+requirement.
+
 The live execution owner backs off transport failures, including exchange backpressure,
 with an interruptible bounded schedule and logs persistent outages. A valid request-local
 HTTP `Retry-After` on a current I/O transport failure can extend that wait. The owner
