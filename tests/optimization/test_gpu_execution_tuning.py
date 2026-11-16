@@ -202,6 +202,25 @@ def test_cuda_max_retries_a_repeatable_intermediate_width_without_persisting_a_p
     assert policy.cohort_width == policy.accepted_cohort_width == 2500
 
 
+@pytest.mark.parametrize("seconds,trial_width", [(1.0, 2), (8.0, 8)])
+def test_cuda_max_grows_beyond_parallel_window_only_for_sustained_slow_replay(seconds, trial_width):
+    policy = prepared_policy(initial=4, expandable_producer=True, host_preparation=(4, 0.5))
+    evidence(policy, seconds=seconds, backlog=0)
+    assert policy.cohort_width == trial_width
+    assert policy.accepted_cohort_width == 4
+
+
+def test_cuda_max_host_growth_uses_full_width_rate_when_partial_batches_are_slow():
+    policy = prepared_policy(initial=4, expandable_producer=True, host_preparation=(4, 0.5))
+    policy.width("a", 16)
+    for count, seconds in [(4, 1)] * 2 + [(2, 8)] * 4:
+        policy.observe("a", count, seconds, backlog=0, closing=False, cold=False)
+    assert policy.controllers["a"].last_window_rate < 1
+    assert policy.controllers["a"].last_comparison_shape_rate == 4
+    assert policy.cohort_width == 2
+    assert policy.accepted_cohort_width == 4
+
+
 def test_expandable_cuda_producer_persists_a_physical_clamp_without_a_trial():
     policy = prepared_policy(initial=8, expandable_producer=True)
     policy.constrain("a", 5)

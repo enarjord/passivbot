@@ -208,6 +208,8 @@ For wide physical batches, CUDA `max` groups independent candidates into four-
 or eight-thread blocks. It picks the widest of those sizes that can supply at
 least 128 blocks and two blocks per streaming multiprocessor. Smaller batches
 and kernels with block-owned replay state use one thread per block.
+Single-sided EMA Anchor also uses 16-thread blocks when that layout supplies
+at least twice and fewer than four times the minimum block count.
 CUDA retains its signed-byte relation table, while other tick fields remain int32.
 Both devices choose resident inputs for smaller
 histories and streaming when it reduces memory and full inputs exceed the captured
@@ -388,7 +390,12 @@ Automatic Metal widths start at the replay cap of 1,024 candidates, clamped by t
 prepared memory/history ceiling and service admission limit. The default CUDA policy starts
 at 64. CUDA `max` in the optimizer estimates startup demand for two waves of eight-candidate
 blocks from the device's maximum resident block count, rounded down to a power of two and
-limited by the service's maximum width. Prepared memory and dispatch bounds still apply. The GPU
+limited by the service's maximum width. If the host can support parallel candidate preparation,
+automatic CUDA `max` starts admission and dispatch in a window that fits the largest supported
+preparation pool. It checks powers of two and three-quarter widths between them.
+The planner's budget counts registered market metadata once on
+the parent and reserves per-candidate space for queued plans. Authored seeds and pending checkpoint
+candidates are evaluated through that window. Prepared memory and dispatch bounds still apply. The GPU
 owner creates a controller for each prepared dataset. Explicit widths and
 tuning-off defaults retain their fixed limits. Separate per-dataset
 controllers measure successful replay, reductions and host results using actual candidate
@@ -424,7 +431,10 @@ or invalid OS telemetry denies a growth trial without failing completed replay w
 A growth trial normally uses the largest compatible demand observed in that evidence
 window, so it can try an intermediate width when demand is less than twice the current
 width. Repeated full-width warm observations in the CUDA `max` optimizer can propose a wider
-cohort to supply the next trial. Growth in this mode requires a three-percent increase
+cohort to supply the next trial. Trials beyond the parallel preparation window require
+repeatable full-width observations and enough estimated serial preparation capacity to feed
+twice the observed replay rate. The estimate times the candidate plan already used for
+startup validation. Growth in this mode requires a three-percent increase
 in measured replay throughput. The prepared physical ceiling
 still applies. The service probes a smaller width only after a warm batch exceeded the
 proposed width. The existing conservative evidence rule requires a smaller trial to fill

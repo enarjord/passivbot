@@ -19,7 +19,7 @@ LONG_EVIDENCE_SECONDS = 30.0
 
 class ExecutionBatchTuner:
     def __init__(self, *, initial=64, headroom=lambda: True, enabled=True, diagnostics=False,
-                 expandable_producer=False, max_throughput=False):
+                 expandable_producer=False, max_throughput=False, host_preparation=None):
         self.initial = initial
         self.headroom = headroom
         self.enabled = enabled
@@ -32,6 +32,7 @@ class ExecutionBatchTuner:
         self._allow_trial = False
         self._expandable_producer = expandable_producer
         self._max_throughput = max_throughput or expandable_producer
+        self._host_preparation = host_preparation
         # The device owner publishes trial demand separately from the baseline
         # that the optimizer can use to restart with fresh observations.
         self.cohort_width = initial
@@ -95,6 +96,19 @@ class ExecutionBatchTuner:
             restarting, max((self._accepted_width(value) for value in self.controllers.values()), default=0),
         )
 
+    def _growth_limit(self, dataset_id, controller):
+        full_width = (controller.last_comparison_count == controller.width
+                      and controller.last_comparison_frequency >= 2)
+        limit = controller.ceiling if self._expandable_producer and full_width else self._demand[dataset_id]
+        if self._host_preparation is None:
+            return limit
+        parallel_window, serial_seconds = self._host_preparation
+        # A trial can at most double the width. Leave room for serial planning
+        # to feed it before asking for a window that can retire the worker pool.
+        if full_width and serial_seconds > 0 and 2 * controller.last_comparison_shape_rate * serial_seconds <= 1:
+            return limit
+        return min(limit, parallel_window)
+
     def width(self, dataset_id, ceiling):
         # Claim one initial request, prepare on its owner, then discover the
         # physical limit. Never hide multiple serial replays behind a cold batch.
@@ -117,12 +131,7 @@ class ExecutionBatchTuner:
                 shrink_min_rate_ratio=1.0,
                 growth_min_rate_ratio=1.03 if self._expandable_producer else 1.0,
                 require_repeatable_width=self._max_throughput,
-                growth_limit=lambda: (
-                    controller.ceiling
-                    if (self._expandable_producer and controller.last_comparison_count == controller.width
-                        and controller.last_comparison_frequency >= 2)
-                    else self._demand[dataset_id]
-                ),
+                growth_limit=lambda: self._growth_limit(dataset_id, controller),
                 can_grow=lambda: self.headroom(),
                 can_trial=lambda: self._allow_trial,
             )

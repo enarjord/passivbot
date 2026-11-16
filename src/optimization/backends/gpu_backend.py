@@ -409,58 +409,70 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         state = load_checkpoint(checkpoint_path, config)
         _prepare_resumed_algorithm(state["algorithm"], problem=problem,
                                    termination=termination, seed=seed, callback=Callback())
-    else:
-        starts = load_starting_individuals(
-            starting_configs_path=starting_configs_path, population_size=population_size,
-            get_starting_configs=get_starting_configs, configs_to_individuals=configs_to_individuals,
-            iter_starting_configs=iter_starting_configs,
-            configs_to_individuals_streaming=configs_to_individuals_streaming,
-            optimization_shape=optimization_shape, bounds=base.bounds, sig_digits=base.sig_digits,
-        )
-        authored_seed_count = len(starts)
-        if max_throughput:
-            target_width = (cuda_initial_candidate_width() if batch_size is None
-                            else min(batch_size, CUDA_MAX_BATCH_CANDIDATES))
-            plan = CudaMaxSearchBudget(population_size, target_width, cohort_limit)
-            generated = plan.bootstrap_size(iters=iters, authored_seed_count=authored_seed_count)
-            key_paths = getattr(optimization_shape, "key_paths", ())
-            anchors = tuple(i for i, (key, _path) in enumerate(key_paths) if key == ANCHOR_GENE_KEY)
-            starts = max_starting_vectors(
-                starts, bounds=base.bounds, sig_digits=base.sig_digits,
-                width=authored_seed_count + generated, random_state=np.random.default_rng(seed),
-                preserve_indices=anchors,
-            )
-        sampling = (np.asarray(starts[:population_size]) if max_throughput
-                    else _build_random_sampling(base.bounds, population_size))
-        algorithm = _build_algorithm(config=config, sampling=sampling,
-                                     bounds=base.bounds, sig_digits=base.sig_digits, population_plan=population_plan,
-                                     bounded_duplicates=max_throughput)
-        from session_artifacts import record_optimizer_search
-        record_optimizer_search(
-            config, algorithm, population_plan, starting_individuals=authored_seed_count,
-            cuda_max_search=(
-                {"bootstrapped_individuals": len(starts), "initial_cohort_target": plan.cohort_width,
-                 "generated_attempt_budget": iters} if max_throughput else None
-            ),
-        )
-        algorithm.setup(problem, termination=termination, seed=seed, verbose=False)
-        state = dict(backend="gpu", version=CHECKPOINT_VERSION, algorithm=algorithm,
-                     phase="seeds" if starts else "idle", sequence=0, completed=0,
-                     screened=0, population=Population.new("X", np.asarray(starts)) if starts else None)
-        if max_throughput:
-            state.update(max_search_budget=plan, max_search_allocated=len(starts) - authored_seed_count)
-            logging.info(
-                "CUDA max search | survivors=%d cohort_target=%d bootstrap_seeds=%d "
-                "bootstrap_generated=%d proposal_budget=%d",
-                population_size, plan.cohort_width, authored_seed_count, state["max_search_allocated"], iters,
-            )
-        state[CONTRACT_KEY] = build_evaluation_contract(config)
-        state["resume_config"] = checkpoint_config(config, state[CONTRACT_KEY])
-        state["anchor_plan"] = deepcopy(get_anchor_plan(config))
-    max_search_budget = state.get("max_search_budget")
-
     with NativeDatasetRegistry(evaluator_for_pool, standalone_candle_coins=standalone_candle_coins,
                                overrides_list=overrides_list) as registry:
+        candidate_limit = CUDA_MAX_BATCH_CANDIDATES if max_throughput else 1024
+        startup_limit = candidate_limit
+        if max_throughput and batch_size is None:
+            from optimization.native_planner_capacity import cuda_plan_parallel_window
+
+            parallel_window = cuda_plan_parallel_window(registry.planner, candidate_limit)
+            if parallel_window is not None and parallel_window < candidate_limit:
+                startup_limit = parallel_window
+                logging.info(
+                    "CUDA max host admission | startup_limit=%d serial_candidate_s=%.3f",
+                    startup_limit, registry.serial_preparation_seconds,
+                )
+        if not resume:
+            starts = load_starting_individuals(
+                starting_configs_path=starting_configs_path, population_size=population_size,
+                get_starting_configs=get_starting_configs, configs_to_individuals=configs_to_individuals,
+                iter_starting_configs=iter_starting_configs,
+                configs_to_individuals_streaming=configs_to_individuals_streaming,
+                optimization_shape=optimization_shape, bounds=base.bounds, sig_digits=base.sig_digits,
+            )
+            authored_seed_count = len(starts)
+            if max_throughput:
+                target_width = min(
+                    cuda_initial_candidate_width() if batch_size is None else batch_size, startup_limit,
+                )
+                plan = CudaMaxSearchBudget(population_size, target_width, cohort_limit)
+                generated = plan.bootstrap_size(iters=iters, authored_seed_count=authored_seed_count)
+                key_paths = getattr(optimization_shape, "key_paths", ())
+                anchors = tuple(i for i, (key, _path) in enumerate(key_paths) if key == ANCHOR_GENE_KEY)
+                starts = max_starting_vectors(
+                    starts, bounds=base.bounds, sig_digits=base.sig_digits,
+                    width=authored_seed_count + generated, random_state=np.random.default_rng(seed),
+                    preserve_indices=anchors,
+                )
+            sampling = (np.asarray(starts[:population_size]) if max_throughput
+                        else _build_random_sampling(base.bounds, population_size))
+            algorithm = _build_algorithm(config=config, sampling=sampling,
+                                         bounds=base.bounds, sig_digits=base.sig_digits, population_plan=population_plan,
+                                         bounded_duplicates=max_throughput)
+            from session_artifacts import record_optimizer_search
+            record_optimizer_search(
+                config, algorithm, population_plan, starting_individuals=authored_seed_count,
+                cuda_max_search=(
+                    {"bootstrapped_individuals": len(starts), "initial_cohort_target": plan.cohort_width,
+                     "generated_attempt_budget": iters} if max_throughput else None
+                ),
+            )
+            algorithm.setup(problem, termination=termination, seed=seed, verbose=False)
+            state = dict(backend="gpu", version=CHECKPOINT_VERSION, algorithm=algorithm,
+                         phase="seeds" if starts else "idle", sequence=0, completed=0,
+                         screened=0, population=Population.new("X", np.asarray(starts)) if starts else None)
+            if max_throughput:
+                state.update(max_search_budget=plan, max_search_allocated=len(starts) - authored_seed_count)
+                logging.info(
+                    "CUDA max search | survivors=%d cohort_target=%d bootstrap_seeds=%d "
+                    "bootstrap_generated=%d proposal_budget=%d",
+                    population_size, plan.cohort_width, authored_seed_count, state["max_search_allocated"], iters,
+                )
+            state[CONTRACT_KEY] = build_evaluation_contract(config)
+            state["resume_config"] = checkpoint_config(config, state[CONTRACT_KEY])
+            state["anchor_plan"] = deepcopy(get_anchor_plan(config))
+        max_search_budget = state.get("max_search_budget")
         labels = set(screening_policy["scenarios"])
         if labels:
             unknown = labels - registry.scorer.coverage.keys()
@@ -479,15 +491,16 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         # Seed survival waits for the complete seed cohort, so its available
         # work is independent of the later evolutionary population size. Keep
         # admission bounded while allowing the service to fill wider batches.
-        candidate_limit = CUDA_MAX_BATCH_CANDIDATES if max_throughput else 1024
         cohort_width = max_search_budget.cohort_width if max_search_budget is not None else population_size
-        population_window = max(2, min(cohort_width, candidate_limit))
+        population_window = max(2, min(cohort_width, startup_limit))
         pending_count = len(state["population"]) if (
             state["phase"] == "seeds" or (max_throughput and state["phase"] != "idle")
         ) else 0
-        candidate_window = max(population_window, min(pending_count, candidate_limit))
+        candidate_window = max(population_window, min(pending_count, startup_limit))
         if max_throughput and batch_size is None:
-            memory_options["max_cohort_width"] = max_search_budget.target_width
+            memory_options["max_cohort_width"] = min(max_search_budget.target_width, startup_limit)
+            if startup_limit < candidate_limit:
+                memory_options["host_preparation"] = (startup_limit, registry.serial_preparation_seconds)
         service = NativeBacktestService(
             batch_size=batch_size, **memory_options,
             max_dispatch_candidate_bars=dispatch_budget,

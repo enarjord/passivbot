@@ -40,6 +40,22 @@ def test_cuda_temporal_block_size(monkeypatch, global_state, max_mode, width, sm
     assert runner._cuda_temporal_block_size(width) == expected
 
 
+@pytest.mark.parametrize("runner_class,width,expected", [
+    (mps_kernel.MpsEmaAnchorMulticoinRunner, 2048, 8),
+    (mps_kernel.MpsEmaAnchorMulticoinRunner, 4095, 8),
+    (mps_kernel.MpsEmaAnchorMulticoinRunner, 4096, 16),
+    (mps_kernel.MpsEmaAnchorMulticoinRunner, 8192, 8),
+    (mps_kernel.MpsEmaAnchorMulticoinFusedRunner, 4096, 8),
+    (mps_kernel.MpsTrailingMartingaleMulticoinRunner, 4096, 8),
+])
+def test_cuda_max_packs_directional_ema_at_intermediate_width(monkeypatch, runner_class, width, expected):
+    runner = runner_class.__new__(runner_class)
+    runner.bars = SimpleNamespace(device=torch.device("cuda"))
+    runner.cuda_max_scratch_policy = runner.cuda_global_replay_side_state = True
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda _: SimpleNamespace(multi_processor_count=46))
+    assert runner._cuda_temporal_block_size(width) == expected
+
+
 class Clock:
     def __init__(self):
         self.seconds = 0.0
