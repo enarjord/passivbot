@@ -57,9 +57,9 @@ def validate_checkpoint(state, config):
                 or type(plan.cohort_limit) is not type(cohort_limit)
                 or plan.cohort_limit != cohort_limit
                 or type(allocated) is not int or allocated < 0):
-            raise ValueError("GPU native checkpoint has an invalid CUDA max search budget")
+            raise ValueError("GPU native checkpoint has an invalid max search budget")
         if options["iters"] < allocated:
-            raise ValueError("Cannot resume CUDA max with iters below already allocated search attempts")
+            raise ValueError("Cannot resume GPU max with iters below already allocated search attempts")
     if state["phase"] == "screening":
         for individual in state["population"]:
             payload = getattr(individual, "screening_payload", None)

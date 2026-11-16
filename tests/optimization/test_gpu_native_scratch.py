@@ -584,3 +584,57 @@ def test_device_shape_release_preserves_native_replay(strategy, sides):
             else:
                 assert actual == reference
         del output
+
+
+@pytest.mark.usefixtures("torch_runtime")
+@pytest.mark.parametrize("same_shape,allowance,expected_width", [
+    (True, 20, 4),
+    (False, 30, 2),
+    (False, 19, 0),
+])
+def test_metal_max_scratch_reuses_exact_shapes_or_limits_before_replay(
+    monkeypatch, same_shape, allowance, expected_width,
+):
+    from optimization.gpu import mps_kernel, residency
+    from optimization.gpu.autotune import ReplayScratchLimit
+
+    value = object.__new__(mps_kernel._MulticoinReplayRunner)
+    value.mps_max_scratch_policy = True
+    value._replay_state_bytes = 10
+    value._max_mode_parameter_cols = 12
+    value._max_mode_scratch_ceiling_bytes = 100
+    value._scratch_shape = (4 if same_shape else 5, 12, 10)
+    value._replay_states = {value._scratch_shape: SimpleNamespace(nbytes=30)}
+    value._buffers = {}
+    value._hsl_scratch_buffers = {}
+    value._sizes = {}
+    value._full_end_steps = {}
+    value._core_buffers = {}
+    value._core_output = None
+    value._history_bytes_per_candidate = lambda: 10
+    value._history_workspace_bytes = lambda: 10
+    samples, reclaims = [], []
+
+    def available(_torch, *, pending_host_bytes):
+        assert pending_host_bytes == 0
+        samples.append(bool(value._replay_states))
+        return allowance
+
+    monkeypatch.setattr(residency, "mps_max_available_bytes", available)
+    monkeypatch.setattr(mps_kernel.torch.mps, "empty_cache", lambda: reclaims.append(True))
+    if expected_width == 4:
+        value._admit_mps_max_scratch(4)
+        assert samples == [True]
+        assert value._scratch_shape == (4, 12, 10)
+        assert value._replay_states
+        assert not reclaims
+    else:
+        error = ReplayScratchLimit if expected_width else residency.MetalReplayMemoryPressure
+        with pytest.raises(error) as caught:
+            value._admit_mps_max_scratch(4)
+        assert samples == [False, False]
+        assert value._scratch_shape is None
+        assert not value._replay_states
+        assert len(reclaims) == 1
+        if expected_width:
+            assert caught.value.limit == expected_width

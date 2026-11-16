@@ -3467,7 +3467,12 @@ def _gpu_cached_input_preflight(path, shape, dtype, *, strategy_kind=None, input
         stream_tick_inputs=stream_tick_inputs,
         compact_hourly_ranges=stream_tick_inputs)
     if device == "mps":
-        check_mps_invariant_memory(torch, required)
+        if input_memory_budget is not None and input_memory_budget.max_throughput:
+            check_mps_invariant_memory(
+                torch, required, input_memory_budget=input_memory_budget, require_free=False,
+            )
+        else:
+            check_mps_invariant_memory(torch, required)
         return
     try:
         check_cuda_invariant_memory(torch, required, input_memory_budget=input_memory_budget)
@@ -4005,7 +4010,7 @@ async def main():
                     torch, max_throughput=tuning_mode == "max",
                 )
             elif tuning_mode == "max":
-                raise ValueError("optimize.gpu.tuning_mode='max' requires NVIDIA CUDA")
+                gpu_input_memory_budget = capture_mps_input_memory_budget(torch, max_throughput=True)
             else:
                 gpu_input_memory_budget = capture_mps_input_memory_budget(torch)
 

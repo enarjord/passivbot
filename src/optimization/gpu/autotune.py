@@ -147,6 +147,7 @@ class BatchController:
         shrink_min_rate_ratio=0.98,
         growth_min_rate_ratio=1.05,
         require_repeatable_width=False,
+        probe_inner_growth=False,
     ):
         window_samples = WINDOW if window_samples is None else window_samples
         min_seconds = MIN_SECONDS if min_seconds is None else min_seconds
@@ -187,6 +188,7 @@ class BatchController:
         self.min_seconds = min_seconds
         self.rate_aggregation = rate_aggregation
         self.require_repeatable_width = require_repeatable_width
+        self.probe_inner_growth = probe_inner_growth
         self.shrink_min_rate_ratio = float(shrink_min_rate_ratio)
         self.growth_min_rate_ratio = float(growth_min_rate_ratio)
         self.long_window_samples = long_window_samples
@@ -324,9 +326,14 @@ class BatchController:
                     "reason=insufficient_gain" if effective else "reason=width_effect_unobserved",
                     *self._comparison_tokens("trial_"),
                 ])
-                self.width = old_width
-                if effective:
+                if (self.probe_inner_growth and effective
+                        and self.width >= 2 * old_width and self.last_comparison_count == self.width):
+                    # A fully funded doubling can miss a faster intermediate
+                    # width. A failed intermediate turns back as usual.
+                    self._retry_growth_width = (old_width + self.width) // 2
+                elif effective:
                     self.direction *= -1
+                self.width = old_width
                 self.cooldown = 3
             return True
         self.save(self.width, rate, evidence_seconds)
@@ -377,14 +384,19 @@ class BatchController:
         return True
 
 
-class CudaReplayScratchLimit(MemoryError):
+class ReplayScratchLimit(MemoryError):
     """An admitted shape can be narrowed before candidate allocation or replay."""
 
-    def __init__(self, attempted, limit):
+    def __init__(self, attempted, limit, *, device):
         self.limit = limit
         super().__init__(
-            f"CUDA replay scratch admits {limit} of {attempted} candidates after compilation"
+            f"{device} replay scratch admits {limit} of {attempted} candidates after compilation"
         )
+
+
+class CudaReplayScratchLimit(ReplayScratchLimit):
+    def __init__(self, attempted, limit):
+        super().__init__(attempted, limit, device="CUDA")
 
 
 def history_dispatch_ceiling(proxy, ceiling):

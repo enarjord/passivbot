@@ -27,7 +27,7 @@ from optimization.gpu.decimal import (
 )
 from optimization.gpu.replay_progress import TemporalReplayProgress
 from optimization.gpu.autotune import (
-    CudaReplayScratchLimit, ReplayDurationController, cuda_max_initial_chunk_bars,
+    CudaReplayScratchLimit, ReplayDurationController, ReplayScratchLimit, cuda_max_initial_chunk_bars,
     record_compilation, record_replay_chunk,
 )
 from optimization.gpu.runtime import (
@@ -1206,6 +1206,7 @@ class _MulticoinReplayRunner:
     windowed_tick_fields = _METAL_WINDOWED_TICKS
     initial_cuda_chunk_bars = None
     cuda_max_scratch_policy = False
+    mps_max_scratch_policy = False
     _validate_hsl_params = _validate_hsl_params
 
     def _use_disabled_hsl_specialization(self, matrix):
@@ -1575,7 +1576,8 @@ class _MulticoinReplayRunner:
 
     def _history_bytes_per_candidate(self):
         max_mode_io_bytes = 0
-        if getattr(self, "cuda_max_scratch_policy", False):
+        if (getattr(self, "cuda_max_scratch_policy", False)
+                or getattr(self, "mps_max_scratch_policy", False)):
             # Besides the state and reduction packet, include the scalar/fill
             # outputs, parameter upload and the end word in the replay control.
             max_mode_io_bytes = 4 * (self.scalar_cols + self._max_mode_parameter_cols + 1)
@@ -1600,7 +1602,17 @@ class _MulticoinReplayRunner:
             )
             # Include control headers, the per-command launch range and stubs.
             return 64 + window_bytes
+        if getattr(self, "mps_max_scratch_policy", False):
+            return 64 + self._mps_window_bytes()
         return 4 * 8
+
+    def _mps_window_bytes(self):
+        tick_paths = getattr(self, "_streamed_tick_paths", {})
+        if not tick_paths:
+            return 0
+        return min(self.n, self.temporal_chunk_bar_limit + 2) * self.n_coins * sum(
+            4 * columns for name, columns in _METAL_WINDOWED_TICKS if name in tick_paths
+        )
 
     def _history_batch_bytes(self, batch_size):
         return batch_size * self._history_bytes_per_candidate() + self._history_workspace_bytes()
@@ -1625,10 +1637,58 @@ class _MulticoinReplayRunner:
             "_replay_states", "_sizes", "_full_end_steps",
         ):
             getattr(self, name).clear()
-        if self.cuda_max_scratch_policy:
+        if self.cuda_max_scratch_policy or self.mps_max_scratch_policy:
             self._core_buffers.clear()
             self._core_output = None
         self._scratch_shape = None
+
+    def _admit_mps_max_scratch(self, requested_width):
+        from optimization.gpu.residency import MetalReplayMemoryPressure, mps_max_available_bytes
+
+        shape = (requested_width, self._max_mode_parameter_cols, self._replay_state_bytes)
+        if shape == getattr(self, "_scratch_shape", None):
+            retained_bytes = sum(
+                tensor.nbytes
+                for outputs in (*self._buffers.values(), *self._hsl_scratch_buffers.values())
+                for tensor in outputs
+            ) + sum(
+                tensor.nbytes
+                for buffers in (self._replay_states, self._sizes, self._full_end_steps, self._core_buffers)
+                for tensor in buffers.values()
+            )
+        else:
+            # Shape changes release the old workspace before testing the new
+            # one. The returned buffers have already been consumed by the owner.
+            self._clear_scratch()
+            retained_bytes = 0
+        requested_bytes = self._history_batch_bytes(requested_width)
+        # The mapped input window and its uploaded tensors can overlap until
+        # the command completes. Only the extra source pages are host-only.
+        pending_host_bytes = self._mps_window_bytes()
+        available = mps_max_available_bytes(torch, pending_host_bytes=pending_host_bytes)
+        if available + retained_bytes < min(requested_bytes, self._max_mode_scratch_ceiling_bytes):
+            # Previous shapes can leave unused allocator reservations. One
+            # reclaim makes the subsequent sample authoritative for this retry.
+            torch.mps.empty_cache()
+            available = mps_max_available_bytes(torch, pending_host_bytes=pending_host_bytes)
+        self.hsl_scratch_budget_bytes = min(self._max_mode_scratch_ceiling_bytes, available + retained_bytes)
+        limit = self._history_batch_limit()
+        if limit < requested_width:
+            if retained_bytes:
+                # A narrower shape cannot reuse these tensors. Release them
+                # and calculate the actual capacity before returning a limit.
+                self._clear_scratch()
+                torch.mps.empty_cache()
+                self.hsl_scratch_budget_bytes = min(
+                    self._max_mode_scratch_ceiling_bytes,
+                    mps_max_available_bytes(torch, pending_host_bytes=pending_host_bytes),
+                )
+                limit = self._history_batch_limit()
+            if limit < 1:
+                raise MetalReplayMemoryPressure("Metal replay scratch cannot admit one candidate")
+            if limit < requested_width:
+                raise ReplayScratchLimit(requested_width, limit, device="Metal")
+        self._scratch_shape = shape
 
     def _refresh_max_mode_scratch_budget(self, requested_width, *, pending_stack_bytes=0):
         from optimization.gpu.residency import CudaReplayMemoryPressure, cuda_max_vram_reserve_bytes
@@ -2127,6 +2187,9 @@ class _MulticoinReplayRunner:
                     "GPU max CUDA stack | kernel=%s pending_stack_mib=%.1f admitted_candidates=%d",
                     self.replay_kernel_name, pending_stack / 2**20, len(matrix),
                 )
+        elif self.mps_max_scratch_policy:
+            self._max_mode_parameter_cols = matrix.shape[1]
+            self._admit_mps_max_scratch(len(matrix))
         elif self._history_bytes_per_candidate():
             split = self._run_history_batches(
                 params, profile=profile, end_steps=end_steps

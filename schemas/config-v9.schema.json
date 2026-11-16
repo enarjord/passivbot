@@ -6427,7 +6427,7 @@
                     "null"
                   ],
                   "default": null,
-                  "description": "CUDA max search cohort limit above the survivor population, independent of dispatch sizing.",
+                  "description": "GPU max search cohort limit above the survivor population, independent of dispatch sizing.",
                   "minimum": 1,
                   "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[aA][uU][tT][oO])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "x-passivbot-consumers": [
@@ -6437,7 +6437,7 @@
                 "tuning_mode": {
                   "type": "string",
                   "default": "conservative",
-                  "description": "GPU resource tuning policy. Max is CUDA-only. Auto aliases conservative.",
+                  "description": "GPU resource tuning policy for CUDA and Metal. Auto aliases conservative.",
                   "pattern": "^[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*(?:[cC][oO][nN][sS][eE][rR][vV][aA][tT][iI][vV][eE]|[mM][aA][xX]|[rR][eE][fF][rR][eE][sS][hH]|[oO][fF][fF]|[aA][uU][tT][oO])[\\u0009-\\u000d\\u001c-\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]*$",
                   "examples": [
                     "conservative",

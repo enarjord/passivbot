@@ -36,14 +36,15 @@ def test_cuda_worker_selection_is_bounded_and_keeps_serial_fallback(
     base.config["optimize"]["gpu"].update(tuning_mode=mode, batch_size=4)
     observed = []
 
-    def no_capacity(planner, lifetime, *, available_rows, interrupt_check):
+    def no_capacity(planner, lifetime, *, device, available_rows, interrupt_check):
         observed.append(available_rows)
+        assert device == "cuda"
         assert callable(planner.prepare)
         assert callable(lifetime.enter_context)
         assert callable(interrupt_check)
         return None
 
-    monkeypatch.setattr(gpu_backend, "_open_cuda_preparation_workers", no_capacity)
+    monkeypatch.setattr(gpu_backend, "_open_preparation_workers", no_capacity)
     rows = []
     execute(base, SimpleNamespace(record=rows.append), tmp_path / "selection.pkl")
     assert observed == expected_capacity
@@ -103,6 +104,7 @@ def test_existing_worker_pool_is_reused_and_tiny_tail_stays_serial(monkeypatch):
 
     search = object.__new__(gpu_backend._Search)
     search._preparation_lifetime = object()
+    search._preparation_device = "cuda"
     search._preparation_workers = None
     search._largest_preparation_window = 0
     search.session = SimpleNamespace(max_candidates=12)
@@ -111,11 +113,12 @@ def test_existing_worker_pool_is_reused_and_tiny_tail_stays_serial(monkeypatch):
     pool = SimpleNamespace(worker_count=4, pending_count=0)
     chosen = []
 
-    def select(_planner, _lifetime, *, available_rows, interrupt_check):
+    def select(_planner, _lifetime, *, device, available_rows, interrupt_check):
+        assert device == "cuda"
         chosen.append(available_rows)
         return pool
 
-    monkeypatch.setattr(gpu_backend, "_open_cuda_preparation_workers", select)
+    monkeypatch.setattr(gpu_backend, "_open_preparation_workers", select)
     monkeypatch.setattr(native_planner_capacity, "cuda_plan_pool_fits", lambda *args, **kwargs: True)
     assert search._workers_for_window(0) is None
     assert search._workers_for_window(1) is None
@@ -130,6 +133,7 @@ def test_existing_worker_pool_retires_before_next_cohort_on_host_pressure(monkey
 
     search = object.__new__(gpu_backend._Search)
     search._preparation_workers = None
+    search._preparation_device = "cuda"
     search._largest_preparation_window = 0
     search.session = SimpleNamespace(max_candidates=128)
     planner = object()
@@ -152,7 +156,7 @@ def test_existing_worker_pool_retires_before_next_cohort_on_host_pressure(monkey
         assert workers == 4
         return parent_bytes <= 128
 
-    monkeypatch.setattr(gpu_backend, "_open_cuda_preparation_workers", open_pool)
+    monkeypatch.setattr(gpu_backend, "_open_preparation_workers", open_pool)
     monkeypatch.setattr(native_planner_capacity, "cuda_plan_preparation_memory", estimate)
     monkeypatch.setattr(native_planner_capacity, "cuda_plan_pool_fits", fits)
 

@@ -91,3 +91,21 @@ def test_parallel_window_can_reduce_admission_to_retain_more_workers(monkeypatch
 def test_resident_pool_reserves_remaining_parent_headroom_without_double_charging_workers(monkeypatch, host, expected):
     monkeypatch.setattr(capacity, "_host_capacity", lambda: host)
     assert capacity.cuda_plan_pool_fits(parent_bytes=20, workers=8) is expected
+
+
+def test_metal_pool_uses_shared_headroom_and_existing_pool_reserves_only_parent_bytes(monkeypatch):
+    planner = SimpleNamespace(bindings=())
+    parent_bytes, worker_bytes = capacity.mps_plan_preparation_memory(planner, 256)
+    spare_bytes = parent_bytes + 2 * worker_bytes
+    monkeypatch.setattr(capacity, "_host_capacity", lambda: (8, 16 * 2**30))
+    monkeypatch.setattr(capacity, "mps_system_headroom_bytes", lambda **_kwargs: spare_bytes)
+
+    assert capacity.mps_plan_worker_count(planner, admission_slots=256, available_rows=256) == 2
+    assert capacity.mps_plan_worker_count(planner, admission_slots=256, available_rows=16) == 0
+
+    spare_bytes = parent_bytes
+    assert capacity.mps_plan_worker_count(planner, admission_slots=256, available_rows=256) == 0
+    assert capacity.mps_plan_pool_fits(parent_bytes=parent_bytes, workers=2)
+
+    spare_bytes -= 1
+    assert not capacity.mps_plan_pool_fits(parent_bytes=parent_bytes, workers=2)

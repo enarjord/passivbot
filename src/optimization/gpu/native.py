@@ -30,11 +30,24 @@ def cuda_initial_candidate_width():
     from optimization.gpu.runtime import gpu_device
 
     if gpu_device(torch) != "cuda":
-        raise ValueError("optimize.gpu.tuning_mode='max' requires NVIDIA CUDA")
+        raise ValueError("CUDA wave sizing requires an NVIDIA CUDA device")
     attributes = cupy.cuda.Device(torch.cuda.current_device()).attributes
     blocks = attributes["MultiProcessorCount"] * attributes["MaxBlocksPerMultiprocessor"]
     candidates = 2 * blocks * CUDA_MAX_PACKED_REPLAY_THREADS
     return min(CUDA_MAX_BATCH_CANDIDATES, 1 << (candidates.bit_length() - 1))
+
+
+def max_candidate_widths(device):
+    """Return the optimizer startup width and physical ceiling for max tuning."""
+    from optimization.gpu.model import (
+        CUDA_MAX_BATCH_CANDIDATES, MPS_MAX_BATCH_CANDIDATES, MPS_MAX_INITIAL_BATCH_CANDIDATES,
+    )
+
+    if device == "mps":
+        return MPS_MAX_INITIAL_BATCH_CANDIDATES, MPS_MAX_BATCH_CANDIDATES
+    if device == "cuda":
+        return cuda_initial_candidate_width(), CUDA_MAX_BATCH_CANDIDATES
+    raise ValueError(f"Unsupported max GPU device {device!r}")
 
 
 def _metal_system_headroom():
@@ -75,6 +88,7 @@ class NativeBacktestService:
 
         tuning_mode = resolve_gpu_tuning_mode(tuning_mode)
         self._max_throughput = tuning_mode == "max"
+        self._max_cohort_width = max_cohort_width
         if batch_size is _DEFAULT:
             batch_size = None if self._max_throughput else 64
         if max_pending is _DEFAULT:
@@ -82,7 +96,7 @@ class NativeBacktestService:
         if max_cohort_width is not None and (
             not self._max_throughput or type(max_cohort_width) is not int or max_cohort_width < 1
         ):
-            raise ValueError("CUDA max cohort width must be a positive integer in max mode")
+            raise ValueError("GPU max cohort width must be a positive integer in max mode")
         automatic = is_auto(batch_size) and tuning_mode != "off"
         diagnostics = logging.getLogger().isEnabledFor(logging.INFO)
         self._batch_tuner = (
@@ -173,6 +187,13 @@ class NativeBacktestService:
         return free > cuda_max_vram_reserve_bytes(total)
 
     @staticmethod
+    def _mps_max_headroom():
+        import torch
+        from optimization.gpu.residency import mps_max_available_bytes
+
+        return mps_max_available_bytes(torch, require_system_telemetry=False) > 0
+
+    @staticmethod
     def _dispatch_ceiling(replay):
         # Keep runner references out of the suspended factory context: another
         # dataset must be able to release this replay's tensors and scratch.
@@ -186,8 +207,6 @@ class NativeBacktestService:
         from optimization.gpu.residency import cuda_residency_scope, metal_residency_scope
 
         device = gpu_device()
-        if self._max_throughput and device != "cuda":
-            raise RuntimeError("GPU tuning mode 'max' requires an NVIDIA CUDA device")
         if self._required_device is not None and device != self._required_device:
             raise RuntimeError("CUDA backtest service requires an NVIDIA CUDA device")
         if self._input_memory_budget is None:
@@ -196,7 +215,10 @@ class NativeBacktestService:
                 capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
             )
             if device == "mps":
-                self._input_memory_budget = capture_mps_input_memory_budget(torch)
+                if self._max_throughput:
+                    self._input_memory_budget = capture_mps_input_memory_budget(torch, max_throughput=True)
+                else:
+                    self._input_memory_budget = capture_mps_input_memory_budget(torch)
             elif self._max_throughput:
                 self._input_memory_budget = capture_cuda_input_memory_budget(torch, max_throughput=True)
             else:
@@ -207,14 +229,27 @@ class NativeBacktestService:
             if (not isinstance(self._input_memory_budget, CudaInputMemoryBudget)
                     or self._input_memory_budget.max_throughput != self._max_throughput):
                 raise ValueError("CUDA input memory budget does not match the GPU tuning mode")
-        if self._batch_tuner is not None and device == "mps":
-            # Device selection stays on the owner, before prepared replay limits
-            # create a controller and clamp its initial width.
-            from optimization.gpu.model import MPS_TM_MULTICOIN_CHUNK_CANDIDATES
-            self._batch_tuner.initial = MPS_TM_MULTICOIN_CHUNK_CANDIDATES
+        if device == "mps":
+            if self._max_throughput:
+                from optimization.gpu.residency import MpsInputMemoryBudget
+
+                if (not isinstance(self._input_memory_budget, MpsInputMemoryBudget)
+                        or not self._input_memory_budget.max_throughput):
+                    raise ValueError("Metal input memory budget does not match the GPU tuning mode")
+            if self._batch_tuner is not None:
+                # Select width on the owner before the prepared replay clamps it.
+                from optimization.gpu.model import MPS_TM_MULTICOIN_CHUNK_CANDIDATES
+
+                if self._max_throughput:
+                    initial, ceiling = max_candidate_widths(device)
+                    self._batch_tuner.initial = min(self._max_cohort_width or initial, ceiling)
+                    self._batch_tuner.headroom = self._mps_max_headroom
+                    self._batch_tuner.probe_inner_growth = True
+                else:
+                    self._batch_tuner.initial = MPS_TM_MULTICOIN_CHUNK_CANDIDATES
         scope = metal_residency_scope if device == "mps" else cuda_residency_scope
         memory_options = ({"input_memory_budget": self._input_memory_budget}
-                          if device == "cuda" else {})
+                          if device == "cuda" or self._max_throughput else {})
         try:
             with scope(**memory_options) as residency:
                 self._residency = residency

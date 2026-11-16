@@ -17,7 +17,7 @@ import threading
 import time
 import traceback
 
-from .workloads import array_digest, digest, harness_digest, load_manifest
+from .workloads import array_digest, digest, get_path, harness_digest, load_manifest
 
 _CPU_CONTEXT = None
 _SOCKET_CONNECT = socket.socket.connect
@@ -382,6 +382,30 @@ def profile_search_host(enabled):
         report["functions"] = sorted(rows, key=lambda row: row["self_seconds"], reverse=True)[:100]
 
 
+def _authored_result_vectors(configs, evaluator):
+    """Project frozen inputs through the target revision's result recorder."""
+    import optimize
+    from optimization.bounds import enforce_bounds
+    from optimization.callback import build_pymoo_record_entry
+
+    def build_config(vector, _overrides_fn, overrides_list, template):
+        return optimize._canonicalize_optimizer_individual(
+            vector, template, evaluator.bounds, evaluator.sig_digits, evaluator.key_paths, overrides_list,
+        )
+
+    vectors = set()
+    for seed in configs:
+        raw = [get_path(seed, path) for _key, path in evaluator.key_paths]
+        vector = enforce_bounds(raw, evaluator.bounds, evaluator.sig_digits)
+        # Use the callback signature shared by target revisions.
+        recorded = build_pymoo_record_entry(
+            vector=vector, metrics=None, template=evaluator.config,
+            build_config_fn=build_config, overrides_fn=optimize.optimizer_overrides,
+        )
+        vectors.add(tuple(get_path(recorded, path) for _key, path in evaluator.key_paths))
+    return vectors
+
+
 def search_run(entry, arrays, args):
     """Exercise the production backend, scoring, checkpoint and result persistence."""
     import optimize
@@ -389,11 +413,13 @@ def search_run(entry, arrays, args):
     from optimization.random_seed import seed_rngs
     from shared_arrays import SharedArrayManager
     from config.optimize_bounds import set_flat_optimize_bound
-    from .workloads import get_path
 
     config = deepcopy(entry["configs"][0])
     backend = "gpu" if args.engine == "search-gpu" else "pymoo"
-    config["optimize"].update(backend=backend, population_size=len(entry["configs"]),
+    population_size = getattr(args, "search_population_size", None)
+    if population_size is None:
+        population_size = len(entry["configs"])
+    config["optimize"].update(backend=backend, population_size=population_size,
         iters=args.search_iters, seed=entry["seed"], n_cpus=args.workers, write_all_results=True)
     config["optimize"]["bounds"] = {}
     for spec in entry["bounds"]:
@@ -435,6 +461,7 @@ def search_run(entry, arrays, args):
         base = optimize.Evaluator({exchange: specs[0]}, {exchange: specs[1]}, {exchange: entry["markets"]},
             config, timestamps={exchange: arrays[2]}, shared_array_manager=manager)
         with tempfile.TemporaryDirectory(prefix="optimizer-benchmark-search-") as directory:
+            config["results_dir"] = directory
             recorder = optimize.ResultRecorder(results_dir=directory, sig_digits=base.sig_digits,
                 flush_interval=1, scoring_keys=config["optimize"]["scoring"], compress=False,
                 write_all_results=True, bounds=base.bounds)
@@ -464,14 +491,26 @@ def search_run(entry, arrays, args):
                 recorder.flush()
                 seconds = time.perf_counter() - started
                 disk_bytes = sum(p.stat().st_size for p in Path(directory).rglob("*") if p.is_file())
+                search_path = Path(directory) / "search.json"
+                search = json.loads(search_path.read_text()) if search_path.is_file() else None
             finally:
                 recorder.close()
         from .report import numerical_comparison
         reference_start = time.perf_counter()
         names = ["cagr_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity"]
         reference_rows, observed_rows = [], []
+        completed_vectors = set()
+        completed_authored = {}
+        authored_vectors = _authored_result_vectors(entry["configs"], base)
+        last_timestamp_ms = int(arrays[2][-1])
         for record_row in records:
             saved = record_row["result"]
+            source = saved["metrics"].get("sources", {}).get(exchange, {})
+            if source.get("actual_end_timestamp_ms") == source.get("intended_end_timestamp_ms") == last_timestamp_ms:
+                vector = tuple(get_path(saved, path) for _key, path in base.key_paths)
+                completed_vectors.add(vector)
+                if vector in authored_vectors:
+                    completed_authored[vector] = saved["metrics"]
             reference_rows.append(cpu_candidate((saved, arrays[0], entry["markets"], arrays[1], arrays[2],
                                                  exchange, names)))
             from metrics_schema import copy_metric_value
@@ -491,6 +530,10 @@ def search_run(entry, arrays, args):
         return dict(engine="prepared_production_optimizer", backend=backend,
             tuning_mode=config["optimize"]["gpu"]["tuning_mode"] if backend == "gpu" else None,
             samples=[dict(seconds=seconds, completed=len(records), results=records)],
+            completed_distinct_candidates=len(completed_vectors),
+            completed_distinct_authored_candidates=len(completed_authored),
+            completed_authored_metrics_sha256=digest(strict_json(sorted(completed_authored.items()))),
+            search=search,
             first_result_seconds=records[0]["elapsed_seconds"] if records else None,
             persisted_bytes=disk_bytes, requested_iterations=args.search_iters,
             rust_reference_verification=verification, host_profile=host_profile,
@@ -589,10 +632,13 @@ def main():
     parser.add_argument("--tune-seconds", type=float, default=0)
     parser.add_argument("--dispatch-budget", type=int, default=50_000_000)
     parser.add_argument("--search-iters", type=int, default=64)
+    parser.add_argument("--search-population-size", type=int)
     parser.add_argument("--phase-profile", action="store_true")
     parser.add_argument("--host-profile", action="store_true")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+    if args.search_population_size is not None and args.search_population_size < 2:
+        parser.error("search population size must be at least two")
     sys.path.insert(0, str(Path(args.backend).resolve() / "src"))
     block_network()
     try:

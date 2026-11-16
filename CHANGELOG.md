@@ -5,6 +5,12 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Support opt-in `optimize.gpu.tuning_mode = "max"` on Apple Silicon Metal.
+  It evaluates wider seed and offspring cohorts, retains the configured parent
+  population size, and checks shared memory before allocating replay scratch.
+  It can prepare candidates in parallel when shared headroom permits.
+  Metal users can set an explicit search cohort limit independently of dispatch sizing.
+
 - Start automatic CUDA max with an admission window that preserves parallel
   candidate preparation when host memory allows. Use 16-thread blocks
   for intermediate single-sided EMA Anchor dispatches that can fill enough blocks.

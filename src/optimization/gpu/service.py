@@ -25,7 +25,7 @@ from optimization.gpu.coin_parameters import build_coin_override_parameters
 from config.validate import validate_limit_order_fill_buffer_fraction
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
-from optimization.gpu.autotune import CudaReplayScratchLimit, history_dispatch_ceiling
+from optimization.gpu.autotune import ReplayScratchLimit, history_dispatch_ceiling
 from optimization.gpu.residency import CudaReplayMemoryPressure
 from optimization.gpu.metric_registry import UTILIZATION_METRICS, requested_metric_features
 from optimization.gpu.core_metrics import metric_mask, finalize_observations
@@ -55,6 +55,7 @@ from optimization.gpu.model import (
     MPS_TM_MULTICOIN_CHUNK_BARS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATES,
+    MPS_MAX_BATCH_CANDIDATES,
     CUDA_TM_MULTICOIN_CHUNK_CANDIDATES,
     CUDA_MAX_BATCH_CANDIDATES,
     CUDA_MAX_INITIAL_CHUNK_BARS,
@@ -656,7 +657,7 @@ def _mps_multicoin_dispatch_plan(
     if strategy_kind not in {"ema_anchor", "trailing_martingale"} or device not in {"cuda", "mps"}:
         raise ValueError("Unsupported current GPU replay strategy or device")
     temporal_chunking = True
-    chunk_candidates = MPS_TM_MULTICOIN_CHUNK_CANDIDATES
+    chunk_candidates = MPS_MAX_BATCH_CANDIDATES if max_throughput else MPS_TM_MULTICOIN_CHUNK_CANDIDATES
     if device == "cuda":
         chunk_candidates = CUDA_MAX_BATCH_CANDIDATES if max_throughput else CUDA_TM_MULTICOIN_CHUNK_CANDIDATES
     dispatch_candidates = (
@@ -1099,9 +1100,6 @@ class SharedAccountReplay:
                 "or `pip install -e '.[full,gpu-cuda]'` (NVIDIA)"
             ) from exc
         device = gpu_device(torch)
-        if max_throughput and device != "cuda":
-            raise RuntimeError("GPU tuning mode 'max' requires an NVIDIA CUDA device")
-
         from optimization.gpu.metrics import validate_gpu_metric_names
 
         self.needed_metrics = set(validate_gpu_metric_names(
@@ -1459,10 +1457,28 @@ class SharedAccountReplay:
             require_positive_high_low=True,
         )
         from optimization.gpu.residency import (
-            current_gpu_residency, prefer_streamed_ticks, supports_streamed_ticks, discard_readonly_file_pages,
-            capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
+            MpsInputMemoryBudget, MetalSuiteResidency, capture_cuda_input_memory_budget,
+            capture_mps_input_memory_budget, check_mps_invariant_memory, current_gpu_residency,
+            discard_readonly_file_pages, multicoin_invariant_bytes, prefer_streamed_ticks,
+            supports_streamed_ticks,
         )
-        if input_memory_budget is None and current_gpu_residency() is not None:
+        residency = current_gpu_residency()
+        if device == "mps" and max_throughput:
+            if residency is not None and prepared_data_cache is not None:
+                if not isinstance(residency, MetalSuiteResidency):
+                    raise ValueError("Metal max replay requires a Metal residency owner")
+                input_memory_budget = residency.resolve_max_input_memory_budget(torch, input_memory_budget)
+            else:
+                if input_memory_budget is None:
+                    input_memory_budget = capture_mps_input_memory_budget(torch, max_throughput=True)
+                if (not isinstance(input_memory_budget, MpsInputMemoryBudget)
+                        or not input_memory_budget.max_throughput):
+                    raise ValueError("Metal input memory budget does not match the GPU tuning mode")
+                check_mps_invariant_memory(
+                    torch, multicoin_invariant_bytes(len(values), coin_count, device=device),
+                    input_memory_budget=input_memory_budget,
+                )
+        elif input_memory_budget is None and residency is not None:
             if device == "mps":
                 input_memory_budget = capture_mps_input_memory_budget(torch)
             elif max_throughput:
@@ -1471,8 +1487,7 @@ class SharedAccountReplay:
                 input_memory_budget = capture_cuda_input_memory_budget(torch)
         stream_tick_inputs = bool(
             supports_streamed_ticks(self.strategy_kind, device) and self.temporal_chunking
-            and current_gpu_residency() is not None
-            and prepared_data_cache is not None
+            and residency is not None and prepared_data_cache is not None
             and prefer_streamed_ticks(len(values), coin_count, input_memory_budget,
                                       interval_ms=runs[0].interval_ms, device=device)
         )
@@ -1490,8 +1505,6 @@ class SharedAccountReplay:
         )
         if stream_tick_inputs:
             discard_readonly_file_pages(values)
-        from optimization.gpu.residency import current_gpu_residency
-        residency = current_gpu_residency()
         self._cuda_residency = residency if residency is not None and residency.owns(self.data) else None
         self.metrics_data = {
             "ts0": self.data["ts0"],
@@ -1507,6 +1520,7 @@ class SharedAccountReplay:
         self._factual_capacity_hints = factual_capacity_hints
         self._automatic_scratch_budget = automatic_scratch_budget or max_throughput
         self._max_throughput = max_throughput
+        self._cuda_max_throughput = max_throughput and device == "cuda"
         if selection is None and config["backtest"].get("organillo_csv") is not None:
             from organillo import prepare_selection
             selection = prepare_selection(config, backtest_params["coins"], timestamps)
@@ -1644,6 +1658,10 @@ class SharedAccountReplay:
             )
             if max_throughput:
                 runner._max_mode_scratch_ceiling_bytes = runner.hsl_scratch_budget_bytes
+        elif getattr(self, "_max_throughput", False) and runner.bars.device.type == "mps":
+            runner.mps_max_scratch_policy = True
+            runner._max_mode_scratch_ceiling_bytes = runner.hsl_scratch_budget_bytes
+            runner._max_mode_parameter_cols = len(runner.parameter_keys) * runner.replay_sides
         return runner
 
     def _remember_factual_capacities(self):
@@ -1794,7 +1812,8 @@ class SharedAccountReplay:
             residency.activate(self)
         max_throughput = getattr(self, "_max_throughput", False)
         dispatch_batch_size = getattr(self, "dispatch_batch_size", self.batch_size)
-        if max_throughput and candidates:
+        cuda_max = getattr(self, "_cuda_max_throughput", max_throughput)
+        if cuda_max and candidates:
             self._refresh_dispatch_memory(min(dispatch_batch_size, len(candidates)), residency)
         fused_runner = getattr(self, "fused_runner", None)
         profile_runners = (
@@ -1827,7 +1846,7 @@ class SharedAccountReplay:
             adaptive=max_throughput,
         )
         start = 0
-        narrowed = False
+        narrowing_attempts = 0
         while start < len(candidates):
             chunk = candidates[start:start + width]
             chunk_profile_started = (
@@ -1855,15 +1874,20 @@ class SharedAccountReplay:
             pressure = False
             try:
                 raw_output = runner.run(parameters, profile=self.profile_enabled)
-            except CudaReplayScratchLimit as error:
-                if not max_throughput or narrowed or not 1 <= error.limit < len(chunk):
+            except ReplayScratchLimit as error:
+                if (not max_throughput or narrowing_attempts >= (1 if cuda_max else 2)
+                        or not 1 <= error.limit < len(chunk)):
                     raise
+                width = error.limit
+                if narrowing_attempts:
+                    # A second drop indicates moving unified-memory headroom.
+                    # Leave margin on the final attempt.
+                    width = min(width, len(chunk) // 2)
                 logging.info(
                     "GPU max replay width reduced before allocation | attempted=%d admitted=%d",
-                    len(chunk), error.limit,
+                    len(chunk), width,
                 )
-                width = error.limit
-                narrowed = True
+                narrowing_attempts += 1
                 continue
             except CudaReplayMemoryPressure:
                 if not max_throughput or residency is None or not residency.can_stream_on_pressure(self):
@@ -1876,7 +1900,7 @@ class SharedAccountReplay:
                 residency.stream_on_pressure(self)
                 self.last_evaluation_split = True
                 width = history_dispatch_ceiling(self, dispatch_batch_size)
-                narrowed = False
+                narrowing_attempts = 0
                 continue
             if profile is not None:
                 _add_gpu_runner_profile(profile, runner, side_count=len(self.sides))
@@ -1916,7 +1940,7 @@ class SharedAccountReplay:
                 del raw_output, packet
             start += len(chunk)
             self.last_evaluation_split = start < len(candidates) or self.last_evaluation_split
-            narrowed = False
+            narrowing_attempts = 0
             if profile is not None:
                 profile["timings_seconds"]["result_materialization"] += (
                     time.perf_counter() - stage_started

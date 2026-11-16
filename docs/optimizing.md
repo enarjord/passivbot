@@ -306,19 +306,22 @@ retired GPU-specific population field. See [v8 migration](v8_to_v9_migration.md)
 can keep the `"auto"` alias. `"refresh"` uses the same policy and starts with fresh
 observations, as measurements are run-local.
 
-`"max"` is a CUDA-only opt-in for unattended runs. It allows wider automatic batches
-and more use of available host RAM and VRAM. Desktop graphics can become sluggish.
-The service bounds work by compatible demand, memory and dispatch limits.
+`"max"` is an opt-in for unattended runs on CUDA and Apple Metal. It allows wider
+automatic batches. CUDA checks host RAM and VRAM. Metal checks both shared system
+headroom and the MPS working set. Desktop graphics can become sluggish. The service
+bounds work by compatible demand, available memory and dispatch limits.
+See the [Metal qualification procedure](optimizer_benchmark.md#metal-complete-suite-qualification)
+and [synthetic benchmark](optimizer_benchmark.md#metal-max-synthetic-search).
 
 In `max`, `population_size` controls how many parents selection keeps. Startup and
 offspring cohorts can offer more candidates per generation. At startup the optimizer
 evaluates all distinct supplied seeds and generates distinct bounded mutations to fill
 the cohort when the budget and search space allow. Without supplied seeds it samples
-the configured bounds. With automatic batch sizing, the selected CUDA device supplies
-the initial target. Host memory can limit the target to keep candidate preparation parallel.
+the configured bounds. With automatic batch sizing, the selected device policy supplies
+the initial target. CUDA host memory can limit the target to keep candidate preparation parallel.
 Warm per-scenario trials can adjust the dispatch width within the run's admission limit.
 
-Set `optimize.gpu.search_cohort_size` in CUDA `max` to limit how many candidates the
+Set `optimize.gpu.search_cohort_size` in `max` to limit how many candidates the
 optimizer offers before the next selection step. This applies to generated startup
 and offspring cohorts, with the resolved survivor population as a lower bound.
 Supplied seeds are still all evaluated. A smaller cohort can yield more selection
@@ -326,7 +329,7 @@ steps for the same proposal budget, with fewer candidates available to fill each
 GPU dispatch. The dispatch limit and memory policy still use the existing GPU
 settings. Null or `"auto"` follows the existing width policy.
 
-CUDA `max` can prepare candidates in several CPU processes while the GPU
+GPU `max` can prepare candidates in several CPU processes while the GPU
 replays queued work. The optimizer applies plans in candidate order and retains
 scoring and checkpoint ownership. Worker admission depends on the cohort,
 usable CPU capacity and available host RAM.
@@ -342,8 +345,8 @@ while limiting the memory used for distance calculations on wide cohorts.
 
 An omitted, null or `"auto"` `batch_size` lets the service tune from completed
 production work. A positive width sets a ceiling and disables width tuning. `"max"`
-uses an explicit width as its initial CUDA target alongside the retained population
-size and still applies its memory policy. A positive
+uses an explicit width as its initial target up to the device ceiling and still
+applies its memory policy. A positive
 `max_dispatch_candidate_bars` also constrains dispatched work. Automatic width changes
 require warm replay evidence that the change affected the actual number of dispatched
 candidates.

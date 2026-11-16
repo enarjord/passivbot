@@ -346,7 +346,7 @@ def metal_runtime():
     return torch
 
 
-def _tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale", *, bars=1537):
+def _tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale", *, bars=2737):
     from tools.gpu_parity import build_parser, fixture_inputs
 
     inputs = fixture_inputs(build_parser().parse_args([
@@ -358,8 +358,8 @@ def _tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale", *, bar
     ]))
     config, candles, markets, _btc, _timestamps = inputs
     config["backtest"]["ew_half_life_days"] = 1.5
-    # The second coin lists later and finishes before the replay ends,
-    # exercising tick-window halos and distant clamped marks.
+    # With the default history the second coin's missing tail exceeds one day.
+    # This exercises the forced close and tick-window halos at its last mark.
     markets["COIN01"].update(first_valid_index=103, last_valid_index=1231)
     candles[:103, 1] = np.nan
     candles[1232:, 1] = np.nan
@@ -525,3 +525,30 @@ def test_metal_service_streamed_ticks_match_resident_outputs_and_reset(
     assert all(item["temporal_chunk_bars"] == chunk_bars for item in dispatches)
     assert all(item.get("streamed_tick_inputs", False) is False for item in dispatches[:2])
     assert all(item["streamed_tick_inputs"] is True for item in dispatches[2:])
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+def test_metal_tick_transport_rejects_short_tail_while_held(metal_runtime, monkeypatch, streamed):
+    from optimization.gpu import mps_kernel, residency
+    from optimization.gpu.executor import BacktestRequest
+    from optimization.gpu.native import NativeBacktestService
+    from tools.gpu_parity import _native_dataset
+
+    # This case holds COIN01 when its marks stop. The 305-minute missing tail
+    # cannot trigger a delisting close, so the next held valuation must fail.
+    inputs = _tick_window_fixture("short", "disabled", bars=1537)
+    monkeypatch.setattr(residency, "prefer_streamed_ticks", lambda *args, **kwargs: streamed)
+    original_run = mps_kernel._MulticoinReplayRunner.run
+
+    def run(runner, *args, **kwargs):
+        assert bool(runner._streamed_tick_paths) is streamed
+        return original_run(runner, *args, **kwargs)
+
+    monkeypatch.setattr(mps_kernel._MulticoinReplayRunner, "run", run)
+    with _native_dataset(inputs, "binance", TICK_WINDOW_METRICS) as dataset:
+        with NativeBacktestService(batch_size=1, max_pending=1, tuning_mode="off",
+                                   max_dispatch_candidate_bars=61 * 2) as worker:
+            worker.register_dataset("market", dataset)
+            request = worker.submit(BacktestRequest("short-tail", "market", {}))
+            with pytest.raises(ValueError, match="unavailable held-position valuation"):
+                request.result(timeout=180)

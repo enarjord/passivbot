@@ -608,3 +608,21 @@ def test_cuda_facade_reports_transport_from_an_already_registered_sibling(monkey
             assert "b" not in policy.controllers
             policy.observe("b", 1, 1, backlog=0, closing=False, cold=False)
             assert all(policy.width(identity, 16) == 16 for identity in ("a", "b"))
+
+
+@pytest.mark.parametrize("probe_inner_growth,next_width", [(True, 6), (False, 2)])
+def test_rejected_full_width_growth_can_probe_an_interior_width(probe_inner_growth, next_width):
+    policy = prepared_policy(initial=4, expandable_producer=True, max_throughput=True)
+    policy.probe_inner_growth = probe_inner_growth
+    evidence(policy, seconds=1)
+    assert policy.width("a", 16) == 8
+    evidence(policy, seconds=3)
+    assert policy.width("a", 16) == policy.accepted_cohort_width == 4
+    for _ in range(3):
+        evidence(policy, seconds=1)
+    evidence(policy, seconds=1)
+    assert policy.width("a", 16) == next_width
+    assert policy.accepted_cohort_width == 4
+    if probe_inner_growth:
+        evidence(policy, seconds=1)
+        assert policy.width("a", 16) == policy.accepted_cohort_width == 6
