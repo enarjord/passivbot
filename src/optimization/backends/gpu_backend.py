@@ -492,8 +492,8 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         state = load_checkpoint(checkpoint_path, config)
         _prepare_resumed_algorithm(state["algorithm"], problem=problem,
                                    termination=termination, seed=seed, callback=Callback())
-    elif device != "cuda":
-        # CUDA max uses registry memory estimates before it sizes its seed cohort.
+    elif device == "mps":
+        # Metal max sizes its first cohort before the registry owns input buffers.
         state = build_initial_state(candidate_limit)
 
     with NativeDatasetRegistry(evaluator_for_pool, standalone_candle_coins=standalone_candle_coins,
@@ -509,7 +509,7 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
                     "CUDA max host admission | startup_limit=%d serial_candidate_s=%.3f",
                     startup_limit, registry.serial_preparation_seconds,
                 )
-        if not resume and device == "cuda":
+        if not resume and device != "mps":
             state = build_initial_state(startup_limit)
         max_search_budget = state.get("max_search_budget")
         labels = set(screening_policy["scenarios"])

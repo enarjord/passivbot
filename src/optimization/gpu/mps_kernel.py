@@ -1576,7 +1576,8 @@ class _MulticoinReplayRunner:
 
     def _history_bytes_per_candidate(self):
         max_mode_io_bytes = 0
-        if self.cuda_max_scratch_policy or self.mps_max_scratch_policy:
+        if (getattr(self, "cuda_max_scratch_policy", False)
+                or getattr(self, "mps_max_scratch_policy", False)):
             # Besides the state and reduction packet, include the scalar/fill
             # outputs, parameter upload and the end word in the replay control.
             max_mode_io_bytes = 4 * (self.scalar_cols + self._max_mode_parameter_cols + 1)
@@ -1601,7 +1602,7 @@ class _MulticoinReplayRunner:
             )
             # Include control headers, the per-command launch range and stubs.
             return 64 + window_bytes
-        if self.mps_max_scratch_policy:
+        if getattr(self, "mps_max_scratch_policy", False):
             return 64 + self._mps_window_bytes()
         return 4 * 8
 
