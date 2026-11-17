@@ -1,11 +1,12 @@
 import asyncio
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 from ccxt.base.errors import NetworkError, OrderNotFound
 
 from live import bitunix_create_recovery as recovery_module
-from live.bitunix_create_journal import BitunixCreateJournal
+from live.bitunix_create_journal import BitunixCreateJournal, BitunixCreateJournalError
 from live.bitunix_create_recovery import BitunixCreateRecovery
 from live.freshness import FreshnessLedger
 from live.position_fill_sync import WriteDeferred
@@ -66,7 +67,16 @@ class Account:
 
 def order_row(attempt, status="NEW", filled="0", **overrides):
     return {
-        **BODY,
+        "clientId": attempt.client_id,
+        "symbol": attempt.symbol,
+        "side": attempt.side.upper(),
+        "tradeSide": attempt.trade_side,
+        "qty": attempt.qty,
+        "price": attempt.price,
+        "positionId": attempt.position_id,
+        "effect": attempt.effect,
+        "orderType": attempt.order_type.upper(),
+        "reduceOnly": attempt.reduce_only,
         "orderId": ORDER_ID,
         "positionMode": "HEDGE",
         "ctime": attempt.submitted_at_ms,
@@ -154,7 +164,9 @@ async def test_pending_view_cannot_override_exact_working_detail(
     assert journal.load() == (attempt,)
 
     account.capture([order_row(attempt, "PART_FILLED", "0.3", clientId="")])
-    account.fill_capture(recovery, recovery.fill_after_ms + 1, "0.1", "0.2")
+    account.fill_capture(
+        recovery, recovery.attempts[attempt.client_id].fill_after_ms + 1, "0.1", "0.2"
+    )
     recovery.poll(lookup)
     assert recovery.pending is contradictory_id
 
@@ -208,13 +220,13 @@ async def test_later_partial_survives_restart_with_older_terminal_detail(
     recovery.poll(lookup)
     await recovery.task
     recovery.poll(lookup)
-    assert recovery.terminal is not None
+    assert recovery.attempts[attempt.client_id].terminal is not None
 
     partial = order_row(attempt, "PART_FILLED", "0.3")
     if later_source == "lookup":
         account.capture()
         response = partial
-        recovery.next_lookup = 0
+        recovery.attempts[attempt.client_id].next_lookup = 0
         recovery.poll(lookup)
         await recovery.task
         recovery.poll(lookup)
@@ -222,7 +234,9 @@ async def test_later_partial_survives_restart_with_older_terminal_detail(
         account.capture([partial])
         recovery.poll(lookup)
     account.capture()
-    account.fill_capture(recovery, recovery.fill_after_ms + 1)
+    account.fill_capture(
+        recovery, recovery.attempts[attempt.client_id].fill_after_ms + 1
+    )
     recovery.poll(lookup)
     assert recovery.pending
 
@@ -235,17 +249,21 @@ async def test_later_partial_survives_restart_with_older_terminal_detail(
     await recovery.task
     recovery.poll(lookup)
     account.capture()
-    account.fill_capture(recovery, recovery.fill_after_ms + 1)
+    account.fill_capture(
+        recovery, recovery.attempts[attempt.client_id].fill_after_ms + 1
+    )
     recovery.poll(lookup)
     assert recovery.pending
 
     response = order_row(attempt, "PART_FILLED_CANCELED", "0.3")
-    recovery.next_lookup = 0
+    recovery.attempts[attempt.client_id].next_lookup = 0
     recovery.poll(lookup)
     await recovery.task
     recovery.poll(lookup)
     account.capture()
-    account.fill_capture(recovery, recovery.fill_after_ms + 1, "0.1", "0.2")
+    account.fill_capture(
+        recovery, recovery.attempts[attempt.client_id].fill_after_ms + 1, "0.1", "0.2"
+    )
     recovery.poll(lookup)
     assert journal.load() == ()
 
@@ -266,21 +284,27 @@ async def test_terminal_requires_later_account_and_agreeing_fill_receipt(
     recovery.poll(lookup)
     await recovery.task
     recovery.poll(lookup)
-    assert recovery.terminal is not None
-    account.fill_capture(recovery, recovery.fill_after_ms - 10)
+    assert recovery.attempts[attempt.client_id].terminal is not None
+    account.fill_capture(
+        recovery, recovery.attempts[attempt.client_id].fill_after_ms - 10
+    )
     account.capture()
     recovery.poll(lookup)
     assert recovery.pending  # fill receipt started before the terminal evidence
 
     conflict = ("0.4",) if filled == "0" else ("0.1",)
-    account.fill_capture(recovery, recovery.fill_after_ms + 1, *conflict)
+    account.fill_capture(
+        recovery, recovery.attempts[attempt.client_id].fill_after_ms + 1, *conflict
+    )
     recovery.poll(lookup)
     assert (
         recovery.pending
     )  # includes a contradictory fill for a zero-fill cancellation
 
     coherent = () if filled == "0" else ("0.1", "0.2")
-    account.fill_capture(recovery, recovery.fill_after_ms + 2, *coherent)
+    account.fill_capture(
+        recovery, recovery.attempts[attempt.client_id].fill_after_ms + 2, *coherent
+    )
     account.capture([order_row(attempt)])
     recovery.poll(lookup)
     assert recovery.pending  # account still shows a conflicting pending order
@@ -296,10 +320,14 @@ async def test_partial_working_order_waits_for_exact_fills(journal):
     recovery = BitunixCreateRecovery(account, journal)
     attempt = recovery.record(BODY, None)
     account.capture([order_row(attempt, "PART_FILLED", "0.3")])
-    recovery.next_lookup = float("inf")  # account and fills are being checked locally
+    recovery.attempts[attempt.client_id].next_lookup = float(
+        "inf"
+    )  # account and fills are being checked locally
     recovery.poll(unexpected_lookup)
     assert recovery.pending
-    account.fill_capture(recovery, recovery.fill_after_ms + 1, "0.1", "0.2")
+    account.fill_capture(
+        recovery, recovery.attempts[attempt.client_id].fill_after_ms + 1, "0.1", "0.2"
+    )
     recovery.poll(unexpected_lookup)
     assert journal.load() == ()
 
@@ -321,3 +349,176 @@ async def test_close_cancels_lookup_and_preserves_attempt(journal):
     await recovery.close()
     assert recovery.task.cancelled()
     assert journal.load() == (attempt,)
+
+
+def _wave_contexts(account):
+    contexts = [
+        SimpleNamespace(bot=account, order={"custom_id": client_id}, action="create")
+        for client_id in ("first", "second", "other")
+    ]
+    account._hsl_live = SimpleNamespace(
+        _ordinary_create_wave=SimpleNamespace(
+            wave_id="active-wave",
+            permits=lambda bot, order, action: (
+                bot is account
+                and action == "create"
+                and any(c.order is order for c in contexts)
+            ),
+        )
+    )
+    bodies = [
+        {
+            **BODY,
+            "clientId": ctx.order["custom_id"],
+            "symbol": symbol,
+            "positionId": f"position-{symbol}",
+            "tradeSide": "CLOSE",
+            "reduceOnly": True,
+        }
+        for ctx, symbol in zip(contexts, ("BTCUSDT", "ETHUSDT", "SOLUSDT"))
+    ]
+    return contexts, bodies
+
+
+def test_only_bound_in_memory_wave_members_can_join(journal):
+    account = Account()
+    recovery = BitunixCreateRecovery(account, journal)
+    (first, second, other), bodies = _wave_contexts(account)
+    first_attempt = recovery.record(bodies[0], first)
+
+    with pytest.raises(WriteDeferred):
+        recovery.record(bodies[1], first)  # exact client ID comes from the bound order
+    with pytest.raises(WriteDeferred):
+        recovery.record(
+            bodies[1], SimpleNamespace(**{**vars(second), "order": dict(second.order)})
+        )
+    with pytest.raises(WriteDeferred):
+        recovery.record(bodies[1], None)
+    with pytest.raises(WriteDeferred):
+        BitunixCreateRecovery(account, journal).record(bodies[1], second)
+
+    second_attempt = recovery.record(bodies[1], second)
+    assert journal.load() == (first_attempt, second_attempt)
+    recovery.resolve(second_attempt, "not_sent")
+    assert journal.load() == (first_attempt,)
+    with pytest.raises(WriteDeferred):
+        recovery.record(bodies[2], other)  # freeing a slot does not add a wave member
+    _wave_contexts(account)  # new object, even with the same token
+    with pytest.raises(WriteDeferred):
+        recovery.record(bodies[1], second)
+
+
+def test_wave_cannot_continue_if_earlier_durable_attempt_vanishes(journal):
+    account = Account()
+    recovery = BitunixCreateRecovery(account, journal)
+    contexts, bodies = _wave_contexts(account)
+    first = recovery.record(bodies[0], contexts[0])
+    assert journal.resolve(first.client_id)
+    with pytest.raises(WriteDeferred):
+        recovery.record(bodies[1], contexts[1])
+    assert recovery.pending and journal.load() == ()
+
+
+@pytest.mark.parametrize("persist_fails", [False, True])
+def test_acknowledgment_commits_identity_and_retains_attempt(
+    journal, monkeypatch, persist_fails
+):
+    account = Account()
+    recovery = BitunixCreateRecovery(account, journal)
+    contexts, bodies = _wave_contexts(account)
+    first = recovery.record(bodies[0], contexts[0])
+    if persist_fails:
+
+        def fail_observation(*_args):
+            raise BitunixCreateJournalError("simulated ACK journal failure")
+
+        monkeypatch.setattr(journal, "observe", fail_observation)
+    assert recovery.record_acknowledgment(first, ORDER_ID) is (not persist_fails)
+    ((durable, observation),) = BitunixCreateJournal(journal.path).load_pending_all()
+    assert durable == first and recovery.pending
+    if persist_fails:
+        assert observation is None
+        with pytest.raises(WriteDeferred):
+            recovery.record(bodies[1], contexts[1])
+    else:
+        assert observation.order_id == ORDER_ID
+        assert observation.filled_qty == Decimal(0)
+        assert not recovery.resolve(first, "not_sent")
+
+
+@pytest.mark.asyncio
+async def test_restart_recovers_sibling_despite_other_conflicting_identity(journal):
+    account = Account()
+    recovery = BitunixCreateRecovery(account, journal)
+    contexts, bodies = _wave_contexts(account)
+    first, second = [
+        recovery.record(body, ctx) for body, ctx in zip(bodies[:2], contexts[:2])
+    ]
+    journal.observe(first.client_id, ORDER_ID, Decimal(0))
+    journal.observe(first.client_id, "conflicting-id", Decimal(0))
+
+    account = Account()
+    recovery = BitunixCreateRecovery(account, BitunixCreateJournal(journal.path))
+    recovery.poll(unexpected_lookup)
+    account.capture([order_row(second, orderId="sibling-open-order")])
+    recovery.poll(unexpected_lookup)
+    assert journal.load() == (first,)
+    assert recovery.pending
+    assert recovery.task is None
+
+
+@pytest.mark.asyncio
+async def test_unfinished_lookup_does_not_block_sibling_account_evidence(journal):
+    account = Account()
+    recovery = BitunixCreateRecovery(account, journal)
+    contexts, bodies = _wave_contexts(account)
+    first, second = [
+        recovery.record(body, ctx) for body, ctx in zip(bodies[:2], contexts[:2])
+    ]
+    account.capture()
+    entered = asyncio.Event()
+
+    async def lookup(*_args, **kwargs):
+        assert kwargs["params"]["clientId"] == first.client_id
+        entered.set()
+        await asyncio.Event().wait()
+
+    recovery.poll(lookup)
+    await asyncio.wait_for(entered.wait(), 1.0)
+    task = recovery.task
+    account.capture([order_row(second, orderId="sibling-open-order")])
+    recovery.poll(lookup)
+    assert recovery.task is task and not task.done()
+    assert journal.load() == (first,)
+    await recovery.close()
+
+
+@pytest.mark.asyncio
+async def test_lookup_rotates_between_unresolved_attempts_and_honors_backoff(journal):
+    account = Account()
+    recovery = BitunixCreateRecovery(account, journal)
+    contexts, bodies = _wave_contexts(account)
+    first, second = [
+        recovery.record(body, ctx) for body, ctx in zip(bodies[:2], contexts[:2])
+    ]
+    account.capture()
+    queried = []
+
+    async def lookup(*_args, **kwargs):
+        client_id = kwargs["params"]["clientId"]
+        queried.append(client_id)
+        exc = NetworkError("offline error")
+        if client_id == first.client_id:
+            exc.retry_after_seconds = 120.0
+        raise exc
+
+    recovery.poll(lookup)
+    await recovery.task
+    recovery.poll(lookup)
+    assert queried == [first.client_id] and recovery.task is None
+    recovery._retry_after = 0.0
+    recovery.poll(lookup)
+    await recovery.task
+    recovery.poll(lookup)
+    assert queried == [first.client_id, second.client_id]
+    assert journal.load() == (first, second)

@@ -1,4 +1,4 @@
-"""Durable transport facts for the single outstanding Bitunix create."""
+"""Durable transport facts for outstanding Bitunix creates."""
 
 import json
 import os
@@ -18,12 +18,21 @@ WIRE_TOKEN_PATTERN = re.compile(r"[!-~]+")
 _WIRE_DECIMAL = re.compile(r"[0-9]+(?:\.[0-9]+)?")
 _LIMIT_EFFECTS = {"GTC", "IOC", "FOK", "POST_ONLY"}
 _APPLICATION_ID = 0x50424352  # PBCR
-_VERSION = 1
-_SCHEMA = (
+MAX_CREATE_WAVE_SIZE = 2
+_SERIAL_VERSION = 1
+_WAVE_VERSION = 2
+_SERIAL_SCHEMA = (
     "CREATE TABLE pending_create ("
     "slot INTEGER PRIMARY KEY CHECK (slot = 1), attempt TEXT NOT NULL, "
     "order_id TEXT, filled_qty TEXT, conflicting_order_id TEXT)"
 )
+_WAVE_SCHEMA = (
+    "CREATE TABLE pending_create ("
+    f"slot INTEGER PRIMARY KEY CHECK (slot BETWEEN 1 AND {MAX_CREATE_WAVE_SIZE}), "
+    "attempt TEXT NOT NULL, order_id TEXT, filled_qty TEXT, conflicting_order_id TEXT, "
+    "wave_id TEXT, CHECK (wave_id IS NOT NULL OR slot = 1))"
+)
+_SCHEMA_BY_VERSION = {_SERIAL_VERSION: _SERIAL_SCHEMA, _WAVE_VERSION: _WAVE_SCHEMA}
 
 
 class BitunixCreateJournalError(RuntimeError):
@@ -150,6 +159,14 @@ class BitunixCreateObservation:
 PendingCreate = tuple[BitunixCreateAttempt, BitunixCreateObservation | None]
 
 
+@dataclass(frozen=True)
+class _JournalEntry:
+    slot: int
+    attempt: BitunixCreateAttempt
+    observation: BitunixCreateObservation | None
+    wave_id: str | None
+
+
 def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
     result = dict(pairs)
     if len(result) != len(pairs):
@@ -172,28 +189,49 @@ def _connect(path: Path) -> Iterator[sqlite3.Connection]:
         yield conn
 
 
-def _read_pending(conn: sqlite3.Connection) -> PendingCreate | None:
+def _read_journal(conn: sqlite3.Connection) -> tuple[int, tuple[_JournalEntry, ...]]:
+    (version,) = conn.execute("PRAGMA user_version").fetchone()
     if (
         conn.execute("PRAGMA application_id").fetchone() != (_APPLICATION_ID,)
-        or conn.execute("PRAGMA user_version").fetchone() != (_VERSION,)
+        or version not in _SCHEMA_BY_VERSION
         or conn.execute("SELECT type, name, sql FROM sqlite_schema").fetchall()
-        != [("table", "pending_create", _SCHEMA)]
+        != [("table", "pending_create", _SCHEMA_BY_VERSION[version])]
     ):
         raise BitunixCreateJournalError("Invalid Bitunix create journal schema")
+    wave_column = "wave_id" if version == _WAVE_VERSION else "NULL"
     rows = conn.execute(
-        "SELECT slot, attempt, order_id, filled_qty, conflicting_order_id FROM pending_create"
+        "SELECT slot, attempt, order_id, filled_qty, conflicting_order_id, "
+        f"{wave_column} FROM pending_create ORDER BY slot"
     ).fetchall()
-    if not rows:
-        return None
-    if len(rows) != 1 or rows[0][0] != 1 or not isinstance(rows[0][1], str):
+    limit = MAX_CREATE_WAVE_SIZE if version == _WAVE_VERSION else 1
+    if len(rows) > limit:
         raise BitunixCreateJournalError("Invalid Bitunix create journal rows")
-    _, payload, order_id, filled_qty, conflicting_order_id = rows[0]
+    entries = tuple(_parse_entry(row, limit) for row in rows)
+    client_ids = {entry.attempt.client_id for entry in entries}
+    wave_ids = {entry.wave_id for entry in entries}
+    if len(client_ids) != len(entries) or (
+        len(entries) > 1 and (len(wave_ids) != 1 or None in wave_ids)
+    ):
+        raise BitunixCreateJournalError("Conflicting Bitunix create journal rows")
+    return version, entries
+
+
+def _parse_entry(row: tuple, limit: int) -> _JournalEntry:
+    slot, payload, order_id, filled_qty, conflicting_order_id, wave_id = row
     try:
+        if (
+            type(slot) is not int
+            or not 1 <= slot <= limit
+            or not isinstance(payload, str)
+            or (wave_id is None and slot != 1)
+            or (wave_id is not None and not _matches(WIRE_TOKEN_PATTERN, wave_id))
+        ):
+            raise ValueError("Invalid Bitunix create journal row")
         attempt = BitunixCreateAttempt(
             **json.loads(payload, object_pairs_hook=_unique_json_object)
         )
         if order_id is None and filled_qty is None and conflicting_order_id is None:
-            return attempt, None
+            return _JournalEntry(slot, attempt, None, wave_id)
         if not _matches(_WIRE_DECIMAL, filled_qty):
             raise ValueError("Invalid Bitunix journal executed quantity")
         observation = BitunixCreateObservation(
@@ -203,16 +241,34 @@ def _read_pending(conn: sqlite3.Connection) -> PendingCreate | None:
             raise ValueError(
                 "Bitunix journal executed quantity exceeds submitted amount"
             )
-        return attempt, observation
+        return _JournalEntry(slot, attempt, observation, wave_id)
     except (ValueError, TypeError) as exc:
         raise BitunixCreateJournalError(
             "Invalid Bitunix create journal pending state"
         ) from exc
 
 
-def _insert(conn: sqlite3.Connection, attempt: BitunixCreateAttempt) -> None:
+def _insert(
+    conn: sqlite3.Connection,
+    attempt: BitunixCreateAttempt,
+    slot: int,
+    wave_id: str | None,
+) -> None:
     payload = json.dumps(asdict(attempt), separators=(",", ":"), allow_nan=False)
-    conn.execute("INSERT INTO pending_create (slot, attempt) VALUES (1, ?)", (payload,))
+    if wave_id is None:
+        conn.execute(
+            "INSERT INTO pending_create (slot, attempt) VALUES (?, ?)", (slot, payload)
+        )
+    else:
+        conn.execute(
+            "INSERT INTO pending_create (slot, attempt, wave_id) VALUES (?, ?, ?)",
+            (slot, payload, wave_id),
+        )
+
+
+def _initialize_schema(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute(f"PRAGMA user_version={version}")
+    conn.execute(_SCHEMA_BY_VERSION[version])
 
 
 def _sync_directories(path: Path) -> None:
@@ -228,7 +284,7 @@ def _sync_directories(path: Path) -> None:
 
 
 class BitunixCreateJournal:
-    """Persist at most one possibly transmitted create per account."""
+    """Persist the account's possibly transmitted creates from a single dispatch."""
 
     def __init__(self, path: Path):
         self.path = Path(path).absolute()
@@ -247,22 +303,30 @@ class BitunixCreateJournal:
         return True
 
     def load(self) -> tuple[BitunixCreateAttempt, ...]:
-        pending = self.load_pending()
-        return (pending[0],) if pending is not None else ()
+        return tuple(attempt for attempt, _ in self.load_pending_all())
 
     def load_pending(self) -> PendingCreate | None:
+        pending = self.load_pending_all()
+        if len(pending) > 1:
+            raise BitunixCreateJournalError(
+                "Expected at most one Bitunix create attempt"
+            )
+        return pending[0] if pending else None
+
+    def load_pending_all(self) -> tuple[PendingCreate, ...]:
         try:
             if not self._exists():
-                return None
+                return ()
             with _connect(self.path) as conn:
                 conn.execute("BEGIN")
-                return _read_pending(conn)
+                _, entries = _read_journal(conn)
+                return tuple((entry.attempt, entry.observation) for entry in entries)
         except (sqlite3.Error, OSError) as exc:
             raise BitunixCreateJournalError(
                 "Could not read the Bitunix create journal"
             ) from exc
 
-    def _create(self, attempt: BitunixCreateAttempt) -> bool:
+    def _create(self, attempt: BitunixCreateAttempt, wave_id: str | None) -> bool:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 
         # Publish only an initialized, committed database. A competing writer must
@@ -274,9 +338,9 @@ class BitunixCreateJournal:
             with _connect(temp_path) as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 conn.execute(f"PRAGMA application_id={_APPLICATION_ID}")
-                conn.execute(f"PRAGMA user_version={_VERSION}")
-                conn.execute(_SCHEMA)
-                _insert(conn, attempt)
+                version = _SERIAL_VERSION if wave_id is None else _WAVE_VERSION
+                _initialize_schema(conn, version)
+                _insert(conn, attempt, 1, wave_id)
                 conn.commit()
             try:
                 os.link(temp_path, self.path)
@@ -287,22 +351,55 @@ class BitunixCreateJournal:
         _sync_directories(self.path.parent)
         return True
 
-    def record(self, attempt: BitunixCreateAttempt) -> None:
-        """Commit the exact attempt before the transport can submit it."""
+    def record(
+        self,
+        attempt: BitunixCreateAttempt,
+        *,
+        wave_id: str | None = None,
+        expected_client_ids: frozenset[str] | None = None,
+    ) -> None:
+        """Commit the exact attempt while its required predecessors remain durable."""
         if not isinstance(attempt, BitunixCreateAttempt):
             raise TypeError("Expected a BitunixCreateAttempt")
+        if wave_id is not None and not _matches(WIRE_TOKEN_PATTERN, wave_id):
+            raise ValueError("Invalid Bitunix create wave identity")
         try:
-            if not self._exists() and self._create(attempt):
-                return
+            if not self._exists():
+                if expected_client_ids:
+                    raise BitunixCreateJournalError(
+                        "Bitunix create journal predecessors changed"
+                    )
+                if self._create(attempt, wave_id):
+                    return
             if not self._exists():
                 raise BitunixCreateJournalError("Bitunix create journal disappeared")
             with _connect(self.path) as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                if _read_pending(conn):
-                    raise BitunixCreateAlreadyPending(
-                        "A Bitunix create is already pending"
+                version, pending = _read_journal(conn)
+                client_ids = {entry.attempt.client_id for entry in pending}
+                if (
+                    expected_client_ids is not None
+                    and client_ids != expected_client_ids
+                ):
+                    raise BitunixCreateJournalError(
+                        "Bitunix create journal predecessors changed"
                     )
-                _insert(conn, attempt)
+                slot = max((entry.slot for entry in pending), default=0) + 1
+                if pending and (
+                    wave_id is None
+                    or pending[0].wave_id != wave_id
+                    or slot > MAX_CREATE_WAVE_SIZE
+                    or attempt.client_id in client_ids
+                ):
+                    raise BitunixCreateAlreadyPending(
+                        "A Bitunix create reservation conflicts with outstanding creates"
+                    )
+                if version == _SERIAL_VERSION and wave_id is not None:
+                    # A pending serial attempt has no active wave. The checks
+                    # above keep it in v1 until recovery empties the journal.
+                    conn.execute("DROP TABLE pending_create")
+                    _initialize_schema(conn, _WAVE_VERSION)
+                _insert(conn, attempt, slot, wave_id)
                 conn.commit()
         except (sqlite3.Error, OSError) as exc:
             raise BitunixCreateJournalError(
@@ -321,10 +418,14 @@ class BitunixCreateJournal:
                 return None
             with _connect(self.path) as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                pending = _read_pending(conn)
-                if pending is None or pending[0].client_id != client_id:
+                _, entries = _read_journal(conn)
+                entry = next(
+                    (item for item in entries if item.attempt.client_id == client_id),
+                    None,
+                )
+                if entry is None:
                     return None
-                attempt, previous = pending
+                attempt, previous = entry.attempt, entry.observation
                 if observed.filled_qty > Decimal(attempt.qty):
                     raise ValueError(
                         "Bitunix executed quantity exceeds submitted amount"
@@ -343,7 +444,7 @@ class BitunixCreateJournal:
                 if observed != previous:
                     conn.execute(
                         "UPDATE pending_create SET order_id = ?, filled_qty = ?, "
-                        "conflicting_order_id = ? WHERE slot = 1",
+                        "conflicting_order_id = ? WHERE slot = ?",
                         (
                             observed.order_id,
                             (
@@ -352,6 +453,7 @@ class BitunixCreateJournal:
                                 else "0"
                             ),
                             observed.conflicting_order_id,
+                            entry.slot,
                         ),
                     )
                     conn.commit()
@@ -385,10 +487,14 @@ class BitunixCreateJournal:
                 return False
             with _connect(self.path) as conn:
                 conn.execute("BEGIN IMMEDIATE")
-                pending = _read_pending(conn)
-                if pending is None or pending[0].client_id != client_id:
+                _, entries = _read_journal(conn)
+                entry = next(
+                    (item for item in entries if item.attempt.client_id == client_id),
+                    None,
+                )
+                if entry is None:
                     return False
-                attempt, observed = pending
+                attempt, observed = entry.attempt, entry.observation
                 if proof is None:
                     if observed is not None:
                         return False
@@ -399,9 +505,19 @@ class BitunixCreateJournal:
                     or not observed.filled_qty
                     <= proof.filled_qty
                     <= Decimal(attempt.qty)
+                    or any(
+                        other.slot != entry.slot
+                        and other.observation is not None
+                        and proof.order_id
+                        in (
+                            other.observation.order_id,
+                            other.observation.conflicting_order_id,
+                        )
+                        for other in entries
+                    )
                 ):
                     return False
-                conn.execute("DELETE FROM pending_create WHERE slot = 1")
+                conn.execute("DELETE FROM pending_create WHERE slot = ?", (entry.slot,))
                 conn.commit()
                 return True
         except (sqlite3.Error, OSError) as exc:

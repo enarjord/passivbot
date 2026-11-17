@@ -11473,7 +11473,7 @@ class Passivbot:
 
     def _ws_order_update_is_self_echo(self, upd_list: list[dict]) -> bool:
         """Return True when a WS batch only confirms recent local creates/cancels."""
-        if not upd_list:
+        if not upd_list or hsl_live.active_ordinary_create_wave(self) is not None:
             return False
         cancel_wave = hsl_live.active_ordinary_cancel_wave(self)
         recognized = 0

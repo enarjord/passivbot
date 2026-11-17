@@ -19,8 +19,11 @@ from pure_funcs import shorten_custom_id
 from utils import utc_ms as _utils_utc_ms
 
 
+@dataclass(frozen=True)
 class DeferredOrderCreation:
     """An order deliberately withheld before exchange submission."""
+
+    reason_code: str = ReasonCodes.STATE_CHANGE_DETECTED
 
 
 class DeferredOrderCancellation:
@@ -83,8 +86,10 @@ def _authoritative_full_confirmation_surfaces(bot, passivbot_cls) -> set[str]:
 
 
 def _request_authoritative_confirmation(bot, passivbot_cls, surfaces) -> None:
-    batch = hsl_live.active_protective_batch(bot) or hsl_live.active_ordinary_cancel_wave(
-        bot
+    batch = (
+        hsl_live.active_protective_batch(bot)
+        or hsl_live.active_ordinary_cancel_wave(bot)
+        or hsl_live.active_ordinary_create_wave(bot)
     )
     if batch is not None:
         batch.confirmations.update(surfaces)
@@ -574,6 +579,20 @@ async def execute_order_plan(
     snapshot = getattr(bot, "_current_planning_snapshot", None)
     planned_generation = int(
         getattr(snapshot, "account_invalidation_generation", 0) or 0
+    )
+    may_create_wave = (
+        configure_creations
+        and not bot.debug_mode
+        and not to_cancel
+        and len(to_create) >= 2
+        and getattr(getattr(bot, "cca", None), "supports_ordinary_create_wave", False)
+        and getattr(bot.cca, "ordinary_create_recovery", None) is not None
+        and not any(
+            _order_is_panic(order)
+            or _order_is_risk_critical(order)
+            or "unstuck" in _order_pb_type(order)
+            for order in to_create
+        )
     )
     order_wave = passivbot_cls._begin_order_wave(bot, to_cancel, to_create)
     if configure_creations and not bot.debug_mode:
@@ -1136,10 +1155,22 @@ async def execute_order_plan(
             try:
                 create_started_ms = _utc_ms()
                 bot._order_wave_in_progress = order_wave
+                create_wave = None
                 try:
+                    if may_create_wave and len(to_create_mod) >= 2:
+                        create_wave = hsl_live.bind_ordinary_create_wave(
+                            bot, to_create_mod, snapshot
+                        )
+                        if create_wave is not None:
+                            bot._hsl_live._ordinary_create_wave = create_wave
                     res = await bot.execute_orders_parent(to_create_mod)
                 finally:
-                    bot._order_wave_in_progress = None
+                    try:
+                        if create_wave is not None:
+                            bot._hsl_live._ordinary_create_wave = None
+                            create_wave.confirm(bot)
+                    finally:
+                        bot._order_wave_in_progress = None
                 if order_wave is not None:
                     order_wave["create_ms"] = int(max(0, _utc_ms() - create_started_ms))
                     order_wave["create_posted"] = len(res or [])
@@ -1247,9 +1278,53 @@ def record_cancel_connector_admission(bot, order: dict) -> None:
     )
 
 
+async def _execute_ordinary_creates_serially(bot, orders, wave):
+    results = []
+    for index, order in enumerate(orders):
+        try:
+            result = await bot.execute_order(order)
+        except (RestartBotException, FatalBotException):
+            raise
+        except Exception as exc:
+            result = exc
+            await bot._handle_order_write_failures([("create", order, exc)])
+        results.append(result)
+        if len(wave.submitted) == index + 1 and bot.did_create_order(result):
+            wave.acknowledged_ids.add(result["id"])
+        else:
+            results.extend(
+                DeferredOrderCreation(ReasonCodes.ORDINARY_CREATE_WAVE_STOPPED)
+                for _ in orders[index + 1 :]
+            )
+            break
+    return results
+
+
 async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     """Submit a batch of orders after throttling and bookkeeping."""
     passivbot_cls = _pb_attr("Passivbot")
+    create_wave = hsl_live.active_ordinary_create_wave(bot)
+    if create_wave is not None:
+        selected = [member.order for member in create_wave.members]
+        capacity_deferred = _orders_removed_by_identity(orders, selected)
+        if capacity_deferred:
+            _record_fresh_entry_orders(
+                bot, "record_blocked_orders", capacity_deferred, "batch_capacity"
+            )
+            order_wave = getattr(bot, "_order_wave_in_progress", None)
+            if order_wave is not None:
+                order_wave["deferred_create"] += len(capacity_deferred)
+            passivbot_cls._emit_execution_create_filter_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CREATE_DEFERRED,
+                status="deferred",
+                reason_code=ReasonCodes.BATCH_CAPACITY,
+                order_count=len(capacity_deferred),
+                symbols=_symbols_from_orders(capacity_deferred),
+                wave=order_wave,
+                data={"max_n_creations_per_batch": len(selected)},
+            )
+        orders = selected
     requested_orders = list(orders)
     orders = [order for order in orders if position_fill_sync.permits(bot, order, "create")]
     _record_fresh_entry_orders(
@@ -1294,13 +1369,20 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     }
     bot._execution_connector_call_context = connector_call_context
     try:
-        res = await bot.execute_orders(orders)
+        if create_wave is None:
+            res = await bot.execute_orders(orders)
+        else:
+            res = await _execute_ordinary_creates_serially(bot, orders, create_wave)
     except (RestartBotException, FatalBotException):
         # Batch results were not classified; do not publish a partial cycle trace.
         bot._fresh_entry_eligibility_trace = None
         raise
     except Exception as exc:
         for idx, order in enumerate(orders):
+            if create_wave is not None and not any(
+                order is submitted for submitted in create_wave.submitted
+            ):
+                continue
             passivbot_cls._emit_execution_order_event(
                 bot,
                 event_type=EventTypes.EXECUTION_AMBIGUOUS,
@@ -1387,21 +1469,25 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     to_return = []
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if isinstance(ex, DeferredOrderCreation):
-            _observe_close_create_defer(bot, [order], ReasonCodes.STATE_CHANGE_DETECTED)
+            _observe_close_create_defer(bot, [order], ex.reason_code)
             if wave is not None:
                 wave["skipped_create"] = wave.get("skipped_create", 0) + 1
             _record_fresh_entry_orders(
-                bot, "record_blocked_orders", [order], "state_change_detected"
+                bot, "record_blocked_orders", [order], ex.reason_code
             )
             passivbot_cls._emit_execution_create_filter_event(
                 bot,
                 event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
                 status="skipped",
-                reason_code=ReasonCodes.STATE_CHANGE_DETECTED,
+                reason_code=ex.reason_code,
                 order_count=1,
                 symbols=[order["symbol"]],
                 wave=wave,
-                message="create order skipped because account state changed before connector call",
+                message=(
+                    "create order skipped because an earlier create stopped the wave"
+                    if ex.reason_code == ReasonCodes.ORDINARY_CREATE_WAVE_STOPPED
+                    else "create order skipped because account state changed before exchange submission"
+                ),
             )
             continue
         if not bot.did_create_order(ex):

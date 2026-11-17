@@ -17,6 +17,9 @@ its own version heading. See [release status](docs/releases.md).
 - Recover Bitunix creates by exact client order ID after an uncertain response or restart.
   Defer further ordinary creates while a submitted attempt remains unresolved.
 
+- Allow two eligible Bitunix post-only closes on separate symbols to share one fresh
+  plan and one account confirmation. Journal each submission independently.
+
 - Support opt-in `optimize.gpu.tuning_mode = "max"` on Apple Silicon Metal.
   It evaluates wider seed and offspring cohorts, retains the configured parent
   population size, and checks shared memory before allocating replay scratch.

@@ -213,6 +213,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `order_churn_allowance_exhausted`
 - `order_churn_history`
 - `order_churn_market_data_unavailable`
+- `ordinary_create_wave_stopped`
 - `pending_exchange_config`
 - `periodic_health_summary`
 - `pipeline_closing`
