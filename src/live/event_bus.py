@@ -214,6 +214,7 @@ class EventTypes:
     EXECUTION_CREATE_REJECTED = "execution.create_rejected"
     EXECUTION_CREATE_DEFERRED = "execution.create_deferred"
     EXECUTION_CREATE_SKIPPED = "execution.create_skipped"
+    ORDER_CLOSE_REPLACEMENT_TIMING = "order.close_replacement_timing"
     ENTRY_INITIAL_ELIGIBILITY = "entry.initial_eligibility"
     ORDER_CHURN_EVIDENCE = "order.churn_evidence"
     ORDER_CHURN_ADMISSION = "order.churn_admission"
@@ -545,6 +546,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EXECUTION_CREATE_REJECTED,
     EventTypes.EXECUTION_CREATE_DEFERRED,
     EventTypes.EXECUTION_CREATE_SKIPPED,
+    EventTypes.ORDER_CLOSE_REPLACEMENT_TIMING,
     EventTypes.ENTRY_INITIAL_ELIGIBILITY,
     EventTypes.ORDER_CHURN_EVIDENCE,
     EventTypes.ORDER_CHURN_ADMISSION,
@@ -1370,6 +1372,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CREATE_REJECTED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_DEFERRED: EventRoute(console=False, text=False),
     EventTypes.EXECUTION_CREATE_SKIPPED: EventRoute(console=True, text=True),
+    EventTypes.ORDER_CLOSE_REPLACEMENT_TIMING: EventRoute(console=False, text=False),
     EventTypes.ENTRY_INITIAL_ELIGIBILITY: EventRoute(console=False, text=False),
     EventTypes.ORDER_CHURN_EVIDENCE: EventRoute(console=False, text=False),
     EventTypes.ORDER_CHURN_ADMISSION: EventRoute(console=False, text=False),

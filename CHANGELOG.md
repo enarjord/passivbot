@@ -27,6 +27,9 @@ its own version heading. See [release status](docs/releases.md).
 - Allow two eligible Bitunix post-only closes on separate symbols to share one fresh
   plan and one account confirmation. Journal each submission independently.
 
+- Record ordinary close replacement timing in structured live events, from cancel
+  acknowledgment through account confirmation, replanning, and create submission.
+
 - Support opt-in `optimize.gpu.tuning_mode = "max"` on Apple Silicon Metal.
   It evaluates wider seed and offspring cohorts, retains the configured parent
   population size, and checks shared memory before allocating replay scratch.

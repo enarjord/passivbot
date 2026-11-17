@@ -341,6 +341,36 @@ retains order rows, identifiers, symbols, prices, raw payloads, exception text, 
 When the structured console is disabled or unavailable, the same bounded count retains one legacy
 `[order]` INFO fallback; the two console paths never intentionally write the same observation.
 
+## Close Replacement Timing
+
+`order.close_replacement_timing` records timing for a tracked ordinary limit close replacement
+after an unambiguous cancel acknowledgment. The event identifies the symbol and position side,
+with optional synthetic `cancel_wave_id` and `create_wave_id` for joining execution events.
+These numeric wave IDs correspond to the `ow_{id}` execution event IDs. When available,
+`create_action_index` identifies the specific create within its wave.
+`elapsed_ms` is the time from the cancel acknowledgment to the observation. Milestones use
+the same origin:
+
+- `account_confirmed_ms` records the first observed post-cancel epoch readiness covering
+  balance, positions, open orders, and fills. A subsequent change can require reconfirmation.
+- `first_plan_ms` records the first validated, reconciled plan with a unique ordinary create
+  candidate for the same symbol and position side, before waiting for executor handoff.
+- `create_admitted_ms` records executor admission of the candidate that reached transport.
+
+Milestones are omitted when unobserved. When present, `last_create_defer` identifies a recent
+create-side guard for this position side. `last_missing_surfaces` lists recent missing account
+surfaces from the ordinary planner. These observations do not assign elapsed time to a blocker.
+
+`outcome=create_sent` is recorded once at guarded submission. If the existing delayed-close
+warning fires first, `still_waiting` records one partial observation. A tracked replacement
+that resolves before a guarded send may report `position_closed`, `resting_close_observed`,
+or `no_close_in_plan`. Each tracked replacement produces at most one terminal observation.
+`create_sent` marks submission. Placement acknowledgments retain their existing event.
+
+The event goes to structured and monitor sinks. It carries no prices, quantities, or venue
+order IDs. Tracking and publication are best effort and leave order admission, account
+confirmation, reconciliation, and retry scheduling unchanged.
+
 ## Order-Replacement Churn
 
 The account-wide replacement-churn policy emits structured, monitor-only summaries:
