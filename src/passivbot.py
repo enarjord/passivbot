@@ -12676,6 +12676,15 @@ class Passivbot:
                 self._record_authoritative_surface(
                     "fills", self._fill_events_signature(all_events)
                 )
+                recovery = getattr(
+                    getattr(self, "cca", None), "ordinary_create_recovery", None
+                )
+                if (
+                    recovery is not None
+                    and fill_fetch_completed
+                    and fill_capture_interval is not None
+                ):
+                    recovery.record_fill_refresh(self._pnls_manager, fill_capture_interval)
                 self._trailing_fill_refresh_generation = fill_refresh_attempt_generation
             elif not coverage_ready_after:
                 self._last_fill_refresh_block_reason = "fill_history_coverage"

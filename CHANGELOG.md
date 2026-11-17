@@ -14,6 +14,9 @@ its own version heading. See [release status](docs/releases.md).
   when hard-stop-loss protection is disabled. Cancels run serially, stop on an
   uncertain result or changed facts, and confirm account state before replanning.
 
+- Recover Bitunix creates by exact client order ID after an uncertain response or restart.
+  Defer further ordinary creates while a submitted attempt remains unresolved.
+
 - Support opt-in `optimize.gpu.tuning_mode = "max"` on Apple Silicon Metal.
   It evaluates wider seed and offspring cohorts, retains the configured parent
   population size, and checks shared memory before allocating replay scratch.

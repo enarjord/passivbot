@@ -33,6 +33,9 @@ Canonical repository-wide invariants; task documents link here instead of restat
   approximation exceptions do not change the independent realized-memory origin contract.
 - A reviewed RAM-only economy gate may reset only toward current Rust intent. It must not preserve
   or synthesize orders, weaken readiness/risk/mode checks, or hide resets. Test reset behavior.
+- A connector may durably record unresolved transport attempts to prevent duplicate submissions
+  across restart. Such records carry request identity and facts for recovery. Every later order
+  still requires current exchange state and Rust intent.
 
 ## Terminology And Numeric Conventions
 
