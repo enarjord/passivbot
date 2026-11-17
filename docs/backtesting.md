@@ -309,11 +309,11 @@ Standalone startup timings measure module import work. Reusing the programmatic
 entry point does not include idle time since import. Suite artifacts label timings
 limited to post-processing explicitly.
 
-The default plots are `reports/equity.png` and, when HSL is enabled,
-`reports/hsl.png`. Equity uses log scale by default. A nonpositive observation causes
-an explicitly labelled linear fallback so losses are not hidden. Drawdown is computed
-from full-resolution strategy equity before view reduction; the original peak and
-trough timestamps are retained. Plot sampling never changes native metric support.
+The default plots are `reports/equity.png`, `reports/total_wallet_exposure.png`, and,
+when HSL is enabled, `reports/hsl.png`. Equity uses log scale by default. A nonpositive
+observation causes an explicitly labelled linear fallback so losses stay visible.
+Drawdown uses full-resolution strategy equity before view reduction, preserving the
+original peak and trough timestamps. Plot sampling never changes native metric support.
 
 ```bash
 passivbot backtest CONFIG --equity-scale linear
@@ -326,7 +326,15 @@ Plot groups are `equity`, `hsl`, `hsl_episodes`, `coin_fills` and `twe`; `all` a
 `none` select the complete set or disable rendering. The legacy `--disable_plotting`
 switch still suppresses its named groups. Cumulative PnL is no longer generated.
 BTC-denominated views, full-history fill plots, stop zooms and dense equity CSV are
-optional. The TWE view labels its hourly fill-event averaging population explicitly.
+optional. The `twe` plot shows the long and short entry-price notionals separately
+as percentages of wallet balance. It carries the last post-fill snapshot at each
+timestamp forward until the next fill and uses the saved equity clock to include
+time before the first fill and after the last. BTC collateral is valued at fill times.
+The plot reports elapsed-time-weighted mean and 95th percentile exposure,
+peak exposure, time exposed, and native position-budget utilization RMS when
+available. Time statistics exclude periods with unavailable exposure. Saved
+results need the per-side fill snapshots to generate this plot.
+
 Fill reports align cached candles and position-price observations by saved UTC
 execution clocks, including when a suite scenario starts inside a master dataset.
 
@@ -334,6 +342,7 @@ Reports can be regenerated without running the strategy or contacting an exchang
 
 ```bash
 passivbot tool backtest-report RUN --equity-scale linear
+passivbot tool backtest-report RUN --plots twe
 passivbot tool backtest-report RUN --plots hsl,hsl_episodes --scope BTC:long
 passivbot tool backtest-report RUN --plots coin_fills --output-dir RUN/detail
 passivbot tool backtest-report RUN --plots none --equity-csv

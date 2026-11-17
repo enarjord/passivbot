@@ -246,7 +246,7 @@ async def test_cli_defaults_render_hsl_and_keep_reused_entrypoint_timings_scoped
     assert timings["native_milliseconds"]["rust_simulation_ms"] > 0
     report = json.loads((manifest.parent / "reports/report.json").read_text())
     assert report["options"]["equity_scale"] == "log"
-    assert {"equity.png", "hsl.png"} <= set(report["artifacts"])
+    assert {"equity.png", "hsl.png", "total_wallet_exposure.png"} <= set(report["artifacts"])
     assert not (manifest.parent / "balance_and_equity.csv.gz").exists()
 
 
