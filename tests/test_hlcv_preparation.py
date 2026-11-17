@@ -1536,8 +1536,8 @@ class TestOHLCVSourceDir:
             assert len(df) == 1441  # standardized to full inclusive window
 
     @pytest.mark.asyncio
-    async def test_source_dir_corrupt_npz_fallback(self, tmp_path, mock_exchange):
-        """Test fallback when .npz file is corrupt/malformed."""
+    async def test_source_dir_corrupt_npz_is_integrity_error(self, tmp_path, mock_exchange):
+        """Known corruption must not silently switch the requested external data source."""
         from utils import date_to_ts
 
         # Setup source dir with malformed .npz
@@ -1573,19 +1573,15 @@ class TestOHLCVSourceDir:
             }
         }
 
-        # Mock CandlestickManager fallback
-        with patch.object(CandlestickManager, "get_candles") as mock_get_candles:
-            timestamps = np.arange(day_ts, day_ts + 24 * 60 * 60 * 1000, 60_000, dtype=np.int64)
-            mock_candles = np.zeros(len(timestamps), dtype=CANDLE_DTYPE)
-            mock_candles["ts"] = timestamps
-            mock_candles["c"] = 50000.0
-            mock_get_candles.return_value = mock_candles
+        from hlcv_preparation import HlcvsDataIntegrityError
 
-            df = await om.get_ohlcvs("BTC")
-
-            # Verify fallback was triggered
-            mock_get_candles.assert_called_once()
-            assert not df.empty
+        try:
+            with patch.object(CandlestickManager, "get_candles") as mock_get_candles:
+                with pytest.raises(HlcvsDataIntegrityError, match="Invalid external OHLCV day"):
+                    await om.get_ohlcvs("BTC")
+                mock_get_candles.assert_not_called()
+        finally:
+            await om.aclose()
 
 
 # ============================================================================

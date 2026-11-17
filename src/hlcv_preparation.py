@@ -96,6 +96,7 @@ class ProgressTracker:
 
 from config.access import require_config_value, require_live_value
 from ohlcv_utils import get_days_in_between, load_ohlcv_data
+from external_ohlcv_source import source_directory_candidates
 from procedures import get_first_timestamps_unified
 from utils import (
     MarketIdentifierExchangeMismatch,
@@ -858,28 +859,10 @@ class HLCVManager:
         days = get_days_in_between(start_day, end_day)
 
         frames = []
-        candidates: list[str] = []
-
-        # Mirror CandlestickManager's symbol sanitization for Windows compatibility
-        windows_compat = os.name == "nt" or os.getenv("WINDOWS_COMPATIBILITY") == "1"
-
-        for name in (coin, symbol):
-            if not name:
-                continue
-            # Original name
-            candidates.append(name)
-            # Variant with "/" replaced by "_"
-            if "/" in name:
-                candidates.append(name.replace("/", "_"))
-            # In Windows compatibility mode, also mirror CandlestickManager's ":" -> "_"
-            if windows_compat and ("/" in name or ":" in name):
-                candidates.append(name.replace("/", "_").replace(":", "_"))
-
-        # De-duplicate while preserving order
-        seen = set()
-        candidates = [c for c in candidates if not (c in seen or seen.add(c))]
+        candidates = source_directory_candidates(coin, symbol)
         for day in days:
             loaded = False
+            present = False
             for name in candidates:
                 base_dir = exchange_root / name
                 if not base_dir.exists():
@@ -888,6 +871,7 @@ class HLCVManager:
                     filepath = base_dir / f"{day}{ext}"
                     if not filepath.exists():
                         continue
+                    present = True
                     try:
                         df = load_ohlcv_data(str(filepath))
                     except Exception as exc:
@@ -905,6 +889,11 @@ class HLCVManager:
                         break
                 if loaded:
                     break
+            if present and not loaded:
+                raise HlcvsDataIntegrityError(
+                    f"Invalid external OHLCV day: {self.exchange}/{coin} {day}; "
+                    "no readable, nonempty candle file"
+                )
 
         if not frames:
             return None
@@ -967,21 +956,20 @@ class HLCVManager:
                 requested_start_ts = start_ts
                 first_row_ts = int(df.timestamp.iloc[0])
                 if first_row_ts > start_ts:
-                    listing = await _corroborated_source_listing_boundary(self, self.exchange, coin, symbol)
-                    if listing is None or first_row_ts != listing // 60_000 * 60_000:
-                        message = (f"Unverified source directory prefix: {self.exchange}/{coin} "
-                                   f"{start_ts}..{first_row_ts}; {self.ohlcv_source_dir}")
-                        if is_offline():
-                            raise OfflineDataError(message)
-                        logging.warning(message)
-                        return empty_df
-                    # Start at the independently confirmed listing minute.
+                    # An explicitly selected directory defines the caller's data
+                    # window. Its first row is not evidence of market inception.
+                    # Keep the original request in offline snapshots and do not invent
+                    # prices before the first real candle for this coin/source.
+                    logging.info(
+                        "[%s] external source window for %s begins %s after requested %s; earlier history excluded, not market inception",
+                        self.exchange, coin, ts_to_date(first_row_ts), ts_to_date(start_ts),
+                    )
                     start_ts = first_row_ts
                 if is_offline():
                     if int(df.timestamp.iloc[-1]) < end_ts:
                         raise OfflineDataError(
                             f"Incomplete source directory candles: {self.exchange}/{coin} "
-                            f"{start_ts}..{end_ts}; {self.ohlcv_source_dir}"
+                            f"{requested_start_ts}..{end_ts}; {self.ohlcv_source_dir}"
                         )
                 self.load_cc()
                 assert self.cm is not None

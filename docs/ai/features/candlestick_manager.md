@@ -59,6 +59,18 @@
    A forced refresh accepts the exact proof collected during that preparation, while genuine
    expiry still requires retry. Immutable prepared-cache reuse retains its recorded snapshot;
    explicit forced gap refresh bypasses that automatic cache before raw revalidation.
+   An explicitly selected external OHLCV directory instead defines the caller's
+   simulation data window. A late first real row bounds that coin/source window
+   online and offline; it is not market inception or a cached absence certificate.
+   Offline snapshots preserve requested and actual ranges; no equivalent online
+   manifest guarantee is implied. Never synthesize a leading prefix, and retain
+   internal-gap and offline-tail checks. An existing empty/unreadable daily file
+   is an integrity error unless a healthy same-day variant can be loaded.
+   Automatic external-source cache keys include daily file metadata revisions for
+   selected coin and eligible BTC directories. Reject source changes across raw
+   preparation, cache publication, and cache loading. These revisions detect normal
+   filesystem updates, not cryptographic content identity. Native store/download
+   admission continues to require the independent evidence above.
    Store current confirmation under versioned v2 catalog notes. Offline use leaves old
    observation-only notes untouched and cannot accept them as coverage proof. Online corroboration
    may replace covered weak notes. Preserve the authored warmup start through local-store

@@ -542,7 +542,7 @@ async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("confirmed", [False, True])
-async def test_source_directory_prefix_requires_listing_provenance(tmp_path, monkeypatch, confirmed):
+async def test_external_source_window_does_not_require_listing_provenance(tmp_path, monkeypatch, confirmed):
     from utils import ts_to_date
     cache = metadata(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -571,13 +571,9 @@ async def test_source_directory_prefix_requires_listing_provenance(tmp_path, mon
     om.update_timestamp_range(START, START+9*60000)
     try:
         with simulation_data_policy(OFFLINE):
-            if confirmed:
-                frame = await om.get_ohlcvs("BTC", source_dir_only=True)
-                assert frame.timestamp.iloc[0] == START+120000
-                assert frame.valid.all()
-            else:
-                with pytest.raises(OfflineDataError, match="Unverified source directory prefix"):
-                    await om.get_ohlcvs("BTC", source_dir_only=True)
+            frame = await om.get_ohlcvs("BTC", source_dir_only=True)
+            assert frame.timestamp.iloc[0] == START+120000
+            assert frame.valid.all()
     finally:
         await om.aclose()
         if om.cc:

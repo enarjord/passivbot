@@ -5,6 +5,18 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Reject unreadable or empty external daily candle files instead of treating them
+  as a later data start; retain healthy same-day alternatives and normal late starts.
+- Invalidate automatic prepared caches when selected external coin/BTC daily files
+  change, and reject source changes during preparation, publication or cache loading.
+- Warn when a coin has no post-warmup trading window and clarify that requested/
+  actual range manifests are recorded by offline snapshots.
+
+- Treat explicitly selected external OHLCV folders as caller-selected simulation
+  windows, including offline and Hyperliquid. Start each coin/source at its first
+  real available candle without asserting market inception, copying raw candles,
+  changing the authored date, or relaxing native-store coverage and tail checks.
+
 - Show disabled sides explicitly in the live startup banner’s position and exposure limits.
 
 - Recheck ordinary live order admission after connector queueing so a stale
