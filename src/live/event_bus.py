@@ -341,6 +341,7 @@ class ReasonCodes:
     ORDER_CHURN_MARKET_DATA_UNAVAILABLE = "order_churn_market_data_unavailable"
     ACCOUNT_CANCEL_FIRST_BARRIER = "account_cancel_first_barrier"
     UNRESOLVED_CREATE_ATTEMPT = "unresolved_create_attempt"
+    ORDINARY_CREATE_WAVE_STOPPED = "ordinary_create_wave_stopped"
     CANCEL_BATCH_CAPACITY = "cancel_batch_capacity"
     BATCH_CAPACITY = "batch_capacity"
     LENGTH_MISMATCH = "length_mismatch"

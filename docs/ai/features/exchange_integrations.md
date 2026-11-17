@@ -658,8 +658,9 @@ Primary references: [place order](https://www.bitunix.com/api-docs/futures/trade
 Keep the Bitunix create journal under `var/bitunix/<user>/create_attempts.sqlite3`
 in the live data directory. Keep that data directory across restarts and release switches.
 The [recovery contract](../error_contract.md#live-action-readiness) applies to one outstanding
-ordinary create. A committed pending-order cohort can adopt a working order by exact
-`clientId`. Otherwise, use exact order detail and bounded order-history queries. Query both
+ordinary create or two members of one eligible close wave. A committed pending-order cohort can
+adopt a working order by exact `clientId`. Otherwise, use exact order detail and bounded
+order-history queries. Query both
 canceled and non-canceled history where applicable. A terminal fill quantity must agree with
 the canonical trade data by venue order ID. The journal retains the exact venue ID and the
 greatest observed cumulative fill across restarts. A conflicting venue ID keeps the slot
@@ -673,6 +674,17 @@ back to a build that cannot read the journal.
 [Order detail](https://www.bitunix.com/api-docs/futures/trade/get_order_detail.html),
 [order history](https://www.bitunix.com/api-docs/futures/trade/get_history_orders.html),
 [error codes](https://www.bitunix.com/api-docs/futures/ErrorCode/error_code.html).
+
+For a close wave, send individual placement requests. Require the exact echoed client ID and
+a unique venue order ID from the placement response before continuing. Persist that venue ID
+as identity evidence and retain the reservation until authoritative recovery. An account
+update on the private order stream during the wave invalidates its permission.
+
+An existing serial journal remains readable and keeps its pending evidence. The first wave
+upgrades an empty journal to schema v2 in a transaction with its first reservation. Once that
+occurs, keep a v2-aware build for restart and rollback. A downgrade to a v1-only build requires
+the bot to be stopped and all reservations resolved before the empty journal can be archived
+and reinitialized.
 
 ### Product-admission retry policy
 

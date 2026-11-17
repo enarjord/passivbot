@@ -33,6 +33,7 @@ from live.balance_composition import normalize_bitunix_balance_composition
 from live.bitunix_create_journal import (
     CLIENT_ORDER_ID_PATTERN as BITUNIX_CLIENT_ORDER_ID_PATTERN,
     BitunixCreateJournal,
+    WIRE_TOKEN_PATTERN,
 )
 from live.bitunix_create_recovery import BitunixCreateRecovery
 from live.diagnostic_safety import bounded_exception_code
@@ -104,6 +105,7 @@ class BitunixClient:
 
     _position_fill_transport_guard = True
     supports_ordinary_cancel_wave = True
+    supports_ordinary_create_wave = True
     id = "bitunix"
     name = "Bitunix"
     precisionMode = 4  # ccxt.TICK_SIZE
@@ -468,14 +470,29 @@ class BitunixClient:
         url = f"{self.rest_url}{path}" + (f"?{query}" if query else "")
         await self._throttle(cancel=cancel)
         session = await self._get_session()
-        from live.position_fill_sync import check_transport_admission
+        from live.position_fill_sync import WriteDeferred, check_transport_admission
         recovery = getattr(self, "ordinary_create_recovery", None)
         attempt = None
+        create_wave = None
         if method == "POST" and path == self.PLACE_ORDER_PATH and recovery is not None:
 
             def prepare(context):
-                nonlocal attempt
-                attempt = recovery.record(body, context)
+                from live.hsl_live import active_ordinary_create_wave
+
+                nonlocal attempt, create_wave
+                if context is not None:
+                    create_wave = active_ordinary_create_wave(context.bot)
+                wire_body = body
+                if create_wave is not None:
+                    member = create_wave.members[len(create_wave.submitted)]
+                    wire_body = json.loads(body_text)
+                    if not member.matches_wire(
+                        wire_body, venue_symbol=self.market(member.symbol)["id"]
+                    ):
+                        raise WriteDeferred()
+                attempt = recovery.record(wire_body, context)
+                if create_wave is not None and attempt is None:
+                    raise WriteDeferred()
                 if attempt is not None:
                     return lambda: recovery.resolve(attempt, "not_sent")
                 return None
@@ -519,6 +536,21 @@ class BitunixClient:
             self._raise_api_error(code, payload.get("msg"))
         if "data" not in payload:
             raise ExchangeError("Bitunix success response missing data")
+        if create_wave is not None:
+            data = payload["data"]
+            order_id = data.get("orderId") if isinstance(data, dict) else None
+            if (
+                type(code) not in (int, str)
+                or not isinstance(order_id, str)
+                or not WIRE_TOKEN_PATTERN.fullmatch(order_id)
+                or data.keys() != {"orderId", "clientId"}
+                or order_id in create_wave.existing_order_ids
+                or order_id in create_wave.acknowledged_ids
+                or data.get("clientId") != attempt.client_id
+            ):
+                raise ExchangeError("Bitunix create wave received an inexact placement acknowledgment")
+            if not recovery.record_acknowledgment(attempt, order_id):
+                raise ExchangeError("Bitunix create wave could not persist acknowledged order ID")
         return payload["data"]
 
     async def load_markets(self, reload: bool = False) -> dict[str, dict]:
@@ -2561,6 +2593,14 @@ class BitunixBot(CCXTBot):
                 if require_live_value(self.config, "time_in_force") == "post_only"
                 else "GTC"
             )
+        from live.hsl_live import active_ordinary_create_wave
+
+        wave = active_ordinary_create_wave(self)
+        if wave is not None:
+            member = wave.members[len(wave.submitted)]
+            if member.order is not order:
+                raise ValueError("Bitunix create wave member does not match order")
+            params["positionId"] = member.position_id
         return params
 
     def _get_position_side_for_order(self, order: dict) -> str:

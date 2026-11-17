@@ -137,6 +137,182 @@ def test_conflicting_venue_identity_blocks_resolution_after_reopen(tmp_path, att
     assert restarted.load_pending() == (attempt, conflict)
 
 
+def _version(journal):
+    conn = sqlite3.connect(journal.path)
+    try:
+        return conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_preserves_deployed_v1_pending_evidence_until_migration(tmp_path, attempt):
+    path = tmp_path / "create_attempts.sqlite3"
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("PRAGMA application_id=1346519890")
+        conn.execute("PRAGMA user_version=1")
+        conn.execute(
+            "CREATE TABLE pending_create (slot INTEGER PRIMARY KEY CHECK (slot = 1), "
+            "attempt TEXT NOT NULL, order_id TEXT, filled_qty TEXT, conflicting_order_id TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO pending_create VALUES (1, ?, 'venue-1', '0.001', NULL)",
+            (json.dumps(asdict(attempt)),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    path.chmod(0o600)
+
+    journal = BitunixCreateJournal(path)
+    second = replace(attempt, client_id="new-order")
+    assert journal.load_pending_all() == (
+        (attempt, BitunixCreateObservation("venue-1", Decimal("0.001"))),
+    )
+    with pytest.raises(BitunixCreateAlreadyPending):
+        journal.record(second, wave_id="first-wave")
+    assert journal.observe(
+        attempt.client_id, "venue-1", Decimal(0)
+    ).filled_qty == Decimal("0.001")
+    assert not journal.resolve(attempt.client_id)
+    assert _version(journal) == 1
+    assert journal.resolve(
+        attempt.client_id, order_id="venue-1", filled_qty=Decimal("0.001")
+    )
+
+    journal.record(second, wave_id="first-wave")
+    assert journal.load_pending_all() == ((second, None),)
+    assert _version(journal) == 2
+
+
+def test_failed_first_wave_record_rolls_back_v1_promotion(
+    tmp_path, attempt, monkeypatch
+):
+    journal = BitunixCreateJournal(tmp_path / "create_attempts.sqlite3")
+    journal.record(attempt)
+    assert journal.resolve(attempt.client_id)
+    assert _version(journal) == 1
+
+    def fail_insert(*args):
+        raise sqlite3.OperationalError("simulated insertion failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(journal_module, "_insert", fail_insert)
+        with pytest.raises(BitunixCreateJournalError):
+            journal.record(attempt, wave_id="first-wave")
+
+    assert _version(journal) == 1
+    assert journal.load() == ()
+    journal.record(attempt)
+    assert _version(journal) == 1
+
+
+def test_multiple_members_recover_independently_and_keep_the_account_fenced(
+    tmp_path, attempt
+):
+    journal = BitunixCreateJournal(tmp_path / "create_attempts.sqlite3")
+    wave_id = "wave-1"
+    second = replace(attempt, client_id="attempt-2")
+    third = replace(attempt, client_id="attempt-3")
+    journal.record(attempt, wave_id=wave_id)
+    with pytest.raises(BitunixCreateAlreadyPending):
+        journal.record(attempt, wave_id=wave_id)
+    with pytest.raises(BitunixCreateJournalError, match="predecessors changed"):
+        journal.record(second, wave_id=wave_id, expected_client_ids=frozenset())
+    journal.record(
+        second, wave_id=wave_id, expected_client_ids=frozenset({attempt.client_id})
+    )
+    assert _version(journal) == 2
+    with pytest.raises(BitunixCreateJournalError):
+        journal.load_pending()
+    with pytest.raises(BitunixCreateAlreadyPending):
+        journal.record(third, wave_id=wave_id)
+    journal.observe(attempt.client_id, "venue-1", Decimal("0.001"))
+    journal.observe(second.client_id, "venue-2", Decimal("0.002"))
+
+    restarted = BitunixCreateJournal(journal.path)
+    assert restarted.load() == (attempt, second)
+    assert restarted.resolve(
+        attempt.client_id, order_id="venue-1", filled_qty=Decimal("0.001")
+    )
+    assert restarted.load_pending_all() == (
+        (second, BitunixCreateObservation("venue-2", Decimal("0.002"))),
+    )
+    with pytest.raises(BitunixCreateAlreadyPending):
+        restarted.record(third)
+    with pytest.raises(BitunixCreateAlreadyPending):
+        restarted.record(third, wave_id="another-wave")
+    with pytest.raises(BitunixCreateAlreadyPending):
+        restarted.record(third, wave_id=wave_id)
+    assert not restarted.resolve(
+        second.client_id, order_id="venue-2", filled_qty=Decimal("0.001")
+    )
+    assert restarted.resolve(
+        second.client_id, order_id="venue-2", filled_qty=Decimal("0.002")
+    )
+    restarted.record(third)
+    assert restarted.load_pending() == (third, None)
+    assert _version(restarted) == 2
+
+
+@pytest.mark.parametrize("remove_journal", [False, True])
+def test_missing_expected_wave_predecessor_blocks_record(
+    tmp_path, attempt, remove_journal
+):
+    journal = BitunixCreateJournal(tmp_path / "create_attempts.sqlite3")
+    wave_id = "wave-1"
+    journal.record(attempt, wave_id=wave_id, expected_client_ids=frozenset())
+    assert journal.resolve(attempt.client_id)
+    if remove_journal:
+        journal.path.unlink()
+
+    second = replace(attempt, client_id="attempt-2")
+    with pytest.raises(BitunixCreateJournalError, match="predecessors changed"):
+        journal.record(
+            second, wave_id=wave_id, expected_client_ids=frozenset({attempt.client_id})
+        )
+    assert journal.load() == ()
+    assert journal.path.exists() != remove_journal
+
+
+def test_same_venue_identity_cannot_resolve_two_members(tmp_path, attempt):
+    journal = BitunixCreateJournal(tmp_path / "create_attempts.sqlite3")
+    second = replace(attempt, client_id="attempt-2")
+    journal.record(attempt, wave_id="wave-1")
+    journal.record(second, wave_id="wave-1")
+    journal.observe(attempt.client_id, "same-order", Decimal(0))
+    journal.observe(second.client_id, "same-order", Decimal(0))
+
+    restarted = BitunixCreateJournal(journal.path)
+    for member in (attempt, second):
+        assert not restarted.resolve(member.client_id)
+        assert not restarted.resolve(
+            member.client_id, order_id="same-order", filled_qty=Decimal(0)
+        )
+    assert restarted.load_pending_all() == tuple(
+        (member, BitunixCreateObservation("same-order", Decimal(0)))
+        for member in (attempt, second)
+    )
+
+
+def test_conflicting_wave_identities_on_disk_fail_closed(tmp_path, attempt):
+    journal = BitunixCreateJournal(tmp_path / "create_attempts.sqlite3")
+    second = replace(attempt, client_id="attempt-2")
+    journal.record(attempt, wave_id="wave-1")
+    journal.record(second, wave_id="wave-1")
+    conn = sqlite3.connect(journal.path)
+    try:
+        conn.execute("UPDATE pending_create SET wave_id = 'wave-2' WHERE slot = 2")
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(BitunixCreateJournalError):
+        journal.load_pending_all()
+    with pytest.raises(BitunixCreateJournalError):
+        journal.resolve(attempt.client_id)
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -181,18 +357,19 @@ def test_accepts_market_entry_without_price_or_position():
     assert attempt.effect is None
 
 
-def _record_and_exit(path, candidate, barrier):
+def _record_and_exit(path, candidate, barrier, wave_id=None):
     barrier.wait(timeout=5)
     try:
-        BitunixCreateJournal(path).record(candidate)
+        BitunixCreateJournal(path).record(candidate, wave_id=wave_id)
     except BitunixCreateAlreadyPending:
         os._exit(17)
     os._exit(0)
 
 
 @pytest.mark.parametrize("pending_file_exists", [False, True])
+@pytest.mark.parametrize("as_waves", [False, True], ids=("serial", "different_waves"))
 def test_concurrent_writers_cannot_replace_a_pending_attempt(
-    tmp_path, attempt, pending_file_exists
+    tmp_path, attempt, pending_file_exists, as_waves
 ):
     path = tmp_path / "nested" / "account" / "create_attempts.sqlite3"
     if pending_file_exists:
@@ -204,7 +381,10 @@ def test_concurrent_writers_cannot_replace_a_pending_attempt(
     barrier = ctx.Barrier(2)
     attempts = [replace(attempt, client_id=client_id) for client_id in ("id1", "id2")]
     processes = [
-        ctx.Process(target=_record_and_exit, args=(path, candidate, barrier))
+        ctx.Process(
+            target=_record_and_exit,
+            args=(path, candidate, barrier, candidate.client_id if as_waves else None),
+        )
         for candidate in attempts
     ]
     try:
@@ -224,6 +404,7 @@ def test_concurrent_writers_cannot_replace_a_pending_attempt(
         if process.exitcode == 0
     )
     reopened = BitunixCreateJournal(path)
+    assert _version(reopened) == (2 if as_waves else 1)
     assert reopened.load() == (winner,)
     with pytest.raises(BitunixCreateAlreadyPending):
         reopened.record(winner)
