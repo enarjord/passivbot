@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Use the maintained EMA when a CPU backtest or exact optimizer evaluation has
+  an unused volume or log-range EMA with the same span. Affected backtests can
+  produce different fills and metrics.
+
 - Show disabled sides explicitly in the live startup banner’s position and exposure limits.
 
 - Recheck ordinary live order admission after connector queueing so a stale
