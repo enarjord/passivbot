@@ -216,8 +216,8 @@ struct StrategyParamsPair {
 
 #[derive(Debug, Clone, Copy)]
 struct OrchestratorM1LogRangeSlots {
-    forager_long: usize,
-    forager_short: usize,
+    forager_long: Option<usize>,
+    forager_short: Option<usize>,
     offset_long: Option<usize>,
     offset_short: Option<usize>,
 }
@@ -230,58 +230,74 @@ struct OrchestratorH1LogRangeSlots {
 
 #[derive(Debug, Clone, Copy)]
 struct OrchestratorEmaSlots {
-    m1_volume_long: usize,
-    m1_volume_short: usize,
+    m1_volume_long: Option<usize>,
+    m1_volume_short: Option<usize>,
     m1_log_range: OrchestratorM1LogRangeSlots,
     h1_log_range: OrchestratorH1LogRangeSlots,
 }
 
+/// Optional EMA accumulators which `update_emas` advances every candle.
+#[derive(Debug, Clone, Copy, Default)]
+struct MaintainedEmas {
+    volume_long: bool,
+    volume_short: bool,
+    log_range_long: bool,
+    log_range_short: bool,
+    volatility_1m_long: bool,
+    volatility_1m_short: bool,
+    volatility_1h_long: bool,
+    volatility_1h_short: bool,
+}
+
+/// Assigns orchestrator EMA positions to maintained accumulators only. The orchestrator
+/// resolves EMAs by span and takes the first match, so publishing a never-updated accumulator
+/// would shadow a maintained one that shares its span.
 fn make_orchestrator_ema_slots(
     strategy_params: &StrategyParamsPair,
-    bot_params_master: &BotParamsPair,
+    maintained: MaintainedEmas,
 ) -> OrchestratorEmaSlots {
-    let _ = bot_params_master;
+    fn next_slot(next: &mut usize, published: bool) -> Option<usize> {
+        if !published {
+            return None;
+        }
+        let idx = *next;
+        *next += 1;
+        Some(idx)
+    }
+
+    let mut next_m1_volume = 0usize;
+    let m1_volume_long = next_slot(&mut next_m1_volume, maintained.volume_long);
+    let m1_volume_short = next_slot(&mut next_m1_volume, maintained.volume_short);
+
     let mut next_m1_log_range = 0usize;
-    let forager_long = next_m1_log_range;
-    next_m1_log_range += 1;
-    let forager_short = next_m1_log_range;
-    next_m1_log_range += 1;
-    let offset_long =
-        if strategy_offset_volatility_span_minutes(&strategy_params.long).unwrap_or(0.0) > 0.0 {
-            let idx = next_m1_log_range;
-            next_m1_log_range += 1;
-            Some(idx)
-        } else {
-            None
-        };
-    let offset_short =
-        if strategy_offset_volatility_span_minutes(&strategy_params.short).unwrap_or(0.0) > 0.0 {
-            let idx = next_m1_log_range;
-            Some(idx)
-        } else {
-            None
-        };
+    let forager_long = next_slot(&mut next_m1_log_range, maintained.log_range_long);
+    let forager_short = next_slot(&mut next_m1_log_range, maintained.log_range_short);
+    let offset_long = next_slot(
+        &mut next_m1_log_range,
+        maintained.volatility_1m_long
+            && strategy_offset_volatility_span_minutes(&strategy_params.long).unwrap_or(0.0) > 0.0,
+    );
+    let offset_short = next_slot(
+        &mut next_m1_log_range,
+        maintained.volatility_1m_short
+            && strategy_offset_volatility_span_minutes(&strategy_params.short).unwrap_or(0.0) > 0.0,
+    );
 
     let mut next_h1_log_range = 0usize;
-    let h1_long =
-        if strategy_entry_volatility_span_hours(&strategy_params.long).unwrap_or(0.0) > 0.0 {
-            let idx = next_h1_log_range;
-            next_h1_log_range += 1;
-            Some(idx)
-        } else {
-            None
-        };
-    let h1_short =
-        if strategy_entry_volatility_span_hours(&strategy_params.short).unwrap_or(0.0) > 0.0 {
-            let idx = next_h1_log_range;
-            Some(idx)
-        } else {
-            None
-        };
+    let h1_long = next_slot(
+        &mut next_h1_log_range,
+        maintained.volatility_1h_long
+            && strategy_entry_volatility_span_hours(&strategy_params.long).unwrap_or(0.0) > 0.0,
+    );
+    let h1_short = next_slot(
+        &mut next_h1_log_range,
+        maintained.volatility_1h_short
+            && strategy_entry_volatility_span_hours(&strategy_params.short).unwrap_or(0.0) > 0.0,
+    );
 
     OrchestratorEmaSlots {
-        m1_volume_long: 0,
-        m1_volume_short: 1,
+        m1_volume_long,
+        m1_volume_short,
         m1_log_range: OrchestratorM1LogRangeSlots {
             forager_long,
             forager_short,
@@ -1369,41 +1385,51 @@ impl<'a> Backtest<'a> {
                 );
 
                 m1.signed_unilateralness = self.unilateralness_at(idx, k);
-                m1.volume.push((vol_span_long, self.emas[idx].vol_long));
-                m1.volume.push((vol_span_short, self.emas[idx].vol_short));
-                m1.log_range
-                    .push((lr_span_long, self.emas[idx].log_range_long));
-                m1.log_range
-                    .push((lr_span_short, self.emas[idx].log_range_short));
-                if let Some(span) =
-                    strategy_offset_volatility_span_minutes(&self.strategy_params[idx].long)
-                {
-                    if span > 0.0 {
+                // Push order must match the positions assigned by make_orchestrator_ema_slots.
+                let slots = self.orchestrator_ema_slots[idx];
+                if slots.m1_volume_long.is_some() {
+                    m1.volume.push((vol_span_long, self.emas[idx].vol_long));
+                }
+                if slots.m1_volume_short.is_some() {
+                    m1.volume.push((vol_span_short, self.emas[idx].vol_short));
+                }
+                if slots.m1_log_range.forager_long.is_some() {
+                    m1.log_range
+                        .push((lr_span_long, self.emas[idx].log_range_long));
+                }
+                if slots.m1_log_range.forager_short.is_some() {
+                    m1.log_range
+                        .push((lr_span_short, self.emas[idx].log_range_short));
+                }
+                if slots.m1_log_range.offset_long.is_some() {
+                    if let Some(span) =
+                        strategy_offset_volatility_span_minutes(&self.strategy_params[idx].long)
+                    {
                         m1.log_range
                             .push((span, self.emas[idx].volatility_ema_1m_long));
                     }
                 }
-                if let Some(span) =
-                    strategy_offset_volatility_span_minutes(&self.strategy_params[idx].short)
-                {
-                    if span > 0.0 {
+                if slots.m1_log_range.offset_short.is_some() {
+                    if let Some(span) =
+                        strategy_offset_volatility_span_minutes(&self.strategy_params[idx].short)
+                    {
                         m1.log_range
                             .push((span, self.emas[idx].volatility_ema_1m_short));
                     }
                 }
 
-                if let Some(span) =
-                    strategy_entry_volatility_span_hours(&self.strategy_params[idx].long)
-                {
-                    if span > 0.0 {
+                if slots.h1_log_range.long.is_some() {
+                    if let Some(span) =
+                        strategy_entry_volatility_span_hours(&self.strategy_params[idx].long)
+                    {
                         h1.log_range
                             .push((span, self.emas[idx].volatility_ema_1h_long));
                     }
                 }
-                if let Some(span) =
-                    strategy_entry_volatility_span_hours(&self.strategy_params[idx].short)
-                {
-                    if span > 0.0 {
+                if slots.h1_log_range.short.is_some() {
+                    if let Some(span) =
+                        strategy_entry_volatility_span_hours(&self.strategy_params[idx].short)
+                    {
                         h1.log_range
                             .push((span, self.emas[idx].volatility_ema_1h_short));
                     }
@@ -1654,15 +1680,25 @@ impl<'a> Backtest<'a> {
                 }
             }
             let slots = self.orchestrator_ema_slots[idx];
-            if sym.emas.m1.volume.len() > slots.m1_volume_short {
-                sym.emas.m1.volume[slots.m1_volume_long].1 = self.emas[idx].vol_long;
-                sym.emas.m1.volume[slots.m1_volume_short].1 = self.emas[idx].vol_short;
+            if let Some(slot) = slots.m1_volume_long {
+                if sym.emas.m1.volume.len() > slot {
+                    sym.emas.m1.volume[slot].1 = self.emas[idx].vol_long;
+                }
             }
-            if sym.emas.m1.log_range.len() > slots.m1_log_range.forager_short {
-                sym.emas.m1.log_range[slots.m1_log_range.forager_long].1 =
-                    self.emas[idx].log_range_long;
-                sym.emas.m1.log_range[slots.m1_log_range.forager_short].1 =
-                    self.emas[idx].log_range_short;
+            if let Some(slot) = slots.m1_volume_short {
+                if sym.emas.m1.volume.len() > slot {
+                    sym.emas.m1.volume[slot].1 = self.emas[idx].vol_short;
+                }
+            }
+            if let Some(slot) = slots.m1_log_range.forager_long {
+                if sym.emas.m1.log_range.len() > slot {
+                    sym.emas.m1.log_range[slot].1 = self.emas[idx].log_range_long;
+                }
+            }
+            if let Some(slot) = slots.m1_log_range.forager_short {
+                if sym.emas.m1.log_range.len() > slot {
+                    sym.emas.m1.log_range[slot].1 = self.emas[idx].log_range_short;
+                }
             }
             if let Some(slot) = slots.m1_log_range.offset_long {
                 if sym.emas.m1.log_range.len() > slot {
@@ -1962,10 +1998,6 @@ impl<'a> Backtest<'a> {
                 short: make_runtime_budget_state(&bp.short, configured_n_positions.short),
             })
             .collect();
-        let orchestrator_ema_slots: Vec<OrchestratorEmaSlots> = strategy_params_parsed
-            .iter()
-            .map(|sp| make_orchestrator_ema_slots(sp, &bot_params_master))
-            .collect();
 
         // Calculate EMA alphas for each coin, adjusted for candle interval
         let interval = backtest_params.candle_interval_minutes;
@@ -2014,6 +2046,26 @@ impl<'a> Backtest<'a> {
         let needs_volatility_ema_1h_short = strategy_params_parsed
             .iter()
             .any(|sp| strategy_needs_log_range_1h(&sp.short));
+        let needs_volume_ema_long = bot_params.iter().any(|bp| {
+            bp.long.forager_volume_drop_pct != 0.0 || bp.long.forager_score_weights.volume != 0.0
+        });
+        let needs_volume_ema_short = bot_params.iter().any(|bp| {
+            bp.short.forager_volume_drop_pct != 0.0 || bp.short.forager_score_weights.volume != 0.0
+        });
+        let maintained_emas = MaintainedEmas {
+            volume_long: needs_volume_ema_long,
+            volume_short: needs_volume_ema_short,
+            log_range_long: needs_log_range_long,
+            log_range_short: needs_log_range_short,
+            volatility_1m_long: needs_volatility_ema_1m_long,
+            volatility_1m_short: needs_volatility_ema_1m_short,
+            volatility_1h_long: needs_volatility_ema_1h_long,
+            volatility_1h_short: needs_volatility_ema_1h_short,
+        };
+        let orchestrator_ema_slots: Vec<OrchestratorEmaSlots> = strategy_params_parsed
+            .iter()
+            .map(|sp| make_orchestrator_ema_slots(sp, maintained_emas))
+            .collect();
         let btc_collateral_initialized = !balance.use_btc_collateral;
 
         let rms_enabled = crate::unilateralness::backtest_enabled_sides(
@@ -2059,14 +2111,8 @@ impl<'a> Backtest<'a> {
                 .collect(),
             unilateralness_step: None,
             orchestrator_ema_slots,
-            needs_volume_ema_long: bot_params.iter().any(|bp| {
-                bp.long.forager_volume_drop_pct != 0.0
-                    || bp.long.forager_score_weights.volume != 0.0
-            }),
-            needs_volume_ema_short: bot_params.iter().any(|bp| {
-                bp.short.forager_volume_drop_pct != 0.0
-                    || bp.short.forager_score_weights.volume != 0.0
-            }),
+            needs_volume_ema_long,
+            needs_volume_ema_short,
             needs_log_range_long,
             needs_log_range_short,
             needs_volatility_ema_1m_long,
@@ -7675,16 +7721,167 @@ mod tests {
             }),
         };
 
-        let slots = make_orchestrator_ema_slots(&strategy_pair, &BotParamsPair::default());
+        let all_maintained = MaintainedEmas {
+            volume_long: true,
+            volume_short: true,
+            log_range_long: true,
+            log_range_short: true,
+            volatility_1m_long: true,
+            volatility_1m_short: true,
+            volatility_1h_long: true,
+            volatility_1h_short: true,
+        };
+        let slots = make_orchestrator_ema_slots(&strategy_pair, all_maintained);
 
-        assert_eq!(slots.m1_volume_long, 0);
-        assert_eq!(slots.m1_volume_short, 1);
-        assert_eq!(slots.m1_log_range.forager_long, 0);
-        assert_eq!(slots.m1_log_range.forager_short, 1);
+        assert_eq!(slots.m1_volume_long, Some(0));
+        assert_eq!(slots.m1_volume_short, Some(1));
+        assert_eq!(slots.m1_log_range.forager_long, Some(0));
+        assert_eq!(slots.m1_log_range.forager_short, Some(1));
         assert_eq!(slots.m1_log_range.offset_long, Some(2));
         assert_eq!(slots.m1_log_range.offset_short, Some(3));
         assert_eq!(slots.h1_log_range.long, Some(0));
         assert_eq!(slots.h1_log_range.short, Some(1));
+
+        let slots = make_orchestrator_ema_slots(
+            &strategy_pair,
+            MaintainedEmas {
+                volume_short: true,
+                log_range_long: true,
+                volatility_1m_short: true,
+                volatility_1h_short: true,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(slots.m1_volume_long, None);
+        assert_eq!(slots.m1_volume_short, Some(0));
+        assert_eq!(slots.m1_log_range.forager_long, Some(0));
+        assert_eq!(slots.m1_log_range.forager_short, None);
+        assert_eq!(slots.m1_log_range.offset_long, None);
+        assert_eq!(slots.m1_log_range.offset_short, Some(1));
+        assert_eq!(slots.h1_log_range.long, None);
+        assert_eq!(slots.h1_log_range.short, Some(0));
+    }
+
+    #[test]
+    fn orchestrator_input_omits_unmaintained_emas_sharing_a_maintained_span() {
+        // Rising high/low spread gives every maintained log-range and volume EMA a nonzero value.
+        let n = 180usize;
+        let mut candles = Vec::with_capacity(n * 4);
+        for k in 0..n {
+            let close = 100.0 + k as f64 * 0.01;
+            candles.extend_from_slice(&[close * 1.01, close * 0.99, close, 1_000.0]);
+        }
+        let hlcvs = Array3::from_shape_vec((n, 1, 4), candles).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; n]);
+
+        let shared_span = 10.0;
+        let mut bp_pair = BotParamsPair::default();
+        // Long consumes only strategy volatility; its forager volume EMA stays idle.
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.entry_volatility_ema_span_1m = shared_span;
+        bp_pair.long.entry_weight_volatility_1m = 1.0;
+        bp_pair.long.entry_volatility_ema_span_1h = 1.0;
+        bp_pair.long.filter_volume_ema_span_1m = shared_span;
+        bp_pair.long.filter_volatility_ema_span_1m = 30.0;
+        // Short consumes only forager volume and hourly strategy volatility; its forager
+        // log-range EMA and one-minute strategy volatility EMA stay idle.
+        bp_pair.short.n_positions = 1;
+        bp_pair.short.total_wallet_exposure_limit = 1.0;
+        bp_pair.short.forager_score_weights.volume = 1.0;
+        bp_pair.short.forager_score_weights.volatility = 0.0;
+        bp_pair.short.filter_volume_ema_span_1m = shared_span;
+        bp_pair.short.filter_volatility_ema_span_1m = shared_span;
+        bp_pair.short.entry_volatility_ema_span_1m = shared_span;
+        bp_pair.short.entry_volatility_ema_span_1h = 1.0;
+        bp_pair.short.entry_weight_volatility_1h = 1.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![n - 1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            hsl_detailed_report: false,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+        assert!(bt.needs_volatility_ema_1m_long && !bt.needs_log_range_short);
+        assert!(bt.needs_volume_ema_short && !bt.needs_volume_ema_long);
+        assert!(bt.needs_volatility_ema_1h_short && !bt.needs_volatility_ema_1h_long);
+
+        // The orchestrator resolves an EMA by span and takes the first match.
+        fn first_by_span(emas: &orchestrator::EmaBySpan, span: f64) -> Option<f64> {
+            emas.iter().find(|(k, _)| *k == span).map(|(_, v)| *v)
+        }
+
+        for k in 0..n {
+            bt.update_emas(k);
+            if k != 0 && k != n - 1 {
+                continue;
+            }
+            // k == 0 builds the input, k == n - 1 refreshes the cached one in place.
+            let input = bt.get_orchestrator_input_cached(k, None, None);
+            let emas = &input.symbols[0].emas;
+            assert_eq!(
+                first_by_span(&emas.m1.log_range, shared_span),
+                Some(bt.emas[0].volatility_ema_1m_long)
+            );
+            assert_eq!(
+                first_by_span(&emas.m1.volume, shared_span),
+                Some(bt.emas[0].vol_short)
+            );
+            assert_eq!(
+                first_by_span(&emas.h1.log_range, 1.0),
+                Some(bt.emas[0].volatility_ema_1h_short)
+            );
+            assert_eq!(emas.m1.log_range.len(), 2);
+            assert_eq!(emas.m1.volume.len(), 1);
+            assert_eq!(emas.h1.log_range.len(), 1);
+            bt.orchestrator_input_cache = Some(input);
+        }
+
+        // The idle accumulators kept their seed values, so publishing them would be observable.
+        assert_ne!(
+            bt.emas[0].volatility_ema_1m_long,
+            bt.emas[0].log_range_short
+        );
+        assert_ne!(bt.emas[0].vol_short, bt.emas[0].vol_long);
+        assert_ne!(
+            bt.emas[0].volatility_ema_1h_short,
+            bt.emas[0].volatility_ema_1h_long
+        );
     }
 
     #[test]

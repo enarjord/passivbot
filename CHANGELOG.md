@@ -6,6 +6,21 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve completed planning, ordinary execution and protective work across all
+  bounded internal passes of an offline fake-live replay step. This prevents
+  scheduler-dependent repeatability failures while retaining strict readiness,
+  pending-work and exchange-result comparisons. Live execution is unchanged.
+
+- Stop CPU backtests and exact optimizer evaluations from reading a never-updated
+  volume or volatility EMA when two settings share the same span. A strategy
+  volatility span equal to the other side's unused forager volatility span, or equal
+  spans where only one side uses the forager volume, forager volatility, or strategy
+  volatility input, previously resolved to the idle side's stale value. Such
+  backtests now use the maintained EMA, as live trading does; affected results
+  change. GPU optimizer candidates whose strategy volatility span lands on the
+  other side's unused forager volatility span no longer count as proxy/exact
+  constraint disagreement.
+
 - Sign Lighter cancels and modifications with the exact order index. Indexes above the
   binary64 integer range are no longer rounded before they reach the signer.
 
