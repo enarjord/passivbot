@@ -13,11 +13,12 @@ import pandas as pd
 from backtest_results import ResultStore, extrema_indices, write_json
 
 PLOTS = {"equity", "hsl", "hsl_episodes", "coin_fills", "twe"}
+DEFAULT_PLOTS = ("equity", "hsl", "twe")
 
 
 @dataclass(frozen=True)
 class ReportOptions:
-    plots: tuple[str, ...] = ("equity", "hsl")
+    plots: tuple[str, ...] = DEFAULT_PLOTS
     equity_scale: str = "log"
     btc: bool = False
     equity_csv: bool = False
@@ -47,8 +48,8 @@ def add_report_arguments(parser):
     parser.add_argument(
         "--plots",
         type=parse_plots,
-        default="equity,hsl",
-        help="Plot groups: equity,hsl,hsl_episodes,coin_fills,twe,all,none.",
+        default=DEFAULT_PLOTS,
+        help="Plot groups: equity,hsl,hsl_episodes,coin_fills,twe,all,none (default: equity,hsl,twe).",
     )
     parser.add_argument("--equity-scale", choices=("log", "linear"), default="log")
     parser.add_argument(
@@ -182,6 +183,156 @@ def create_equity_overview(store, options):
         ax.grid(True, alpha=0.25)
     axes[-1].set_xlabel("Time (UTC)")
     fig.tight_layout()
+    return fig
+
+
+def _exposure_summary(exposure, elapsed_ms):
+    observed = np.isfinite(exposure)
+    peak = exposure[observed].max() if observed.any() else np.nan
+    intervals = observed[:-1] & (elapsed_ms > 0)
+    values, weights = exposure[:-1][intervals], elapsed_ms[intervals]
+    if not len(values):
+        return np.nan, np.nan, peak, np.nan
+    order = np.argsort(values)
+    cumulative = np.cumsum(weights[order])
+    p95 = values[order[np.searchsorted(cumulative, 0.95 * cumulative[-1])]]
+    mean = np.average(values, weights=weights)
+    time_exposed = weights[values > 0].sum() / cumulative[-1]
+    return mean, p95, peak, time_exposed
+
+
+def wallet_exposure_view(store):
+    """Build a step view of the saved post-fill wallet exposure magnitudes."""
+    columns = ["twe_long", "twe_short"]
+    if not (store.directory / "fills.csv").is_file():
+        return None
+    fills = store.fills()
+    if not set(columns) <= set(fills):
+        return None  # Older ledgers can lack the per-side snapshots.
+    clock = store.equity(columns=()).index.as_unit("ms").asi8
+    if not len(clock):
+        return None
+    fills = fills.sort_values("timestamp", kind="stable")
+    fill_clock = fills.timestamp.dt.as_unit("ms").array.asi8
+    timestamps = np.unique(np.concatenate([clock[[0, -1]], fill_clock]))
+    ratios = fills[columns].to_numpy(dtype=np.float64, copy=True)
+    ratios[:, 1] = abs(ratios[:, 1])
+    ratios[~np.isfinite(ratios) | (ratios < 0)] = np.nan
+    if "usd_total_balance" in fills:
+        # Native fill rows use zero as a sentinel when wallet balance is depleted.
+        balance = fills.usd_total_balance.to_numpy(dtype=np.float64)
+        ratios[~np.isfinite(balance) | (balance <= 0)] = np.nan
+    # The simulation starts flat. Use the last post-fill state for each clock
+    # and hold it until the next observation, including the final idle period.
+    states = np.vstack([np.zeros((1, 2)), ratios])
+    exposure = states[np.searchsorted(fill_clock, timestamps, side="right")]
+    elapsed_ms = np.diff(timestamps)
+    return {
+        "timestamp": timestamps,
+        "exposure_ratio": exposure,
+        "summary": [_exposure_summary(side, elapsed_ms) for side in exposure.T],
+        "has_gaps": np.isnan(exposure).any(),
+    }
+
+
+def create_wallet_exposure_overview(store):
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator, PercentFormatter
+
+    view = wallet_exposure_view(store)
+    if view is None:
+        return None
+
+    fig = plt.figure(figsize=(14, 7.8))
+    grid = fig.add_gridspec(3, 1, height_ratios=[3, 3, 1.3])
+    long_ax = fig.add_subplot(grid[0])
+    short_ax = fig.add_subplot(grid[1], sharex=long_ax, sharey=long_ax)
+    summary_ax = fig.add_subplot(grid[2])
+    fig.subplots_adjust(left=0.085, right=0.97, top=0.855, bottom=0.11, hspace=0.36)
+
+    timestamps = pd.to_datetime(view["timestamp"], unit="ms")
+    exposure = view["exposure_ratio"]
+    upper = np.max(exposure, where=np.isfinite(exposure), initial=0.0) or 0.01
+    long_ax.set_ylim(-0.035 * upper, 1.12 * upper)
+    if len(timestamps) > 1:
+        long_ax.set_xlim(timestamps[0], timestamps[-1])
+    locator = mdates.AutoDateLocator(tz="UTC", minticks=4, maxticks=9)
+    short_ax.xaxis.set_major_locator(locator)
+    short_ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator, tz="UTC"))
+
+    colors = ("#176b94", "#a84b32")
+    sides = ("Long", "Short")
+    for ax, side, color, values in zip((long_ax, short_ax), sides, colors, exposure.T):
+        ax.fill_between(timestamps, 0, values, step="post", color=color, alpha=0.16)
+        ax.step(timestamps, values, where="post", color=color, linewidth=0.85)
+        if len(timestamps) == 1:
+            ax.scatter(timestamps, values, color=color, s=14)
+        ax.set_title(side, loc="left", color=color, fontsize=12, fontweight="bold")
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=4, min_n_ticks=3))
+        ax.yaxis.set_major_formatter(PercentFormatter(xmax=1))
+        ax.tick_params(length=0, pad=6, colors="#445063")
+        ax.grid(True, alpha=0.23)
+        ax.set_axisbelow(True)
+        ax.spines[["top", "right", "left"]].set_visible(False)
+        ax.spines["bottom"].set_color("#cbd5df")
+    long_ax.tick_params(labelbottom=False)
+    short_ax.set_xlabel("Time (UTC)", color="#445063")
+
+    summary_ax.axis("off")
+    analysis = store.json("analysis.json", optional=True) or {}
+    rows = []
+    for side, stats in zip(sides, view["summary"]):
+        utilization = analysis.get(
+            f"position_exposure_utilization_rms_ratio_{side.lower()}"
+        )
+        cells = [
+            f"{value:.1%}" if value is not None and np.isfinite(value) else "—"
+            for value in (*stats, utilization)
+        ]
+        rows.append([side, *cells])
+    table = summary_ax.table(
+        cellText=rows,
+        colLabels=[
+            "Side", "Mean exposure", "95th percentile", "Peak exposure",
+            "Time exposed", "Budget utilization RMS",
+        ],
+        colWidths=[0.12, 0.17, 0.17, 0.16, 0.16, 0.22],
+        bbox=[0, 0, 1, 1],
+        cellLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    for (row, col), cell in table.get_celld().items():
+        cell.set_edgecolor("white")
+        cell.set_facecolor(("#e9eef4", "#f5f7fa", "#f5f7fa")[row])
+        cell.set_text_props(
+            color=colors[row - 1] if row and col == 0 else "#233244",
+            weight="bold" if row == 0 or col == 0 else "normal",
+        )
+
+    fig.suptitle(
+        "Wallet exposure over time", x=0.085, y=0.972, ha="left",
+        fontsize=20, fontweight="bold", color="#233244",
+    )
+    fig.text(
+        0.97, 0.939, f"{timestamps[0]:%Y-%m-%d} to {timestamps[-1]:%Y-%m-%d}",
+        ha="right", fontsize=10, color="#445063",
+    )
+    fig.text(
+        0.085, 0.906,
+        "Entry-price position notional as a percentage of wallet balance",
+        fontsize=11, color="#445063",
+    )
+    notes = "The last snapshot at each fill time is held until the next fill. Mean, P95 and time exposed use elapsed time."
+    if view["has_gaps"]:
+        notes += " Gaps are excluded from time statistics."
+    fig.text(0.085, 0.067, notes, fontsize=9, color="#445063")
+    fig.text(
+        0.085, 0.039,
+        "BTC collateral is valued at fill times. Budget utilization RMS uses the native position and side limits.",
+        fontsize=9, color="#445063",
+    )
     return fig
 
 
@@ -505,15 +656,7 @@ def render_reports(store, directory=None, *, options=None, disabled=()):
                             ),
                         )
             elif group == "twe":
-                from plotting import create_forager_twe_figure
-
-                for name, fig in create_forager_twe_figure(
-                    store.fills(), autoplot=False, return_figures=True
-                ).items():
-                    fig.axes[0].set_title(
-                        "Fill-observed wallet exposure — hourly fill-event mean"
-                    )
-                    save(name, fig)
+                save("total_wallet_exposure", create_wallet_exposure_overview(store))
             elif group == "coin_fills":
                 from backtest_artifacts import (
                     load_backtest_artifact,
