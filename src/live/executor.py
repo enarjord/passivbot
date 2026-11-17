@@ -901,11 +901,13 @@ async def execute_order_plan(
             else:
                 to_create_mod.append(order)
         if recent_execution_deferred:
+            deferred_orders = [order for order, _delay in recent_execution_deferred]
+            _observe_close_create_defer(bot, deferred_orders, ReasonCodes.RECENT_EXECUTION)
             _record_fresh_entry_orders(
                 bot,
                 "record_blocked_orders",
-                [order for order, _delay in recent_execution_deferred],
-                "recent_execution",
+                deferred_orders,
+                ReasonCodes.RECENT_EXECUTION,
             )
             passivbot_cls._emit_execution_create_filter_event(
                 bot,
@@ -913,9 +915,7 @@ async def execute_order_plan(
                 status="deferred",
                 reason_code=ReasonCodes.RECENT_EXECUTION,
                 order_count=len(recent_execution_deferred),
-                symbols=_symbols_from_orders(
-                    [order for order, _delay in recent_execution_deferred]
-                ),
+                symbols=_symbols_from_orders(deferred_orders),
                 wave=order_wave,
                 message="create orders deferred because a matching recent execution exists",
                 data={
@@ -1238,6 +1238,13 @@ def record_create_connector_admission(bot, order: dict) -> None:
         index=index,
         wave=wave,
     )
+    if getattr(bot, "_console_close_replacements", None):
+        run_diagnostic_step(
+            "observe close replacement create send",
+            lambda: close_replacement_diagnostics.observe_create_sent(
+                bot, wave, order, _utc_ms(), action_index=index
+            ),
+        )
     _record_fresh_entry_orders(bot, "record_eligible_orders", [order])
 
 
@@ -1327,10 +1334,12 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
         orders = selected
     requested_orders = list(orders)
     orders = [order for order in orders if position_fill_sync.permits(bot, order, "create")]
+    settling_orders = _orders_removed_by_identity(requested_orders, orders)
+    _observe_close_create_defer(bot, settling_orders, "position_fill_settling")
     _record_fresh_entry_orders(
         bot,
         "record_blocked_orders",
-        _orders_removed_by_identity(requested_orders, orders),
+        settling_orders,
         "position_fill_settling",
     )
     if not orders:
@@ -1343,6 +1352,11 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
         _orders_removed_by_identity(requested_orders, orders),
         "batch_capacity",
     )
+    if getattr(bot, "_console_close_replacements", None):
+        run_diagnostic_step(
+            "observe close replacement create admission",
+            lambda: close_replacement_diagnostics.observe_admission(bot, orders, _utc_ms()),
+        )
     grouped_orders: dict[str, list[dict]] = defaultdict(list)
     emitted_ts = (
         int(bot.get_exchange_time()) if hasattr(bot, "get_exchange_time") else _utc_ms()

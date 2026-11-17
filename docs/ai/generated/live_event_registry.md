@@ -72,6 +72,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `order.churn_actions_accounted`
 - `order.churn_admission`
 - `order.churn_evidence`
+- `order.close_replacement_timing`
 - `order_wave.completed`
 - `order_wave.started`
 - `planning.defer_summary`

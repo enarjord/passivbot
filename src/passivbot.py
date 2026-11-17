@@ -59,6 +59,7 @@ from fill_events_manager import (
 )
 from live import (
     candle_ws,
+    close_replacement_diagnostics,
     executor,
     market_data,
     planning_gates,
@@ -91,7 +92,6 @@ from live.diagnostic_safety import (
     exception_text_contains,
     exception_type_name_contains,
 )
-from live.close_replacement_diagnostics import observe_account as observe_close_replacements
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
 from live.console_health import (
@@ -10972,8 +10972,14 @@ class Passivbot:
             )
         if getattr(self, "_console_close_replacements", None):
             run_diagnostic_step(
+                "observe close replacement confirmation",
+                lambda: close_replacement_diagnostics.observe_confirmation(self, int(utc_ms())),
+            )
+            run_diagnostic_step(
                 "observe confirmed close replacements",
-                lambda: observe_close_replacements(self, refreshed_surfaces, int(utc_ms())),
+                lambda: close_replacement_diagnostics.observe_account(
+                    self, refreshed_surfaces, int(utc_ms())
+                ),
             )
 
     def _mark_account_critical_state_dirty(
@@ -12686,6 +12692,13 @@ class Passivbot:
                 ):
                     recovery.record_fill_refresh(self._pnls_manager, fill_capture_interval)
                 self._trailing_fill_refresh_generation = fill_refresh_attempt_generation
+                if getattr(self, "_console_close_replacements", None):
+                    run_diagnostic_step(
+                        "observe close replacement confirmation",
+                        lambda: close_replacement_diagnostics.observe_confirmation(
+                            self, int(utc_ms())
+                        ),
+                    )
             elif not coverage_ready_after:
                 self._last_fill_refresh_block_reason = "fill_history_coverage"
                 logging.warning(

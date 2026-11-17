@@ -1410,6 +1410,9 @@ class Owner:
             self.bot._hsl_planning_wave = replace(wave, ordinary_receipts=None)
 
     def _freeze_ordinary_plan(self, account, initial_receipts, cancels, creates):
+        from live import close_replacement_diagnostics
+        from utils import utc_ms
+
         bot = self.bot
         if not self.same_account_facts(account, self.account_facts()):
             self._defer_ordinary("account_facts_changed", phase="after_reconciliation")
@@ -1438,6 +1441,13 @@ class Owner:
             required_fills=self.required_fill_facts(),
             ordinary_receipts=receipts,
         )
+        if getattr(bot, "_console_close_replacements", None) and not bot.debug_mode:
+            run_diagnostic_step(
+                "observe reconciled close replacement",
+                lambda: close_replacement_diagnostics.observe_reconciled_plan(
+                    bot, creates, int(utc_ms())
+                ),
+            )
         return cancels, creates, bot._current_planning_snapshot, wave
 
     def schedule_account_reporting(self):

@@ -5,6 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Record ordinary close replacement timing in structured live events, from cancel
+  acknowledgment through account confirmation, replanning, and create submission.
+
 - Use the maintained EMA when a CPU backtest or exact optimizer evaluation has
   an unused volume or log-range EMA with the same span. Affected backtests can
   produce different fills and metrics.
