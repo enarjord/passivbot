@@ -326,7 +326,7 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     calls = {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
 
     def _fake_build_backtest_frames(*args, **kwargs):
-        fdf = pd.DataFrame(columns=["coin", "pnl"])
+        fdf = pd.DataFrame(columns=["timestamp", "coin", "pnl", "twe_long", "twe_short"])
         bal_eq = pd.DataFrame({"usd_total_balance": [1000.0], "usd_total_equity": [1000.0], "btc_total_equity": [1.0], "strategy_equity": [1000.0]})
         bal_eq.index = pd.date_range("2024-01-01", periods=len(bal_eq), freq="min")
         return fdf, bal_eq
@@ -378,7 +378,10 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
         exchange="binance",
     )
 
-    assert [p.name for p in tmp_path.rglob("*.png")] == ["equity.png"]
+    assert {p.name for p in tmp_path.rglob("*.png")} == {
+        "equity.png",
+        "total_wallet_exposure.png",
+    }
 
 def test_post_process_formats_console_without_filtering_or_rounding_exports(
     tmp_path, monkeypatch, caplog

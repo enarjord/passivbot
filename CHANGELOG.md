@@ -5,8 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Record ordinary close replacement timing in structured live events, from cancel
-  acknowledgment through account confirmation, replanning, and create submission.
+- Include a wallet exposure plot in default backtest reports, with separate
+  long and short series and a time-weighted exposure summary.
 
 - Use the maintained EMA when a CPU backtest or exact optimizer evaluation has
   an unused volume or log-range EMA with the same span. Affected backtests can
@@ -26,6 +26,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Allow two eligible Bitunix post-only closes on separate symbols to share one fresh
   plan and one account confirmation. Journal each submission independently.
+
+- Record ordinary close replacement timing in structured live events, from cancel
+  acknowledgment through account confirmation, replanning, and create submission.
 
 - Support opt-in `optimize.gpu.tuning_mode = "max"` on Apple Silicon Metal.
   It evaluates wider seed and offspring cohorts, retains the configured parent
