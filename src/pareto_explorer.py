@@ -18,6 +18,7 @@ import numpy as np
 from config.limits import (
     normalize_limit_entries,
     parse_limit_cli_entries,
+    parse_limit_cli_payload,
     resolve_reducer_mode,
     resolve_limit_basis,
 )
@@ -1156,7 +1157,7 @@ def filter_candidates(
 ) -> tuple[List[ParetoCandidate], List[Dict[str, Any]]]:
     normalized_limits: List[Dict[str, Any]] = []
     if limits_payload is not None:
-        normalized_limits.extend(normalize_limit_entries(limits_payload))
+        normalized_limits.extend(parse_limit_cli_payload(limits_payload))
     if limit_entries:
         normalized_limits.extend(parse_limit_cli_entries(list(limit_entries)))
     return filter_candidates_with_limits(

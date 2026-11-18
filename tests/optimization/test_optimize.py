@@ -566,7 +566,7 @@ class TestResolveCliLimitsOverride:
         args = argparse.Namespace(
             **{
                 "optimize.limits": '[{"metric":"drawdown_max_fraction_strategy_equity","penalize_if":">","value":0.35}]',
-                "limit_entries": ["cagr_fraction_strategy_equity > 0.0008 stat=mean"],
+                "limit_entries": ["cagr_fraction_strategy_equity > 0.0008 reducer=mean"],
                 "clear_limits": False,
             }
         )
@@ -591,7 +591,7 @@ class TestResolveCliLimitsOverride:
         args = argparse.Namespace(
             **{
                 "optimize.limits": None,
-                "limit_entries": ["fills_gap_max_days<72 stat=max"],
+                "limit_entries": ["fills_gap_max_days<72 reducer=max"],
                 "clear_limits": False,
             }
         )

@@ -21,6 +21,7 @@ class CommandSpec:
     module: str
     summary: str
     requires_full: bool = False
+    listed: bool = True
 
 
 CORE_COMMANDS: dict[str, CommandSpec] = {
@@ -76,18 +77,22 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     "hyperliquid-balance-probe": CommandSpec(
         "tools.probe_hyperliquid_balance",
         "read-only Hyperliquid balance smoke test",
+        listed=False,
     ),
     "hyperliquid-abstraction-probe": CommandSpec(
         "tools.probe_hyperliquid_abstraction",
         "read-only Hyperliquid account abstraction probe",
+        listed=False,
     ),
     "hyperliquid-order-margin-probe": CommandSpec(
         "tools.probe_hyperliquid_order_margin",
         "mutating Hyperliquid order-margin diagnostic",
+        listed=False,
     ),
     "hyperliquid-position-probe": CommandSpec(
         "tools.probe_hyperliquid_position_balance",
         "mutating Hyperliquid position/balance diagnostic",
+        listed=False,
     ),
     "fill-events-dash": CommandSpec(
         "tools.fill_events_dash",
@@ -274,19 +279,9 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "analyze Pareto front config and metric distributions (requires full install)",
         requires_full=True,
     ),
-    "pareto-analysis": CommandSpec(
-        "tools.pareto_analyzer",
-        "analyze Pareto front config and metric distributions (requires full install)",
-        requires_full=True,
-    ),
     "pareto-compress": CommandSpec(
         "tools.pareto_compress",
         "select a compact representative subset from a Pareto front (requires full install)",
-        requires_full=True,
-    ),
-    "pareto-explorer": CommandSpec(
-        "tools.pareto_explorer",
-        "select a single candidate from a Pareto front (requires full install)",
         requires_full=True,
     ),
     "pareto-transform": CommandSpec(
@@ -313,10 +308,12 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     "ticker-probe": CommandSpec(
         "tools.probe_ticker_capabilities",
         "read-only exchange ticker capability probe",
+        listed=False,
     ),
     "ticker-endpoint-probe": CommandSpec(
         "tools.probe_ccxt_ticker_endpoints",
         "multi-user CCXT ticker endpoint latency probe",
+        listed=False,
     ),
     "verify-hlcvs-data": CommandSpec(
         "tools.verify_hlcvs_data",
@@ -589,8 +586,9 @@ def _dispatch_tool(argv: list[str]) -> int:
     if not argv or argv[0] in {"-h", "--help"}:
         parser.print_help()
         print("\nAvailable tools:")
-        for name in sorted(TOOL_COMMANDS):
-            print(f"  {name:<24} {TOOL_COMMANDS[name].summary}")
+        for name, spec in sorted(TOOL_COMMANDS.items()):
+            if spec.listed:
+                print(f"  {name:<24} {spec.summary}")
         return 0
 
     tool_name = argv[0]

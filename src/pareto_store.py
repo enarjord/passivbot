@@ -684,7 +684,6 @@ def main():
     parser.add_argument(
         "-l",
         "--limit",
-        "--limits",
         dest="limits",
         action="append",
         help=(

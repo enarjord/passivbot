@@ -5,6 +5,11 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Use `reducer` in CLI limit expressions and objects, and a JSON or HJSON list
+  with `--limits`. Use `passivbot tool pareto` and `passivbot tool pareto-analyze`
+  for Pareto selection and analysis. Developer exchange probes remain directly
+  callable and have their own section in the tools guide.
+
 - Show signed Entry Distance % in position logs and monitors, with positive values for favorable
   price moves on either side. Position telemetry uses the new scale-one
   `signed_entry_distance_fraction` field. Auto-unstuck preserves its order selection under the

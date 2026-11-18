@@ -1111,7 +1111,7 @@ def test_parse_limit_cli_entry_supports_extended_scalar_operators():
 
 def test_parse_limit_cli_entry_supports_range_and_extras():
     entry = config_utils.parse_limit_cli_entry(
-        "loss_profit_ratio outside_range [0.05,0.7] stat=mean enabled=false"
+        "loss_profit_ratio outside_range [0.05,0.7] reducer=mean enabled=false"
     )
 
     assert entry == {
@@ -1146,7 +1146,7 @@ def test_parse_limit_cli_entry_preserves_none_scenario_label():
 
 def test_parse_limit_cli_entry_supports_compact_operator_with_multiple_options():
     entry = config_utils.parse_limit_cli_entry(
-        "drawdown_max_fraction_strategy_equity<=0.7 scenario=null stat=max"
+        "drawdown_max_fraction_strategy_equity<=0.7 scenario=null reducer=max"
     )
 
     assert entry == {
@@ -1158,16 +1158,36 @@ def test_parse_limit_cli_entry_supports_compact_operator_with_multiple_options()
     }
 
 
-def test_parse_limit_cli_entry_rejects_conflicting_reducer_aliases():
-    with pytest.raises(ValueError, match="conflicting reducer aliases"):
+@pytest.mark.parametrize("key", ["aggregate", "stat", "scenario_stat", "field"])
+def test_cli_limits_require_canonical_reducer(key):
+    from config.limits import parse_limit_cli_payload
+
+    with pytest.raises(ValueError, match="reducer"):
         config_utils.parse_limit_cli_entry(
-            "drawdown_max_fraction_strategy_equity<=0.7 stat=min reducer=max"
+            f"drawdown_max_fraction_strategy_equity<=0.7 {key}=min"
+        )
+    entry = {"metric": "drawdown_max_fraction_strategy_equity", "penalize_if": ">",
+             "value": 0.7, key: "min"}
+    with pytest.raises(ValueError, match="use 'reducer'"):
+        config_utils.parse_limit_cli_entry(entry)
+    with pytest.raises(ValueError, match="use 'reducer'"):
+        parse_limit_cli_payload([entry])
+
+
+def test_cli_limits_require_a_list_and_reject_duplicate_options():
+    from config.limits import parse_limit_cli_payload
+
+    with pytest.raises(ValueError, match="list of limit objects"):
+        parse_limit_cli_payload({"penalize_if_lower_than_cagr_fraction_strategy_equity": 0.1})
+    with pytest.raises(ValueError, match="more than once"):
+        config_utils.parse_limit_cli_entry(
+            "drawdown_max_fraction_strategy_equity<=0.7 reducer=min reducer=max"
         )
 
 
 def test_parse_limit_cli_entries_supports_json_object_strings():
     entries = config_utils.parse_limit_cli_entries(
-        ['{"metric":"omega_ratio_strategy_equity","penalize_if":"<","value":0.001,"stat":"mean"}']
+        ['{"metric":"omega_ratio_strategy_equity","penalize_if":"<","value":0.001,"reducer":"mean"}']
     )
 
     assert entries == [

@@ -381,9 +381,9 @@ def test_filter_candidates_explicit_stat_overrides_suite_aggregate_defaults(tmp_
         candidates,
         limits_payload=None,
         limit_entries=[
-            "cagr_fraction_strategy_equity>0.0 stat=min",
-            "peak_recovery_max_days_strategy_equity<5000 stat=max",
-            "drawdown_max_fraction_strategy_equity<0.8 stat=max",
+            "cagr_fraction_strategy_equity>0.0 reducer=min",
+            "peak_recovery_max_days_strategy_equity<5000 reducer=max",
+            "drawdown_max_fraction_strategy_equity<0.8 reducer=max",
         ],
     )
 
@@ -701,7 +701,7 @@ def test_scenario_limit_uses_scalar_and_rejects_non_mean_reducer(
         filter_candidates(
             projected,
             limits_payload=None,
-            limit_entries=["cagr_fraction_strategy_equity>0.75 stat=max"],
+            limit_entries=["cagr_fraction_strategy_equity>0.75 reducer=max"],
         )
 
 
@@ -793,7 +793,7 @@ def test_explicit_null_limit_keeps_suite_aggregate_after_scenario_projection(
     filtered_max, max_limits = filter_candidates(
         projected,
         limits_payload=None,
-        limit_entries=["cagr_fraction_strategy_equity<0.6 scenario=null stat=max"],
+        limit_entries=["cagr_fraction_strategy_equity<0.6 scenario=null reducer=max"],
     )
 
     # An explicit reducer uses scenario facts, not the fixture's stored aggregate.
