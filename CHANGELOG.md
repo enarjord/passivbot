@@ -14,6 +14,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Show disabled sides explicitly in the live startup banner’s position and exposure limits.
 
+- Preserve completed planning, ordinary execution and protective work across the
+  internal passes of an offline fake-live replay step.
+
 - Recheck ordinary live order admission after connector queueing so a stale
   create or cancel is deferred before it reaches the exchange.
 
