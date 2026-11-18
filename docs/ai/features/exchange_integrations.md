@@ -689,23 +689,26 @@ and reinitialized.
 
 ### Product-admission retry policy
 
-The native connector opts structured exchange error `710003` into the existing per-symbol
-API-unavailable cooldown. This is a local retry policy after an actual failed write, not a
-classification of every market sharing a public product label or proof of account-wide permission.
-The classifier reads the bounded structured exception code, never exception text.
+The native connector starts the per-symbol API-unavailable cooldown after a failed write
+with structured exchange error code `710003`. The cooldown applies to the affected
+symbol's entries for `live.recovery.exchange_symbol_unavailable_cooldown_hours`.
+Held positions retain `tp_only` and stronger explicit modes.
 Bitunix's [stock-perpetual guide](https://www.bitunix.com/hub/helpcenter/article/introduction-to-stock-perpetuals?id=211)
 describes a separate product boundary; its
 [public error-code table](https://www.bitunix.com/api-docs/futures/ErrorCode/error_code.html)
 does not define `710003`.
 
-Keep the original failure, ambiguous-write reconciliation, and execution error-budget charge.
-Only the affected symbol's entries are paused for
-`live.recovery.exchange_symbol_unavailable_cooldown_hours`; unrelated symbols continue.
-Held positions retain `tp_only` and stronger explicit modes. During an active cooldown, an explicit
-reduce-only close does not require the postponed leverage/margin configuration write: native
-`CLOSE` still requires its authoritative `positionId` and all normal account, fill, and risk guards.
-Outside that cooldown, the existing configuration prerequisite is unchanged. Expiry, disabling
-the cooldown, and a new process retain the shared recovery policy; no timer promises venue recovery.
+An ordinary create that receives `710003` leaves its outcome unresolved and consumes the normal
+execution error budget. The journal reservation defers ordinary creates across the account,
+including replacement closes on other symbols. Cancellation and dedicated HSL protection
+remain eligible under their own readiness, risk, and execution checks. The symbol cooldown
+defers leverage and margin configuration for that symbol. An explicit reduce-only close can
+bypass that configuration prerequisite while the cooldown is active. Native `CLOSE` still
+requires the authoritative `positionId` and the normal account, fill, and risk guards.
+
+Recovery of the journal reservation follows the [ordinary creation recovery contract](#recovery-of-ordinary-creations)
+even after cooldown expiry or restart. See [Bitunix create recovery](../../troubleshooting.md#bitunix-ordinary-creates-are-paused)
+for operator checks.
 
 ### Live quotes and candles
 
