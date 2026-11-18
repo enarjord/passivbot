@@ -33,6 +33,9 @@ its own version heading. See [release status](docs/releases.md).
 - Reuse validated candle shards across overlapping EMA windows and reduce work when
   merging contiguous candle rows into the live cache.
 
+- Persist the Bitunix pending-create journal in the documented live container
+  setups so unresolved submissions survive container replacement.
+
 - Support opt-in `optimize.gpu.tuning_mode = "max"` on Apple Silicon Metal.
   It evaluates wider seed and offspring cohorts, retains the configured parent
   population size, and checks shared memory before allocating replay scratch.

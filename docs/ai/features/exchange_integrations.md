@@ -657,6 +657,7 @@ Primary references: [place order](https://www.bitunix.com/api-docs/futures/trade
 
 Keep the Bitunix create journal under `var/bitunix/<user>/create_attempts.sqlite3`
 in the live data directory. Keep that data directory across restarts and release switches.
+See [persistent live state](../../container_deployment.md#persistent-live-state) for containers.
 The [recovery contract](../error_contract.md#live-action-readiness) applies to one outstanding
 ordinary create or two members of one eligible close wave. A committed pending-order cohort can
 adopt a working order by exact `clientId`. Otherwise, use exact order detail and bounded
