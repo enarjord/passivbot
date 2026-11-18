@@ -953,6 +953,7 @@ async def _run_fake_cycle_ready(bot):
     # preparation retains the original bound. Every pass still runs protection.
     initial_pass_budget, execution_pass_budget = 8, 8
     execution_seen = False
+    activity = {}
     for attempt in range(initial_pass_budget + execution_pass_budget):
         advance = getattr(bot, "_advance_fake_hsl_readiness", None)
         if advance is not None:
@@ -963,6 +964,11 @@ async def _run_fake_cycle_ready(bot):
         raise_finished_failures(before)
         completed_before = {task for task in before if task.done()}
         result = await instance.cycle()
+        # Work from any pass belongs to this step. Readiness and the decision
+        # to keep draining still use the current pass and its outstanding tasks.
+        for key in ("ordinary_completed", "ordinary_executed", "protective_work"):
+            if key in result:
+                activity[key] = activity.get(key, False) or result[key]
         input_tasks = inputs()
         raise_finished_failures(input_tasks)
         inputs_consumed = all(task in completed_before for task in input_tasks)
@@ -975,7 +981,7 @@ async def _run_fake_cycle_ready(bot):
                 (not result["updated"] and not in_flight)
                 or (result["updated"] and result["ordinary_executed"]
                     and inputs_consumed)):
-            return dict(result, engine="hsl", passes=attempt + 1)
+            return dict(result, **activity, engine="hsl", passes=attempt + 1)
         # A completed ordinary plan does not settle newly scheduled history
         # reads. Give them the same bounded opportunity before advancing the
         # scenario clock; the next production pass observes their results.
@@ -995,7 +1001,7 @@ async def _run_fake_cycle_ready(bot):
         if attempt + 1 == initial_pass_budget and not execution_seen:
             break
     return dict(
-        result, engine="hsl", passes=attempt + 1, preparation_pending=True,
+        result, **activity, engine="hsl", passes=attempt + 1, preparation_pending=True,
         input_acquisition_pending=any(not task.done() for task in input_tasks),
         confirmation_pending=_fake_confirmation_pending(bot, instance),
         ordinary_execution_pending=_fake_ordinary_execution_pending(bot),
