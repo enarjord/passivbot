@@ -406,7 +406,8 @@ passivbot optimize search-config.json --start merged_seeds
 
 Merge current v9 fronts that use the same strategy and HSL scope. The output retains each
 enabled side's inherited numeric settings and can seed a fresh search. The new search owns
-side activation, bounds, and scoring.
+side activation, bounds, and scoring. Give the search independent long and short bounds for
+any tuned parameter whose values differ between the two merged sides.
 
 ## Optimizer starting-config preselection
 

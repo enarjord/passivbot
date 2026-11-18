@@ -3158,6 +3158,14 @@ def iter_extract_configs(path):
     if path.endswith(".json"):
         try:
             raw = load_hjson_config(path, log_errors=False)
+            if (
+                os.path.basename(path) == "index.json"
+                and isinstance(raw, dict)
+                and raw.get("tool") == "passivbot tool merge-paretos"
+                and isinstance(raw.get("files"), list)
+                and {"bot", "config", "config_version"}.isdisjoint(raw)
+            ):
+                return
             yield _extract_starting_config(raw, source=path)
         except StartingConfigSchemaError:
             raise

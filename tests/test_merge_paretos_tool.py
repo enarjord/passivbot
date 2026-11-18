@@ -312,10 +312,10 @@ def _write_current_v9_candidate(pareto_dir, side, initial_qty):
     return path
 
 
-def test_merge_paretos_current_results_are_usable_optimizer_seeds(tmp_path):
-    from config.load import load_prepared_config
-    from optimization.bounds import Bound
-    from optimize import configs_to_individuals_streaming, get_starting_configs
+def test_merge_paretos_current_results_are_usable_optimizer_seeds(tmp_path, caplog):
+    from config.load import load_prepared_config, prepare_config
+    from config.schema import get_template_config
+    from optimize import build_optimization_shape, configs_to_individuals_streaming, get_starting_configs
 
     long_path = _write_current_v9_candidate(tmp_path / "long" / "pareto", "long", 0.031)
     short_path = _write_current_v9_candidate(tmp_path / "short" / "pareto", "short", 0.078)
@@ -336,16 +336,29 @@ def test_merge_paretos_current_results_are_usable_optimizer_seeds(tmp_path):
 
     loaded = load_prepared_config(str(path), allow_result_records=True, verbose=False)
     [seed] = get_starting_configs(str(output))
+    assert "failed to extract bot config" not in caplog.text
+    manual = tmp_path / "index.json"
+    manual.write_text(json.dumps(record["config"]))
+    assert get_starting_configs(str(manual))[0]["bot"] == seed["bot"]
     for side, expected in (("long", 0.031), ("short", 0.078)):
         assert loaded["bot"][side]["enabled"] is True
         for source in (loaded, seed):
             assert source["bot"][side]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == expected
-    key_paths = [(side, ("bot", side, "strategy", "trailing_martingale", "entry", "initial_qty_fraction"))
-                 for side in ("long", "short")]
-    bounds = [Bound.from_config(side, [0.01, 0.1]) for side, _ in key_paths]
-    assert configs_to_individuals_streaming([seed], bounds, sig_digits=6, key_paths=key_paths) == (
-        [(0.031, 0.078)], 1,
+    search = get_template_config()
+    search["optimize"]["bounds"] = {
+        side: {"strategy": {"trailing_martingale": {"entry": {"initial_qty_fraction": [0.01, 0.1]}}}}
+        for side in ("long", "short")
+    }
+    for side in ("long", "short"):
+        search["bot"][side]["enabled"] = True
+    shape = build_optimization_shape(prepare_config(search, verbose=False))
+    individuals, count = configs_to_individuals_streaming(
+        [seed], shape.bounds, sig_digits=shape.sig_digits, optimization_shape=shape,
     )
+    assert count == len(individuals) == 1
+    values = {tuple(path): value for (_, path), value in zip(shape.key_paths, individuals[0])}
+    for side, expected in (("long", 0.031), ("short", 0.078)):
+        assert values[("bot", side, "strategy", "trailing_martingale", "entry", "initial_qty_fraction")] == expected
 
 
 def test_merge_paretos_requires_consistent_schema_for_current_results(tmp_path):
