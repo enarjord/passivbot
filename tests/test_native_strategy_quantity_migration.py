@@ -100,7 +100,7 @@ def test_frozen_v8_flat_bound_collision_rejects_conflicting_authority():
 ])
 def test_released_public_names_do_not_depend_on_runtime_projection(monkeypatch, kind, old, new):
     from config import strategy_spec
-    from config.public_names import released_public_path
+    from config.migrations.released_public_names import released_public_path
 
     def unexpected_current_metadata(*args, **kwargs):
         raise AssertionError("released spelling conversion must not read current native metadata")

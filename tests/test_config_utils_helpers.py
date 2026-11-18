@@ -20,18 +20,12 @@ from config.project import project_config
 from config.runtime_compile import compile_runtime_config
 from config.strategy_spec import get_strategy_defaults
 from config.validate import validate_config
-from config_transform import ConfigTransformTracker, record_transform
 from utils import normalize_coins_source
 from config_utils import (
-    _apply_backward_compatibility_renames,
     _apply_non_live_adjustments,
     _ensure_bot_defaults_and_bounds,
     _hydrate_missing_template_fields,
-    _migrate_btc_collateral_settings,
-    _migrate_config_version,
-    _migrate_empty_means_all_approved,
     _normalize_position_counts,
-    _rename_config_keys,
     _sync_with_template,
     CLI_HELP_GROUPS,
     FIELD_RUNTIME_RULES,
@@ -471,56 +465,6 @@ def test_ensure_bot_defaults_and_bounds_adds_missing_values():
     )
 
 
-def test_rename_config_keys_moves_legacy_fields():
-    config = {
-        "live": {
-            "minimum_market_age_days": 12,
-            "noisiness_rolling_mean_window_size": 34,
-        },
-        "backtest": {"exchange": "binance", "panic_market_slippage_pct": 0.0015},
-    }
-
-    _rename_config_keys(config, verbose=False)
-
-    assert "minimum_market_age_days" not in config["live"]
-    assert config["live"]["minimum_coin_age_days"] == 12
-    assert config["live"]["ohlcv_rolling_window"] == 34
-    assert config["backtest"]["exchanges"] == ["binance"]
-    assert config["backtest"]["market_order_slippage_pct"] == pytest.approx(0.0015)
-    assert "exchange" not in config["backtest"]
-    assert "panic_market_slippage_pct" not in config["backtest"]
-
-
-def test_rename_config_keys_records_tracker_events():
-    config = {
-        "live": {"minimum_market_age_days": 5},
-        "backtest": {"exchange": "binance", "panic_market_slippage_pct": 0.0015},
-    }
-    tracker = ConfigTransformTracker()
-
-    _rename_config_keys(config, verbose=False, tracker=tracker)
-
-    summary = tracker.summary()
-    assert any(
-        event["action"] == "rename"
-        and event["from"] == "live.minimum_market_age_days"
-        and event["to"] == "live.minimum_coin_age_days"
-        for event in summary
-    )
-    assert any(
-        event["action"] == "rename"
-        and event["from"] == "backtest.exchange"
-        and event["to"] == "backtest.exchanges"
-        for event in summary
-    )
-    assert any(
-        event["action"] == "rename"
-        and event["from"] == "backtest.panic_market_slippage_pct"
-        and event["to"] == "backtest.market_order_slippage_pct"
-        for event in summary
-    )
-
-
 def test_explicit_v8_conversion_renames_legacy_panic_market_slippage_pct(tmp_path):
     raw = {
         "config_version": "v8.6.0",
@@ -642,58 +586,6 @@ def test_normalize_coins_source_supports_explicit_all():
     assert normalized_partial == {"long": ["BTC"], "short": ["all"]}
 
 
-def test_migrate_empty_means_all_approved_converts_global_empty_to_all(caplog):
-    config = {
-        "live": {
-            "approved_coins": [],
-            "ignored_coins": {"long": [], "short": []},
-            "empty_means_all_approved": True,
-        }
-    }
-    tracker = ConfigTransformTracker()
-
-    with caplog.at_level(logging.WARNING):
-        _migrate_empty_means_all_approved(config, verbose=False, tracker=tracker)
-
-    assert config["live"]["approved_coins"] == "all"
-    assert "empty_means_all_approved" not in config["live"]
-    summary = tracker.summary()
-    assert any(
-        event["action"] == "remove" and event["path"] == "live.empty_means_all_approved"
-        for event in summary
-    )
-    assert any(
-        event["action"] == "update"
-        and event["path"] == "live.approved_coins"
-        and event["new"] == "all"
-        for event in summary
-    )
-    assert any("deprecated" in rec.message for rec in caplog.records)
-
-
-def test_migrate_empty_means_all_approved_keeps_explicit_per_side_values():
-    config = {
-        "live": {
-            "approved_coins": {"long": ["BTC"], "short": []},
-            "ignored_coins": {"long": [], "short": []},
-            "empty_means_all_approved": True,
-        }
-    }
-
-    _migrate_empty_means_all_approved(config, verbose=False)
-
-    assert config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
-    assert "empty_means_all_approved" not in config["live"]
-
-
-def test_migrate_config_version_sets_current_schema_version():
-    config = {}
-
-    _migrate_config_version(config, verbose=False)
-
-    assert config["config_version"] == get_template_config()["config_version"]
-
-
 def test_loss_gate_default_is_consistent_across_template_and_formatting():
     template = get_template_config()
     assert template["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == pytest.approx(1.0)
@@ -719,19 +611,6 @@ def test_loss_gate_default_is_consistent_across_template_and_formatting():
     assert loaded["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == pytest.approx(1.0)
     assert loaded["live"]["fills"]["fallback_fee_fraction"] == pytest.approx(0.0002)
     assert loaded["live"]["fills"]["max_abs_fee_fraction"] == pytest.approx(0.001)
-
-
-def test_migrate_btc_collateral_settings_converts_bool():
-    config = {"backtest": {"use_btc_collateral": True}}
-    _migrate_btc_collateral_settings(config, verbose=False)
-    assert config["backtest"]["btc_collateral_cap"] == pytest.approx(1.0)
-    assert config["backtest"]["btc_collateral_ltv_cap"] is None
-    assert "use_btc_collateral" not in config["backtest"]
-
-    config = {"backtest": {"use_btc_collateral": False}}
-    _migrate_btc_collateral_settings(config, verbose=False)
-    assert config["backtest"]["btc_collateral_cap"] == pytest.approx(0.0)
-    assert config["backtest"]["btc_collateral_ltv_cap"] is None
 
 
 def test_normalize_limit_entries_supports_new_schema():
@@ -1233,37 +1112,6 @@ def test_limits_structural_equal_detects_canonical_entries():
     ]
     normalized = config_utils.normalize_limit_entries(raw)
     assert config_utils._limits_structurally_equal(raw, normalized)
-
-
-def test_apply_backward_compatibility_renames_moves_filter_keys():
-    config = {
-        "bot": {
-            "long": {
-                "filter_noisiness_rolling_window": 42,
-                "filter_volatility_ema_span_1m": 84,
-                "filter_volume_rolling_window": 21,
-            },
-            "short": {"filter_volume_rolling_window": 11},
-        },
-        "optimize": {
-            "bounds": {
-                "long_filter_noisiness_rolling_window": [10, 20],
-                "short_filter_volume_rolling_window": [30, 40],
-            }
-        },
-    }
-
-    _apply_backward_compatibility_renames(config, verbose=False)
-
-    assert "filter_noisiness_rolling_window" not in config["bot"]["long"]
-    assert config["bot"]["long"]["forager_volatility_ema_span_1m"] == 84
-    assert config["bot"]["long"]["forager_volume_ema_span_1m"] == 21
-    assert config["bot"]["short"]["forager_volume_ema_span_1m"] == 11
-    bounds = config["optimize"]["bounds"]
-    assert "long_filter_noisiness_rolling_window" not in bounds
-    assert bounds["long_forager_volatility_ema_span_1m"] == [10, 20]
-    assert "short_filter_volume_rolling_window" not in bounds
-    assert bounds["short_forager_volume_ema_span_1m"] == [30, 40]
 
 
 def test_compile_runtime_config_adds_internal_forager_aliases():

@@ -952,6 +952,9 @@ its own version heading. See [release status](docs/releases.md).
   metadata from authored settings before validation. Commands printed by Pareto can
   load the selected candidate while unknown configuration fields remain errors.
 
+- Remove the deprecated Python exchange-name wrappers. Use `to_ccxt_exchange_id`
+  and `to_standard_exchange_name` for exchange-name conversion.
+
 - Add opt-in `migrate-config-v9 --best-effort` to infer supported `_ew` replacements,
   EMA spans and changed migration policies, warning and reporting every guess while
   preserving explicit choices and strict normal loading. Preserve metric options

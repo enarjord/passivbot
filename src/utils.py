@@ -543,31 +543,6 @@ def to_standard_exchange_name(exchange: str) -> str:
     return ex
 
 
-# Deprecated aliases for backward compatibility - will be removed in a future release
-def normalize_exchange_name(exchange: str) -> str:
-    """Deprecated: Use to_ccxt_exchange_id() instead."""
-    import warnings
-
-    warnings.warn(
-        "normalize_exchange_name() is deprecated, use to_ccxt_exchange_id() instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return to_ccxt_exchange_id(exchange)
-
-
-def denormalize_exchange_name(exchange: str) -> str:
-    """Deprecated: Use to_standard_exchange_name() instead."""
-    import warnings
-
-    warnings.warn(
-        "denormalize_exchange_name() is deprecated, use to_standard_exchange_name() instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return to_standard_exchange_name(exchange)
-
-
 def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout_ms: int = 60_000):
     """
     Return a ccxt async-support exchange instance for the given exchange id.
