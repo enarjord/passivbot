@@ -477,6 +477,7 @@ struct TrailingMartingaleMulticoinSideState {
     float ema0[MAX_COINS];
     float ema1[MAX_COINS];
     float ema2[MAX_COINS];
+    float ema_residual[3][MAX_COINS];
     float volatility_1m[MAX_COINS];
     float volatility_1h[MAX_COINS];
     AdaptiveTiming adaptive[MAX_COINS];
@@ -2796,6 +2797,9 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.ema0[c] = seed_close;
         side.ema1[c] = seed_close;
         side.ema2[c] = seed_close;
+        side.ema_residual[0][c] = 0.0f;
+        side.ema_residual[1][c] = 0.0f;
+        side.ema_residual[2][c] = 0.0f;
         side.volatility_1m[c] = 0.0f;
         side.volatility_1h[c] = 0.0f;
         side.forager_volume_ema[c] = seed_volume;
@@ -2947,6 +2951,17 @@ inline float accumulate_tm_multicoin_side_unrealized_pnl(
     return accumulator;
 }
 
+// Retain the discarded part of each FP32 update. Its influence decays at the
+// same rate as the scalar EMA, including when an update is below one price ULP.
+inline void advance_tm_entry_ema(
+    thread float& ema, thread float& residual, float close, float alpha
+) {
+    const float increment = fma(alpha, close - ema, (1.0f - alpha) * residual);
+    const float next = ema + increment;
+    residual = increment - (next - ema);
+    ema = next;
+}
+
 inline void update_tm_multicoin_side_indicators(
     thread TrailingMartingaleMulticoinSideState& side,
     thread const TrailingMartingaleMulticoinSideConfig& config,
@@ -2985,14 +3000,14 @@ inline void update_tm_multicoin_side_indicators(
 #if PASSIVBOT_UNSTUCK_EMA_ENABLED
         update_unstuck_ema_band(side.unstuck_ema[c], close);
 #endif
-        side.ema0[c] = fma(
-            side.alpha0_coin[c], close - side.ema0[c], side.ema0[c]
+        advance_tm_entry_ema(
+            side.ema0[c], side.ema_residual[0][c], close, side.alpha0_coin[c]
         );
-        side.ema1[c] = fma(
-            side.alpha1_coin[c], close - side.ema1[c], side.ema1[c]
+        advance_tm_entry_ema(
+            side.ema1[c], side.ema_residual[1][c], close, side.alpha1_coin[c]
         );
-        side.ema2[c] = fma(
-            side.alpha2_coin[c], close - side.ema2[c], side.ema2[c]
+        advance_tm_entry_ema(
+            side.ema2[c], side.ema_residual[2][c], close, side.alpha2_coin[c]
         );
         if (side.alpha_1m_coin[c] > 0.0f) {
             side.volatility_1m[c] = fma(
@@ -3037,6 +3052,9 @@ inline void update_tm_multicoin_side_indicators(
             side.ema0[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count, lo, bootstrap_counts[c * 10 + 0], 0, observed);
             side.ema1[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count, mid, bootstrap_counts[c * 10 + 1], 0, observed);
             side.ema2[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count, hi, bootstrap_counts[c * 10 + 2], 0, observed);
+            side.ema_residual[0][c] = 0.0f;
+            side.ema_residual[1][c] = 0.0f;
+            side.ema_residual[2][c] = 0.0f;
             if (side.alpha_1m_coin[c] > 0.0f)
                 side.volatility_1m[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
                     coin_override_or(coin_overrides, c, 3, config.log_range_ema_span_candles), bootstrap_counts[c * 10 + 6], 1, observed);
