@@ -102,15 +102,11 @@ def test_partial_file_extracts_only_explicit_values_and_inline_wins():
     }
 
 
-@pytest.mark.parametrize(
-    ("value", "error", "message"),
-    [
-        ("false", TypeError, "must be numeric or boolean, not a string"),
-        (None, TypeError, "may not be null"),
-    ],
-)
-def test_invalid_boolean_override_types_fail(value, error, message):
-    with pytest.raises(error, match=message):
+@pytest.mark.parametrize("value", ["false", None])
+def test_invalid_boolean_override_types_fail(value):
+    with pytest.raises(
+        TypeError, match=r"coin_overrides\.BTC\.bot\.long\.unstuck\.enabled must be a boolean"
+    ):
         _parse({"BTC": {"bot": {"long": {"unstuck": {"enabled": value}}}}})
 
 
