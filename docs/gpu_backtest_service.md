@@ -500,7 +500,7 @@ hard crash. Native evolution restores the checkpoint's cohort and generation sta
 archive row counts do not determine its generation budget. Perfect replay of scheduling
 is not required, and the result log, Pareto files and checkpoint are not a single transaction.
 An initial zero-result checkpoint can resume before its first completed seed/candidate.
-Version 3 retains compact partial screening evidence separately from fitness
+Version 4 retains compact partial screening evidence separately from fitness
 and distinguishes screening, promoted full evaluation and idle stages. Row-cache loss may
 repeat GPU work, while already checkpointed selection progress is retained. Earlier
 experimental native and screening/validation checkpoints require a fresh run; saved result

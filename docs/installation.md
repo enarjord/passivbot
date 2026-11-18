@@ -104,7 +104,8 @@ Before updating a deployed checkout, read the target revision's
 [release and upgrade notes](releases.md). Keep the working revision, environment, launch command,
 and compatible configuration available for rollback. For a v8-to-v9 upgrade, prepare and test
 the new installation and migrated configuration separately before switching the live runtime.
-Follow the [migration guide](v8_to_v9_migration.md) for supported inputs and qualification.
+Follow the [v9 upgrade checklist](release_notes_v9.0.0.md#upgrade-from-v8) and
+[migration guide](v8_to_v9_migration.md) for supported inputs and qualification.
 
 For an in-place update on a clean tracking checkout after reviewing compatibility, reactivate
 the environment and reinstall the profile you use.

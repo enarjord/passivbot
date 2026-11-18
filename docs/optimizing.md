@@ -76,6 +76,11 @@ Legacy sessions without `session.json` keep their original seed policy. Fresh ru
 new random run ID, even when their setup fingerprints match. Full SHA-256 setup fingerprints,
 run IDs and canonical setup inputs are available in `session.json`.
 
+Use `--resume` with a trusted local optimizer checkpoint. Python deserializes
+`checkpoint.pkl` before checking its fitness and version, and deserialization can execute
+code. Share candidate configurations or result files and evaluate imported seeds in a
+fresh run.
+
 For a prepared or transferred dataset, require the download report at startup:
 
 ```shell
