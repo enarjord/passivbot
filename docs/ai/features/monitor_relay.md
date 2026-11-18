@@ -17,6 +17,10 @@ Send the available snapshot envelopes first, then replay, then live event and hi
 files to EOF at startup. Read the connection replay tail directly from current files, independently
 of live poll offsets. Tail newly discovered current files from the beginning.
 
+Register the bounded live queue before sending snapshots and replay. Buffer new publications during
+those sends and release the subscription on every exit. Replay and queued live delivery may overlap.
+Queue overflow retains the existing resync-required signal during connection setup.
+
 Warn and skip invalid JSON lines. Log relay poll failures and continue because the monitor root on
 disk remains authoritative.
 
