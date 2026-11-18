@@ -19,9 +19,6 @@ its own version heading. See [release status](docs/releases.md).
 
 - Show disabled sides explicitly in the live startup banner’s position and exposure limits.
 
-- Version saved backtest, suite, and optimizer records with authored configuration kept
-  separately from metrics and provenance. Existing saved v9 candidates remain readable.
-
 - Preserve completed planning, ordinary execution and protective work across the
   internal passes of an offline fake-live replay step.
 
@@ -980,6 +977,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Reuse unchanged parsed candle shards with bounded memory and file-identity invalidation, and avoid sorting the full retained history when overlapping source rows are identical. Partial reads that lose either a legacy shard or its primary overlay remain retryable. Native Windows keeps ordinary disk reads because its file creation clock cannot safely invalidate in-place corrections. Corrections, strict audits, mutable consumer arrays and restart reconstruction retain their existing behavior.
 - Avoid a second HSL history reconstruction when a complete native minute grid lacks only the non-minute current endpoint. Preserve current-fact validation, decisions, lifecycle events and estimator diagnostics in live and simulator evaluation.
+
+- Version saved backtest, suite, and optimizer records with authored configuration kept
+  separately from metrics and provenance. Existing saved v9 candidates remain readable.
 
 - Reuse prepared GPU optimizer candidate configs when recording results, avoiding
   repeated materialization while preserving exact candidate and checkpoint semantics.
