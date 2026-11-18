@@ -2587,7 +2587,6 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
         entry_trailing_threshold_base_fraction: extract_optional_f64(dict, "entry_trailing_threshold_base_fraction")?,
         forager_log_range_ema_span_minutes: extract_value(dict, "forager_log_range_ema_span_minutes")?,
         forager_volume_ema_span_minutes: extract_value(dict, "forager_volume_ema_span_minutes")?,
-        _legacy_filter_volatility_drop_pct: 0.0,
         forager_score_weights: dict
             .get_item("forager_score_weights")
             .ok()

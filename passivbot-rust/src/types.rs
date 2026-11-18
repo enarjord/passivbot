@@ -596,8 +596,6 @@ pub struct BotParams {
     pub entry_trailing_threshold_base_fraction: f64,
     pub forager_log_range_ema_span_minutes: f64,
     pub forager_volume_ema_span_minutes: f64,
-    #[serde(default, skip_serializing, rename = "filter_volatility_drop_pct")]
-    pub _legacy_filter_volatility_drop_pct: f64,
     #[serde(default)]
     pub forager_score_weights: ForagerScoreWeights,
     #[serde(default)]
@@ -674,7 +672,6 @@ impl Default for BotParams {
             entry_trailing_threshold_base_fraction: 0.0,
             forager_log_range_ema_span_minutes: 0.0,
             forager_volume_ema_span_minutes: 0.0,
-            _legacy_filter_volatility_drop_pct: 0.0,
             forager_score_weights: ForagerScoreWeights::default(),
             is_forced_active: false,
             entry_eligible: true,

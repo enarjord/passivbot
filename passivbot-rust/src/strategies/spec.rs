@@ -9,8 +9,6 @@ pub struct StrategyParameterSpec {
     pub optimize_key: String,
     pub default: f64,
     pub bounds: Vec<f64>,
-    pub mirror_from: Option<&'static str>,
-    pub legacy_config_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -275,11 +273,7 @@ const EMA_ANCHOR_PARAM_SEEDS: &[ParamSeed] = &[
     },
 ];
 
-fn build_strategy_spec(
-    strategy_kind: &'static str,
-    param_seeds: &[ParamSeed],
-    legacy_path_builder: impl Fn(&str, &'static str) -> Vec<String>,
-) -> StrategySpec {
+fn build_strategy_spec(strategy_kind: &'static str, param_seeds: &[ParamSeed]) -> StrategySpec {
     let mut defaults: BTreeMap<&'static str, BTreeMap<&'static str, f64>> = BTreeMap::new();
     defaults.insert("long", BTreeMap::new());
     defaults.insert("short", BTreeMap::new());
@@ -308,8 +302,6 @@ fn build_strategy_spec(
                 optimize_key,
                 default,
                 bounds: bounds.to_vec(),
-                mirror_from: None,
-                legacy_config_paths: legacy_path_builder(side, seed.name),
             });
         }
     }
@@ -357,8 +349,6 @@ fn build_nested_strategy_spec(
                 optimize_key,
                 default,
                 bounds: bounds.to_vec(),
-                mirror_from: None,
-                legacy_config_paths: Vec::new(),
             });
         }
     }
@@ -388,7 +378,5 @@ pub fn trailing_martingale_spec() -> StrategySpec {
 }
 
 pub fn ema_anchor_spec() -> StrategySpec {
-    build_strategy_spec("ema_anchor", EMA_ANCHOR_PARAM_SEEDS, |_side, _name| {
-        Vec::new()
-    })
+    build_strategy_spec("ema_anchor", EMA_ANCHOR_PARAM_SEEDS)
 }

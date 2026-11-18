@@ -370,7 +370,14 @@ def test_json_rejects_retired_shared_realized_memory_fields(retired):
         compute(pbr, inp)
 
 
-@pytest.mark.parametrize("retired,value", [("filter_volume_drop_pct", 0.5), ("risk_twel_entry_gate_enabled", False)])
+@pytest.mark.parametrize(
+    "retired,value",
+    [
+        ("filter_volume_drop_pct", 0.5),
+        ("filter_volatility_drop_pct", 0.5),
+        ("risk_twel_entry_gate_enabled", False),
+    ],
+)
 @pytest.mark.parametrize("location", ["global", "symbol"])
 def test_json_rejects_retired_bot_policy_controls(retired, value, location):
     import passivbot_rust as pbr
