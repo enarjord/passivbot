@@ -190,8 +190,12 @@ def _coerce_legacy_bool(value) -> bool:
 
 
 def migrate_empty_means_all_approved(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
+    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None,
+    *, base_config_path="", record=None,
 ) -> None:
+    from config.universe import resolve_universe_source_path
+    from .shared_policy import released_v8_coin_list_fallback
+
     live = result.setdefault("live", {})
     if "empty_means_all_approved" not in live:
         return
@@ -212,11 +216,25 @@ def migrate_empty_means_all_approved(
     explicit_side_source = isinstance(approved_source, dict) and any(
         key in approved_source for key in ("long", "short")
     )
-    normalized = normalize_coins_source(approved_source, allow_all=True)
-    if explicit_side_source or any(normalized[pside] for pside in ("long", "short")):
+    if explicit_side_source:
+        return
+    fallback = released_v8_coin_list_fallback(approved_source)
+    resolved_source = approved_source
+    if fallback is not None:
+        selected = resolve_universe_source_path(
+            approved_source, base_config_path=base_config_path, discover_ambiguous=True,
+        )
+        resolved_source = str(selected or fallback)
+        if selected is not None:
+            fallback = None
+    normalized = normalize_coins_source(resolved_source)
+    if any(normalized[pside] for pside in ("long", "short")):
         return
 
     live["approved_coins"] = "all"
+    if fallback is not None and record is not None:
+        record("live.approved_coins", approved_source, "all",
+               f"historical released-v8 coin-list fallback {fallback} is empty and empty_means_all_approved is enabled")
     _log_config(
         verbose,
         logging.WARNING,
@@ -227,7 +245,7 @@ def migrate_empty_means_all_approved(
         tracker.update(["live", "approved_coins"], approved_source, "all")
 
 
-def apply_released_v8_layout_transforms(result: dict) -> None:
+def apply_released_v8_layout_transforms(result: dict, *, base_config_path, record) -> None:
     from .churn_gate import migrate_initial_entry_distance_gate
     from .gpu_population import migrate_gpu_population
     from .gpu_screening import migrate_gpu_screening
@@ -238,7 +256,9 @@ def apply_released_v8_layout_transforms(result: dict) -> None:
     migrate_initial_entry_distance_gate(result, verbose=False)
     apply_backward_compatibility_renames(result, verbose=False)
     migrate_btc_collateral_settings(result, verbose=False)
-    migrate_empty_means_all_approved(result, verbose=False)
+    migrate_empty_means_all_approved(
+        result, verbose=False, base_config_path=base_config_path, record=record,
+    )
     migrate_suite_to_scenarios(result, verbose=False)
     migrate_reducer_terminology(result, verbose=False)
     rename_config_keys(result, verbose=False)

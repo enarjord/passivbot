@@ -293,7 +293,7 @@ def test_released_fallback_coin_file_binding_preserves_reloadable_symlink(tmp_pa
 
 
 @pytest.mark.parametrize('wrapped', [False, True])
-@pytest.mark.parametrize('fallback', ['repo', 'cwd', 'legacy_alias'])
+@pytest.mark.parametrize('fallback', ['repo', 'cwd', 'legacy_alias', 'real_old_name'])
 def test_released_explicit_file_fallback_preserves_directional_authority(tmp_path, monkeypatch, wrapped, fallback):
     import utils
     repo, cwd, inputs = (tmp_path/name for name in ('repo','cwd','inputs'))
@@ -301,18 +301,80 @@ def test_released_explicit_file_fallback_preserves_directional_authority(tmp_pat
         folder.mkdir()
     monkeypatch.setattr(utils, 'PROJECT_ROOT', repo)
     monkeypatch.chdir(cwd)
-    selected = (cwd if fallback == 'cwd' else repo)/'configs'/'approved_coins.json'
+    name = ('configs/approved_coins_topmcap.json'
+            if fallback in {'legacy_alias', 'real_old_name'} else 'configs/approved_coins.json')
+    selected = (
+        inputs / name if fallback == 'real_old_name'
+        else (cwd if fallback == 'cwd' else repo) / 'configs' / 'approved_coins.json'
+    )
     selected.parent.mkdir()
     selected.write_text('["BTC"]')
-    name = 'configs/approved_coins_topmcap.json' if fallback == 'legacy_alias' else 'configs/approved_coins.json'
+    if fallback == 'real_old_name':
+        decoy = repo / 'configs' / 'approved_coins.json'
+        decoy.parent.mkdir()
+        decoy.write_text('["SOL"]')
     raw = released('trailing_martingale')
     raw['live']['approved_coins'] = [name] if wrapped else name
     before = deepcopy(raw)
-    exported = migrate(raw, base_config_path=str(inputs/'config.json'), memory_span_minutes=123.5).config
+    result = migrate(raw, base_config_path=str(inputs/'config.json'), memory_span_minutes=123.5)
+    exported = result.config
+    expected_binding = [str(selected)] if wrapped else str(selected)
+    alias_changes = [change for change in result.changes if 'coin-list fallback' in change['reason']]
+    if fallback == 'legacy_alias':
+        assert len(alias_changes) == 1
+        assert alias_changes[0]['old'] == raw['live']['approved_coins']
+        assert alias_changes[0]['new'] == expected_binding
+    else:
+        assert not alias_changes
     assert exported['bot']['global']['universe']['approved_coins'] == []
     for side in ('long','short'):
-        assert exported['bot'][side]['universe']['approved_coins'] == ([str(selected)] if wrapped else str(selected))
+        assert exported['bot'][side]['universe']['approved_coins'] == expected_binding
     selected.write_text('["ETH"]')
     effective = prepare_config(exported, base_config_path=str(tmp_path/'output.json'), verbose=False)
     assert resolve_universe_sources(effective, 'approved_coins')[0] == {'long':['ETH'],'short':['ETH']}
     assert raw == before
+
+
+@pytest.mark.parametrize('owner', ['scenario', 'fixed'])
+def test_released_patch_binds_historical_coin_file_fallback(tmp_path, monkeypatch, owner):
+    import utils
+
+    repo = tmp_path / 'repo'
+    selected = repo / 'configs' / 'approved_coins.json'
+    selected.parent.mkdir(parents=True)
+    selected.write_text('{"long":["BTC"],"short":["ETH"]}')
+    monkeypatch.setattr(utils, 'PROJECT_ROOT', repo)
+    monkeypatch.chdir(tmp_path)
+    raw = released('trailing_martingale')
+    patch = {'live.approved_coins': ['sources/approved_coins_topmcap.txt']}
+    if owner == 'fixed':
+        raw['optimize']['fixed_runtime_overrides'] = patch
+    else:
+        raw['backtest']['scenarios'] = [{'label': 'fallback', 'overrides': patch}]
+    result = migrate(raw, memory_span_minutes=123.5)
+    changes = [change for change in result.changes if 'coin-list fallback' in change['reason']]
+    assert [change['new'] for change in changes] == [[str(selected)]]
+    effective = prepare_config(result.config, verbose=False)
+    if owner == 'fixed':
+        _apply_config_overrides(effective, effective['optimize']['fixed_runtime_overrides'])
+    else:
+        apply_scenario_overrides(effective, effective['backtest']['scenarios'][0]['overrides'])
+    assert resolve_universe_sources(effective, 'approved_coins')[0] == {'long': ['BTC'], 'short': ['ETH']}
+
+
+def test_released_empty_coin_file_fallback_preserves_explicit_all_policy(tmp_path, monkeypatch):
+    import utils
+
+    repo = tmp_path / 'repo'
+    selected = repo / 'configs' / 'approved_coins.json'
+    selected.parent.mkdir(parents=True)
+    selected.write_text('[]')
+    monkeypatch.setattr(utils, 'PROJECT_ROOT', repo)
+    monkeypatch.chdir(tmp_path)
+    raw = released('trailing_martingale')
+    raw['live']['approved_coins'] = 'approved_coins_topmcap.json'
+    raw['live']['empty_means_all_approved'] = True
+    result = migrate(raw, memory_span_minutes=123.5)
+    assert result.config['bot']['global']['universe']['approved_coins'] == 'all'
+    assert any(change['new'] == 'all' and str(selected) in change['reason']
+               for change in result.changes)

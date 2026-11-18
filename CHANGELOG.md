@@ -903,6 +903,8 @@ its own version heading. See [release status](docs/releases.md).
   reloadable, add `forager.always_include`, and preserve nullable simulation minimum-cost
   inheritance. Released-v8 conversion preserves forced selections through scenario and fixed
   mode replacements. Update canonical CLI paths, cleanup/preflight tools and public examples.
+- Treat missing authored v9 coin-list paths as unavailable. Restrict historical
+  `approved_coins_topmcap` filename substitution to the released-v8 converter and report its choice.
 
 - Organize account-wide bot policy under `bot.portfolio`, with shared directional defaults under
   `bot.global` alongside `bot.long` and `bot.short`,
