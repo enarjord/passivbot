@@ -1792,7 +1792,7 @@ its own version heading. See [release status](docs/releases.md).
 
 Changes since [v8.1.0](https://github.com/enarjord/passivbot/releases/tag/v8.1.0).
 The earlier incremental entries are preserved in the
-[detailed development history](docs/development_history_since_v8.1.0.md).
+[detailed development history](https://github.com/enarjord/passivbot/blob/0acfeaae6d70dc5527dc1e6ff56cb6e2ace06655/docs/development_history_since_v8.1.0.md).
 
 ### Upgrade notes
 

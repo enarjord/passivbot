@@ -70,7 +70,7 @@ Review status output before sharing it; include only relevant public code change
 - [v8.1.0 — 2026-08-10](release_notes_v8.1.0.md)
 - [v8.0.0 — 2026-07-14](release_notes_v8.0.0.md), including the v7 upgrade boundary
 - [Complete changelog](https://github.com/enarjord/passivbot/blob/master/CHANGELOG.md)
-- [Earlier post-v8.1.0 implementation ledger](development_history_since_v8.1.0.md)
+- [Earlier post-v8.1.0 implementation ledger](https://github.com/enarjord/passivbot/blob/0acfeaae6d70dc5527dc1e6ff56cb6e2ace06655/docs/development_history_since_v8.1.0.md)
 
 Contributors should add net user-facing changes under `Unreleased`, combining superseded entries
 for the same feature. Leave tagged sections faithful to their release. Version bumps, release
