@@ -174,6 +174,7 @@ async def test_exact_fresh_probe_recovers_after_restart_and_survives_revalidatio
         [trade(positionSide="BOTH")],
         [trade(id=None)],
         [trade(side="SELL")],
+        [trade(qty=True)],
         [trade(price="NaN")],
         [trade(price="bad")],
         [trade(price="100.01")],
@@ -271,9 +272,7 @@ async def test_rejected_and_saturated_probe_are_scoped(tmp_path, caplog):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "error", [AuthenticationError, ExchangeError, InvalidNonce, RateLimitExceeded]
-)
+@pytest.mark.parametrize("error", [AuthenticationError, ExchangeError, InvalidNonce])
 async def test_probe_preserves_fill_owner_exchange_error_policy(tmp_path, error):
     bot, _, query = await pending_bot(tmp_path)
     query.side_effect = error("retry through owner")
@@ -344,6 +343,52 @@ async def test_hsl_probe_timeout_keeps_published_fill_observation_valid(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error", [RateLimitExceeded, RequestTimeout, OSError])
+async def test_hsl_probe_transport_failure_keeps_authoritative_fills_ready(
+    tmp_path, error
+):
+    bot, manager, query = await pending_bot(tmp_path)
+    bot.config["bot"]["portfolio"]["hsl"]["scope"] = "coin"
+    bot.config["bot"]["long"]["hsl"]["enabled"] = True
+    bot._health_rate_limits = 0
+    bot.init_pnls = AsyncMock()
+    manager.set_history_scope("all")
+    manager.refresh_latest = AsyncMock()
+    diagnostic_events = []
+    bot._monitor_record_event = (
+        lambda kind, tags, payload, **kwargs: diagnostic_events.append((kind, payload))
+    )
+    failure = error("optional query unavailable")
+    if error is not OSError:
+        failure.retry_after_seconds = 120.0
+    query.side_effect = failure
+
+    started = asyncio.get_running_loop().time()
+    assert await hsl_live.owner(bot)._refresh_history({})
+    assert bot._hsl_fill_observation is not None
+    assert "fills" not in bot._authoritative_pending_confirmations
+    if error is not OSError:
+        assert bot._trailing_reset_probe_resume_at >= started + 120.0
+        # The endpoint backoff also gates other probes with no per-side cooldown.
+        bot._trailing_reset_probe_retry.clear()
+        await bot._refresh_trailing_reset_evidence(3)
+        query.assert_awaited_once()
+    expected_rate_limits = int(error is RateLimitExceeded)
+    assert bot._health_rate_limits == expected_rate_limits
+    rate_limit_events = [
+        payload for kind, payload in diagnostic_events if kind == "error.exchange"
+    ]
+    assert len(rate_limit_events) == expected_rate_limits
+    if rate_limit_events:
+        assert rate_limit_events[0] == {
+            "source": "trailing_reset_probe",
+            "message": "rate limit exceeded",
+        }
+    await bot.update_trailing_data()
+    assert (SYMBOL, "long") in bot._trailing_pending_fill_confirmations
+
+
+@pytest.mark.asyncio
 async def test_probe_rotates_past_four_unresolved_coin_sides(tmp_path):
     bot, manager, _ = await pending_bot(tmp_path)
     symbols = [f"TEST{i}/USDT:USDT" for i in range(6)]
@@ -367,8 +412,12 @@ async def test_probe_rotates_past_four_unresolved_coin_sides(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_probe_cannot_attach_to_position_that_changed_in_flight(tmp_path):
+@pytest.mark.parametrize("returned_to_same_facts", [False, True])
+async def test_probe_cannot_attach_to_position_that_changed_in_flight(
+    tmp_path, returned_to_same_facts
+):
     bot, _, query = await pending_bot(tmp_path)
+    minimum = bot._trailing_pending_fill_min_generations[(SYMBOL, "long")]
 
     async def changed_position(_request):
         bot._apply_positions_snapshot(
@@ -376,12 +425,29 @@ async def test_probe_cannot_attach_to_position_that_changed_in_flight(tmp_path):
                 {
                     "symbol": SYMBOL,
                     "position_side": "long",
-                    "size": 2.0,
+                    "size": 1.0 if returned_to_same_facts else 2.0,
                     "price": 100.0,
                     "lastUpdateTimestamp": TIMESTAMP + 1,
                 }
             ]
         )
+        if returned_to_same_facts:
+            # Equal size/price does not produce new fill confirmation debt,
+            # but the intervening update timestamp still invalidates this query.
+            bot._apply_positions_snapshot(
+                [
+                    {
+                        "symbol": SYMBOL,
+                        "position_side": "long",
+                        "size": 1.0,
+                        "price": 100.0,
+                        "lastUpdateTimestamp": TIMESTAMP,
+                    }
+                ]
+            )
+            assert (
+                bot._trailing_pending_fill_min_generations[(SYMBOL, "long")] == minimum
+            )
         return [trade()]
 
     query.side_effect = changed_position
@@ -389,6 +455,41 @@ async def test_probe_cannot_attach_to_position_that_changed_in_flight(tmp_path):
     query.assert_awaited_once()
     assert not getattr(bot, "_trailing_reset_evidence", {})
     assert (SYMBOL, "long") in bot._trailing_pending_fill_confirmations
+
+
+@pytest.mark.asyncio
+async def test_previous_candidate_must_remain_current_until_batch_publication(tmp_path):
+    bot, manager, _ = await pending_bot(tmp_path)
+    other = "ZZZ/USDT:USDT"
+    manager._events.append(
+        replace(manager._events[0], symbol=other, id="43", source_ids=["43"])
+    )
+    bot.positions[other] = {"long": bot.positions[SYMBOL]["long"].copy()}
+    bot._trailing_pending_fill_min_generations[(other, "long")] = 1
+    bot._trailing_fill_confirmation_diagnostics[(other, "long")] = {
+        "failed_predicates": ["fill_after_state_mismatch"]
+    }
+    original = manager.fetch_trailing_reset_fill
+    queried = []
+
+    async def acquire(symbol, pside, timestamp):
+        queried.append(symbol)
+        if symbol == SYMBOL:
+            return await original(symbol, pside, timestamp)
+        first = {"symbol": SYMBOL, "position_side": "long", "size": 1.0, "price": 100.0}
+        second = {**first, "symbol": other, "lastUpdateTimestamp": TIMESTAMP}
+        bot._apply_positions_snapshot(
+            [{**first, "lastUpdateTimestamp": TIMESTAMP + 1}, second]
+        )
+        bot._apply_positions_snapshot(
+            [{**first, "lastUpdateTimestamp": TIMESTAMP}, second]
+        )
+        return None
+
+    manager.fetch_trailing_reset_fill = acquire
+    await bot._refresh_trailing_reset_evidence(2)
+    assert queried == [SYMBOL, other]
+    assert not getattr(bot, "_trailing_reset_evidence", {})
 
 
 def test_same_millisecond_reduction_cannot_be_discarded_by_explicit_open_replay(

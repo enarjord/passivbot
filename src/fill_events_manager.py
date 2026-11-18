@@ -3404,7 +3404,10 @@ class BinanceFetcher(BaseFetcher):
         if len(cohort) != 1:
             return None
         trade = cohort[0]
-        qty, price = _fill_float(trade.get("qty")), _fill_float(trade.get("price"))
+        raw_qty, raw_price = trade.get("qty"), trade.get("price")
+        if isinstance(raw_qty, bool) or isinstance(raw_price, bool):
+            return None
+        qty, price = _fill_float(raw_qty), _fill_float(raw_price)
         if not (math.isfinite(qty) and qty > 0.0 and math.isfinite(price) and price > 0.0):
             return None
         side = trade["side"].lower()

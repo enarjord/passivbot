@@ -8599,6 +8599,13 @@ class Passivbot:
         )
 
     def _prune_trailing_reset_evidence(self, *, check_fills: bool = False) -> None:
+        if not check_fills:
+            retry = getattr(self, "_trailing_reset_probe_retry", {})
+            for key, (position, _) in tuple(retry.items()):
+                if position != self._trailing_reset_position_fact(*key):
+                    # Drop the in-flight request token as well as its cooldown.
+                    # A subsequent equal-looking snapshot cannot revive the proof.
+                    del retry[key]
         receipts = getattr(self, "_trailing_reset_evidence", {})
         if not receipts:
             return
@@ -12116,6 +12123,8 @@ class Passivbot:
         retry = getattr(self, "_trailing_reset_probe_retry", {})
         loop = asyncio.get_running_loop()
         now = loop.time()
+        if now < getattr(self, "_trailing_reset_probe_resume_at", 0.0):
+            return
         # One minute per unchanged pending position. Keep only active pending
         # candidates so closed positions cannot grow the retry map.
         retry = {
@@ -12142,7 +12151,8 @@ class Passivbot:
             ):
                 continue
             self._trailing_reset_probe_cursor = key
-            retry[key] = position, loop.time() + 60.0
+            request = position, loop.time() + 60.0
+            retry[key] = request
             symbol, pside = key
             try:
                 async with asyncio.timeout_at(deadline):
@@ -12154,26 +12164,45 @@ class Passivbot:
                     self._log_symbol(symbol), pside,
                 )
                 break
-            except (ccxt_errors.BadRequest, ccxt_errors.NetworkError, FillEventDataError) as exc:
-                if isinstance(
-                    exc,
-                    (
-                        ccxt_errors.InvalidNonce,
-                        ccxt_errors.RateLimitExceeded,
-                        ccxt_errors.DDoSProtection,
-                        ccxt_errors.OnMaintenance,
-                    ),
-                ) or getattr(exc, "retry_after_seconds", 0.0) > 0.0:
-                    raise
+            except ccxt_errors.InvalidNonce:
+                raise
+            except (
+                ccxt_errors.BadRequest, ccxt_errors.NetworkError, FillEventDataError, OSError
+            ) as exc:
                 logging.warning(
                     "[fills] trailing reset query unavailable | symbol=%s pside=%s "
                     "error_type=%s action=keep_trailing_pending",
                     self._log_symbol(symbol), pside, bounded_exception_type(exc),
                 )
+                retry_after = getattr(exc, "retry_after_seconds", 0.0)
+                if isinstance(
+                    exc,
+                    (
+                        ccxt_errors.RateLimitExceeded,
+                        ccxt_errors.DDoSProtection,
+                        ccxt_errors.OnMaintenance,
+                    ),
+                ) or retry_after > 0.0:
+                    self._trailing_reset_probe_resume_at = loop.time() + max(60.0, retry_after)
+                    if isinstance(exc, ccxt_errors.RateLimitExceeded):
+                        self._health_rate_limits += 1
+                        run_diagnostic_step(
+                            "record trailing reset probe rate limit",
+                            lambda: self._monitor_record_event(
+                                "error.exchange",
+                                ("error", "exchange", "rate_limit"),
+                                {
+                                    "source": "trailing_reset_probe",
+                                    "message": "rate limit exceeded",
+                                },
+                            ),
+                        )
+                    break
                 fill = None
             if (
                 fill is not None
                 and manager is self._pnls_manager
+                and retry.get(key) is request
                 and position == self._trailing_reset_position_fact(*key)
                 and minimum == self._trailing_pending_fill_min_generations.get(key)
             ):
@@ -12187,7 +12216,9 @@ class Passivbot:
         accepted = {
             key: receipt
             for key, receipt in received.items()
-            if self._fill_anchor_position_state_match_kind(
+            if key in retry
+            and retry[key][0] is receipt.position
+            and self._fill_anchor_position_state_match_kind(
                 *key, receipt.position.state, anchors.get(key), reset_evidence=receipt
             ) == "position_update_boundary"
         }

@@ -68,7 +68,10 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
    rotating the order and spacing retries for an unchanged position by at least one minute.
    The HSL owner publishes its canonical fill observation and readiness before probing. This proof leaves
    cached history, PnL, coverage metadata and HSL history acquisition times untouched.
-   A failed or incomplete probe leaves the affected trailing side pending. Successful
+   Transient probe failures leave the affected trailing side pending. Exchange backpressure
+   stops the optional batch, and its `Retry-After` delays further probes without reopening
+   canonical fill confirmation. A change to position facts while a probe is in flight
+   invalidates that proof even if a later observation repeats the initial position. Successful
    use emits a warning and `fill.position_open_boundary_recovery_used` with
    `recovery=position_update_fresh_single_fill` after every confirmation predicate clears.
    Ordinary recorded after-state price comparison accepts at most one effective
