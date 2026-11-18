@@ -6,8 +6,8 @@ experimental. GPU metrics supply fitness directly; independent CPU comparisons
 run outside optimization. Coverage and numerical decisions apply to the documented
 cases, without certifying every configuration, metric or search trajectory.
 Historical measurements remain below and in the
-[decision and progress log](gpu_optimizer_decision_log.md); the
-[final foundation status](#final-foundation-status) records completed development
+[archived decision log](https://github.com/enarjord/passivbot/blob/0acfeaae6d70dc5527dc1e6ff56cb6e2ace06655/docs/plans/gpu_optimizer_decision_log.md).
+The [final foundation status](#final-foundation-status) records completed development
 acceptance and its limits.
 
 ## Ownership and lifecycle foundation

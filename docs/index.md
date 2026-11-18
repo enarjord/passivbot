@@ -27,6 +27,7 @@ Reference guides:
 - [Container deployment](container_deployment.md) and [stock perpetuals](stock_perps.md)
 - [Offline fake-live testing](fake_live.md)
 
-Contributors: [Contributing](CONTRIBUTING.md), [engineering contracts](ai/README.md), and
-[release procedure](ai/runbooks/release.md). Files under `plans/`, case studies, and dated session
-summaries are historical/design material; use the maintained guides for current runtime behavior.
+For contributing, see [the contributor guide](CONTRIBUTING.md), the
+[engineering contracts](ai/README.md), and the [release procedure](ai/runbooks/release.md).
+Use the maintained guides for current runtime behavior. The public repository snapshot
+preserves the [archived development plans](https://github.com/enarjord/passivbot/tree/0acfeaae6d70dc5527dc1e6ff56cb6e2ace06655/docs/plans).
