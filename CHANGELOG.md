@@ -72,6 +72,10 @@ its own version heading. See [release status](docs/releases.md).
   `passivbot download`. Saved metrics and runtime metadata are ignored, and
   config validation still rejects unknown settings.
 
+- Require Boolean values for Boolean settings in v9 configs and overrides. Quoted
+  values such as `"false"` now fail validation instead of enabling monitoring,
+  raw fill payload retention, suite mode, or optimizer limits.
+
 - Reduce CPU use when verifying unchanged fill history during empty and duplicate-only refreshes.
 
 - Refresh the Trailing Martingale starter and inherited bot defaults for entry and close

@@ -296,8 +296,9 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
         raise ValueError("Limit entries must include a 'metric' field.")
     reject_retired_metric(metric, path="config.optimize.limits.metric")
     metric = canonicalize_metric_name(str(metric))
-    enabled = payload.get("enabled")
-    enabled = True if enabled is None else bool(enabled)
+    enabled = payload.get("enabled", True)
+    if type(enabled) is not bool:
+        raise TypeError(f"Limit enabled flag for {metric} must be a boolean.")
     raw_penalize_if = payload.get("penalize_if")
     if raw_penalize_if is None and not enabled:
         penalize_if = "greater_than"

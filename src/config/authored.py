@@ -6,7 +6,11 @@ This boundary performs no migration and does not import replay/exchange runtimes
 """
 
 from copy import deepcopy
+from functools import lru_cache
 
+from .access import get_optional_config_value
+from .field_registry import get_field_registry
+from .field_spec import FieldRegistry, FieldType
 from .scenario_overrides import normalize_scenario_overrides
 
 
@@ -28,9 +32,28 @@ _LIMIT_FIELDS = frozenset({
 })
 _SCORING_FIELDS = frozenset({"metric", "goal", "reducer", "scenario"})
 _MARKET_FIELDS = frozenset({"qty_step", "price_step", "min_qty", "min_cost", "c_mult"})
+_BOOLEAN_RECORD_COLLECTIONS = frozenset({
+    ("optimize", "limits"), ("optimize", "prefilter", "checks"),
+})
 
 
-from config.access import get_optional_config_value
+@lru_cache(maxsize=1)
+def _authored_boolean_fields():
+    # Boolean declarations do not depend on numeric defaults or strategy parameters.
+    return FieldRegistry(
+        field for field in get_field_registry() if field.types == (FieldType.BOOLEAN,)
+    )
+
+
+def validate_authored_boolean(value, parts, *, path):
+    if type(value) is bool:
+        return
+    field = _authored_boolean_fields().find(parts)
+    if field is None or (field.nullable and value is None):
+        return
+    expected = "a boolean or null" if field.nullable else "a boolean"
+    raise TypeError(f"{path} must be {expected}")
+
 
 def _mapping(value, path):
     if not isinstance(value, dict):
@@ -107,20 +130,17 @@ def validate_authored_config(config, template, *, policy_context=None):
         "memory_ema_span_minutes": [], "cooldown_after_red_minutes": [],
     })
 
-    def visit(value, expected, parts):
+    def visit(value, expected, parts, path="config"):
         from .control_sentinels import validate_control_value
 
         validate_control_value(parts, value)
         if parts == ("bot", "global", "enabled"):
             from .activation import GLOBAL_ACTIVATION_ERROR
             raise ValueError(GLOBAL_ACTIVATION_ERROR)
-        if parts in {("bot", owner, "enabled") for owner in ("long", "short")}:
-            if type(value) is not bool:
-                raise TypeError(f"{'.'.join(parts)} must be a boolean")
+        validate_authored_boolean(value, parts, path=path)
         from .age_policy import AGE_PATHS, validate_age_value
         if parts in AGE_PATHS:
             validate_age_value(value, path=".".join(parts))
-        path = "config" + ("." + ".".join(parts) if parts else "")
         if (len(parts) == 4 and parts[0] == "bot" and parts[1] in {"global", "long", "short"}
                 and parts[2] == "universe" and parts[3] in {"approved_coins", "ignored_coins"}):
             if parts[1] == "global" and parts[3] == "approved_coins" and value is None:
@@ -159,6 +179,12 @@ def validate_authored_config(config, template, *, policy_context=None):
         if parts == ("optimize", "fixed_runtime_overrides"):
             validate_patch(value, path)
             return
+        if parts in _BOOLEAN_RECORD_COLLECTIONS and isinstance(value, list):
+            for index, record in enumerate(value):
+                if isinstance(record, dict) and "enabled" in record:
+                    validate_authored_boolean(
+                        record["enabled"], (*parts, index, "enabled"), path=f"{path}[{index}].enabled"
+                    )
         records = {
             ("backtest", "scenarios"): _SCENARIO_FIELDS,
             ("optimize", "limits"): _LIMIT_FIELDS,
@@ -187,11 +213,16 @@ def validate_authored_config(config, template, *, policy_context=None):
                     raise ValueError(GLOBAL_ACTIVATION_ERROR)
                 if key not in expected:
                     raise ValueError(f"{path}.{key} is an unknown configuration field")
-                visit(child, expected[key], (*parts, key))
+                visit(child, expected[key], (*parts, key), f"{path}.{key}")
 
     def validate_patch(patch, path):
         _mapping(patch, path)
-        normalized = normalize_scenario_overrides(patch)
+
+        def validate_group(parts, value):
+            # Empty nested objects can disappear during flattening.
+            validate_authored_boolean(value, parts, path=f"{path}.{'.'.join(parts)}")
+
+        normalized = normalize_scenario_overrides(patch, validate_group=validate_group)
         paths = {tuple(selector.split(".")): selector for selector in normalized}
         # Assigning a complete dotted object replaces its descendants. Reject
         # multiple authorities before insertion order can choose a winner.
@@ -237,6 +268,6 @@ def validate_authored_config(config, template, *, policy_context=None):
                 if not isinstance(expected, dict) or part not in expected:
                     raise ValueError(f"{path}.{selector} targets an unknown configuration field")
                 expected = expected[part]
-            visit(value, expected, parts)
+            visit(value, expected, parts, f"{path}.{selector}")
 
     visit(config, schema, ())
