@@ -207,8 +207,6 @@ def _make_mock_pbr():
                         "config_path": ["strategy", pside, *parts],
                         "default": default,
                         "bounds": [default, default],
-                        "legacy_config_paths": [],
-                        "mirror_from": None,
                     }
                 )
         return {

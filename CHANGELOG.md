@@ -370,6 +370,10 @@ its own version heading. See [release status](docs/releases.md).
 - Use 24-character hash prefixes for new Pareto result filenames, with longer names on collision.
   Show the same names in the CLI and HTML viewer and abbreviate older names without renaming files.
 
+- Remove the empty `legacy_config_paths` and `mirror_from` fields from native
+  strategy parameter metadata and retire `filter_volatility_drop_pct` from the
+  native order-planning input.
+
 - Speed up `migrate-config-v9` validation of scenario-heavy configs with inline coin
   strategy overrides and show progress during slow conversions.
 

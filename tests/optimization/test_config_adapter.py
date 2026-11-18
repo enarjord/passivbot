@@ -152,9 +152,10 @@ class TestConfigAdapter:
         )
         assert any(
             param["config_path"] == ["strategy", "long", "entry", "ema_span_0_minutes"]
-            and param["legacy_config_paths"] == []
             for param in spec["parameters"]
         )
+        assert all({"legacy_config_paths", "mirror_from"}.isdisjoint(param)
+                   for param in spec["parameters"])
 
     def test_rust_strategy_spec_python_api_matches_adapter_cache(self):
         rust_spec = pbr.get_strategy_spec("trailing_martingale")
@@ -178,9 +179,10 @@ class TestConfigAdapter:
         assert spec["optimize_bounds"]["long_offset_log_range_1m_coefficient"] == [0.0, 40.0, 0.1]
         assert any(
             param["config_path"] == ["strategy", "long", "base_qty_fraction"]
-            and param["legacy_config_paths"] == []
             for param in spec["parameters"]
         )
+        assert all({"legacy_config_paths", "mirror_from"}.isdisjoint(param)
+                   for param in spec["parameters"])
 
     def test_get_optimization_key_paths_routes_strategy_fields_to_strategy_section(self):
         config = _canonical_config_with_bounds({
