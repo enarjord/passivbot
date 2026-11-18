@@ -1276,7 +1276,7 @@ def finalize_v8_layout(source, *, span, changes, schema_version, acknowledge_sea
 
     rewrite_released_strategy_bounds(result, strategy_kind=released_kind, record=record)
     before = deepcopy(result)
-    apply_released_v8_layout_transforms(result)
+    apply_released_v8_layout_transforms(result, base_config_path=base_config_path, record=record)
     migrate_entry_cooldown(result)
     move_shared_policy(result, record=record, base_config_path=base_config_path)
     migrate_entry_ema_spans(result)

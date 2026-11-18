@@ -557,9 +557,9 @@ def test_apply_non_live_adjustments_sorts_and_filters():
     assert config['bot']["short"]['universe']['approved_coins'] == ["btc", "eth"]
 
 
-def test_apply_non_live_adjustments_supports_legacy_coins_file():
+def test_apply_non_live_adjustments_supports_explicit_coins_file():
     config = get_expanded_config_prototype()
-    set_side_universe_sources(config, 'approved_coins', "configs/approved_coins_topmcap.json")
+    set_side_universe_sources(config, 'approved_coins', "configs/approved_coins.json")
     set_side_universe_sources(config, 'ignored_coins', {"long": [], "short": []})
     config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "threshold_base_fraction"
