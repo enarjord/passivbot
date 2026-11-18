@@ -8,6 +8,7 @@ from pathlib import Path
 
 import msgpack
 import pytest
+from opt_utils import load_results
 
 
 @pytest.mark.asyncio
@@ -202,7 +203,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             with open(self.results_file.name, "rb") as source:
                 stored = list(msgpack.Unpacker(source, raw=False, strict_map_key=False))
             assert len(stored) == 1
-            assert stored[0][CONTRACT_KEY]["execution"]["engine"] == engine
+            assert stored[0]["provenance"][CONTRACT_KEY]["execution"]["engine"] == engine
             if recovery:
                 assert 0 <= stored[0]["metrics"]["unpenalized_objectives"][1] <= 1
             if hsl_tail:
@@ -210,7 +211,7 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
                 assert math.isfinite(tail) and tail >= 0
             members = list(Path(self.store.pareto_dir).glob("*.json"))
             assert members
-            assert json.loads(members[0].read_text())[CONTRACT_KEY]["execution"]["engine"] == engine
+            assert json.loads(members[0].read_text())["provenance"][CONTRACT_KEY]["execution"]["engine"] == engine
             first_record_persisted = True
         # With screening, interrupt after the initial full generation so the
         # on-disk checkpoint exercises a partially completed screening stage.
@@ -333,13 +334,11 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             return (strategy["base_qty_fraction"] if strategy_kind == "ema_anchor"
                     else strategy["entry"]["initial_qty_fraction"])
 
-        expanded = {}
         quantities = []
-        for row in records():
-            expanded = optimize.deep_updated(expanded, row)
-            scalars = expanded["suite_metrics"]["metrics"]["cagr_fraction_strategy_equity"]["scenarios"]
+        for row in load_results(archive):
+            scalars = row["suite_metrics"]["metrics"]["cagr_fraction_strategy_equity"]["scenarios"]
             assert set(scalars) - {"metric_status"} == {"base", "window"}
-            quantities.append((quantity(expanded, "long"), quantity(expanded, "short")))
+            quantities.append((quantity(row["config"], "long"), quantity(row["config"], "short")))
         assert len(set(quantities[:bootstrap_count])) == bootstrap_count
         # Offspring are duplicate-checked against selected parents and one
         # another. Discarded bootstrap candidates are eligible again.
@@ -357,25 +356,21 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         assert repeated.value.code == 0
         assert (directory / "all_results.bin").read_bytes() == before
     if hsl_tail:
-        expanded = {}
-        for row in records():
-            expanded = optimize.deep_updated(expanded, row)
-            tail = expanded["metrics"]["unpenalized_objectives"][1]
+        for row in load_results(archive):
+            tail = row["metrics"]["unpenalized_objectives"][1]
             assert math.isfinite(tail) and tail >= 0
     if scaled_hsl:
-        expanded = {}
-        for row in records():
-            expanded = optimize.deep_updated(expanded, row)
-            assert all(expanded[CONTRACT_KEY]["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
+        for row in load_results(archive):
+            assert all(row["provenance"][CONTRACT_KEY]["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
                        for side in ("long", "short"))
-            assert all(expanded["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
+            assert all(row["config"]["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
                        for side in ("long", "short"))
         assert state[CONTRACT_KEY]["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"]
         members = list((directory / "pareto").glob("*.json"))
         assert members
         for member in members:
             exported = json.loads(member.read_text())
-            assert all(exported["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
+            assert all(exported["config"]["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
                        for side in ("long", "short"))
     if screening:
         with (directory / "checkpoint.pkl").open("rb") as source:

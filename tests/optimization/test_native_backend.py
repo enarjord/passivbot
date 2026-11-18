@@ -206,7 +206,8 @@ def test_native_ask_tell_evolution_records_results_and_resumes_without_cpu(monke
         result = execute(base, recorder, checkpoint)
         assert result == dict(pool=None, pool_terminated=False)
         assert len(records) == 8
-        assert all(row[CONTRACT_KEY]["execution"]["engine"] == build_evaluation_contract(base.config)["execution"]["engine"] for row in records)
+        contract_engine = build_evaluation_contract(base.config)["execution"]["engine"]
+        assert all(row["provenance"][CONTRACT_KEY]["execution"]["engine"] == contract_engine for row in records)
         assert all(row["metrics"]["constraint_violation"] == 0 for row in records)
         state = load_checkpoint(checkpoint, base.config)
         assert state["phase"] == "idle" and state["population"] is None
@@ -489,7 +490,7 @@ def test_native_backend_validates_effective_fixed_runtime_config(monkeypatch, tm
         execute(base, SimpleNamespace(record=records.append), tmp_path / "checkpoint.pkl")
         assert registered_collateral and all(value == 0.0 for value in registered_collateral)
         assert len(records) == len(FakeService.rows) == 8
-        assert all(row["backtest"]["btc_collateral_target_ratio"] == 0.0 for row in records)
+        assert all(row["config"]["backtest"]["btc_collateral_target_ratio"] == 0.0 for row in records)
 
 
 def test_native_effective_unsupported_config_is_rejected_before_service(monkeypatch, tmp_path):
