@@ -6,6 +6,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMON = ROOT / "passivbot-rust/src/gpu/mps_multicoin_common.metal"
+TM = COMMON.parent / "mps_trailing_martingale_multicoin.metal"
 
 
 def test_both_shared_account_strategies_bootstrap_once_at_the_usable_boundary():
@@ -19,7 +20,10 @@ def test_both_shared_account_strategies_bootstrap_once_at_the_usable_boundary():
         assert "side.market_ema_bootstrapped[c] = true" in source
         assert source.count("k > max(global_warmup, 1) && k >= requested_start_k") >= 3
         # The existing forward suffix and independent RMS update remain explicit.
-        assert "close - side.ema0[c]" in source
+        if prefix == "tm":
+            assert "side.ema0[c], side.ema_residual[0][c], close" in source
+        else:
+            assert "close - side.ema0[c]" in source
         assert "update_adaptive_rms(side.adaptive[c]" in source
         assert f"update_{prefix}_multicoin_side_indicators" in source
 
@@ -51,7 +55,7 @@ def test_current_metal_bootstrap_scalar_and_forward_suffix(span, kind, k, first,
     # Compile only the actual authored arithmetic helper, without a native export.
     source = COMMON.read_text()
     start = source.index("inline float bootstrap_market_ema(")
-    end = source.index("\n#if PASSIVBOT_RAW_STRATEGY_RISK_ENABLED", start)
+    end = source.index("inline float round_step(", start)
     probe = "#include <metal_stdlib>\nusing namespace metal;\n" + source[start:end] + r'''
 kernel void market_bootstrap_probe(constant float* bars, constant float* hours,
     constant float* inputs, constant int* counts, device float* output, uint b [[thread_position_in_grid]]) {
@@ -75,3 +79,36 @@ kernel void market_bootstrap_probe(constant float* bars, constant float* hours,
     assert output[0].item() == pytest.approx(expected, rel=2e-6)
     assert output[1].item() == pytest.approx(expected + 2. / (span + 1.) * (8. - expected), rel=2e-6)
     assert output[2].item() == 1.
+
+
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_tm_entry_ema_accumulates_updates_below_one_price_ulp(direction):
+    torch = pytest.importorskip("torch")
+    if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
+        pytest.skip("GPU unavailable")
+    from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
+
+    source = TM.read_text()
+    start = source.index("inline void advance_tm_entry_ema(")
+    end = source.index("inline void update_tm_multicoin_side_indicators(", start)
+    probe = "#include <metal_stdlib>\nusing namespace metal;\n" + source[start:end] + r'''
+kernel void tm_entry_ema_probe(constant float* inputs, device float* output,
+    uint b [[thread_position_in_grid]]) {
+    if (b > 0) return;
+    float ema = inputs[0];
+    float residual = 0.0f;
+    for (int step = 0; step < 512; ++step)
+        advance_tm_entry_ema(ema, residual, inputs[1], inputs[2]);
+    output[0] = ema;
+}
+'''
+    initial = 1000.0
+    close = initial + direction * 0.015625
+    alpha = np.float32(0.001)
+    expected = initial + (close - initial) * (1.0 - (1.0 - float(alpha)) ** 512)
+    device = gpu_device()
+    inputs = torch.tensor([initial, close, alpha], dtype=torch.float32, device=device)
+    output = torch.empty(1, dtype=torch.float32, device=device)
+    compile_shader(probe).tm_entry_ema_probe(inputs, output, threads=1)
+    synchronize()
+    assert output.item() == pytest.approx(expected, abs=float(np.spacing(np.float32(initial))))

@@ -22,6 +22,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Show disabled sides explicitly in the live startup banner’s position and exposure limits.
 
+- Retain small Trailing Martingale entry EMA updates in native GPU replay to
+  reduce one-tick differences in entry prices.
+
 - Preserve completed planning, ordinary execution and protective work across the
   internal passes of an offline fake-live replay step.
 
