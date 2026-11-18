@@ -185,12 +185,6 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 
 PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl", "hard_stop"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
-DISABLE_PLOTTING_HELP = (
-    "Disable selected plot groups. Use without a value to disable all plotting. "
-    "Allowed values: all, summary, balance, twe, pnl, hard_stop, coin_fills, "
-    "or a comma-separated combination. summary disables balance, twe, pnl, "
-    "and hard_stop; coin_fills disables per-coin fill plots only."
-)
 HLCVS_CACHE_ROOT = Path("caches") / "hlcvs_data"
 HLCVS_CACHE_HASH_LEN = 16
 HLCVS_CACHE_DIR_SEP = "__"
@@ -3287,15 +3281,6 @@ async def main():
     runtime_group = parser.add_argument_group("Backtest Runtime")
     add_report_arguments(runtime_group)
     runtime_group.add_argument(
-        "--disable_plotting",
-        "-dp",
-        dest="disable_plotting",
-        nargs="?",
-        const="all",
-        default=None,
-        help=DISABLE_PLOTTING_HELP,
-    )
-    runtime_group.add_argument(
         "--cm-debug",
         nargs="?",
         const=1,
@@ -3441,10 +3426,6 @@ async def main():
         )
         suite_cfg["enabled"] = bool(args.suite)
 
-    # Log disable_plotting if set (not a config key, just a runtime flag)
-    if args.disable_plotting is not None:
-        logging.info("changed disable_plotting False -> %s", args.disable_plotting)
-
     if suite_cfg.get("enabled"):
         logging.info(
             "Running backtest suite (%d scenarios)...",
@@ -3453,7 +3434,6 @@ async def main():
         summary = await run_backtest_suite_async(
             config,
             suite_cfg,
-            disable_plotting=args.disable_plotting,
             report_options=report_options,
         )
         logging.info(
@@ -3477,9 +3457,6 @@ async def main():
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
     )
     validate_simulation_config(config, resolved=True)
-    config["disable_plotting"] = (
-        args.disable_plotting if args.disable_plotting is not None else False
-    )
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
     if get_optional_config_value(config, "backtest.hlcvs_data_dir"):

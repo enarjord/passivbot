@@ -323,8 +323,7 @@ passivbot backtest CONFIG --plots none
 ```
 
 Plot groups are `equity`, `hsl`, `hsl_episodes`, `coin_fills` and `twe`; `all` and
-`none` select the complete set or disable rendering. The legacy `--disable_plotting`
-switch still suppresses its named groups. Cumulative PnL is no longer generated.
+`none` select the complete set or disable rendering.
 BTC-denominated views, full-history fill plots, stop zooms and dense equity CSV are
 optional. The `twe` plot shows the long and short entry-price notionals separately
 as percentages of wallet balance. It carries the last post-fill snapshot at each
@@ -448,7 +447,7 @@ the override dataset:
 
 ## Backtest CLI args
 
-- `-dp` to disable individual coin plotting.
+- `--plots none` disables plot rendering. Select individual plots by name with `--plots`.
 - `--suite [y/n]` to override `backtest.suite_enabled` (omit the value to enable, e.g. `--suite`).
 - `--scenarios label1,label2,...` to run only specific scenarios by label (implies `--suite y`).
 - `--suite-config path/to/overrides.json` to merge an additional suite definition onto the base config. Useful when you want to keep suite definitions outside the main config file.

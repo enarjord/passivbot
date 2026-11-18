@@ -140,10 +140,10 @@ def test_tool_help_lists_supported_tools(capsys):
 
     out = capsys.readouterr().out
     assert "crash-finder" in out
-    assert "hyperliquid-abstraction-probe" in out
-    assert "hyperliquid-balance-probe" in out
-    assert "hyperliquid-order-margin-probe" in out
-    assert "hyperliquid-position-probe" in out
+    assert "hyperliquid-abstraction-probe" not in out
+    assert "hyperliquid-balance-probe" not in out
+    assert "hyperliquid-order-margin-probe" not in out
+    assert "hyperliquid-position-probe" not in out
     assert "inspect-ohlcvs" in out
     assert "live-event-query" in out
     assert "log-secret-inventory" in out
@@ -155,13 +155,24 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "monitor-tui" in out
     assert "pareto" in out
     assert "pareto-dash" in out
-    assert "pareto-explorer" in out
+    assert "pareto-explorer" not in out
+    assert "pareto-analysis" not in out
+    assert "ticker-probe" not in out
+    assert "ticker-endpoint-probe" not in out
     assert "streamline-json" in out
     assert "trailing-inspect" in out
     assert "compare-backtests" in out
     assert "compose-coin-overrides" in out
     assert "verify-hlcvs-data" in out
     assert "requires full install" in out
+
+
+@pytest.mark.parametrize("alias", ["pareto-explorer", "pareto-analysis"])
+def test_duplicate_pareto_tool_routes_are_removed(alias, capsys):
+    with pytest.raises(SystemExit) as exc:
+        cli_main.main(["tool", alias, "--help"])
+    assert exc.value.code == 2
+    assert "unknown tool" in capsys.readouterr().err
 
 
 def test_trailing_inspect_tool_dispatch_forwards_module_and_prog(monkeypatch):

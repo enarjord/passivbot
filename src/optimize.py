@@ -87,7 +87,7 @@ from config.overrides import parse_overrides
 from config.access import get_optional_config_value, require_config_value
 from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_search_cohort_size, resolve_gpu_tuning_mode
 from config.universe import require_side_universe_sources, set_side_universe_sources
-from config.limits import normalize_limit_entries, parse_limit_cli_entries
+from config.limits import normalize_limit_entries, parse_limit_cli_entries, parse_limit_cli_payload
 from config.param_paths import resolve_bound_selectors, require_existing_config_path
 from config.shared_bot import (
     flatten_shared_bot_side,
@@ -2653,7 +2653,6 @@ def add_starting_config_selection_options(parser) -> None:
     )
     parser.add_argument(
         "--compress-starting-configs",
-        "--starting-configs-max",
         type=int,
         default=None,
         metavar="N",
@@ -2677,7 +2676,7 @@ def _resolve_cli_limits_override(args, existing_limits=None) -> list[dict] | Non
     if not clear_limits and raw_limits_payload is None and existing_limits is not None:
         replacement.extend(normalize_limit_entries(existing_limits))
     if raw_limits_payload is not None:
-        replacement.extend(normalize_limit_entries(raw_limits_payload))
+        replacement.extend(parse_limit_cli_payload(raw_limits_payload))
     if raw_limit_entries:
         replacement.extend(parse_limit_cli_entries(raw_limit_entries))
     return normalize_limit_entries(replacement)

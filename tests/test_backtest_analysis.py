@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 from copy import deepcopy
 
 import numpy as np
@@ -9,7 +10,7 @@ import pytest
 import backtest as bt
 import plotting
 from backtest import (
-    BacktestPayload, DISABLE_PLOTTING_HELP, build_backtest_frames,
+    BacktestPayload, build_backtest_frames,
     decode_core_analysis, execute_backtest, parse_disabled_plot_groups,
 )
 from plotting import create_forager_balance_figures
@@ -483,7 +484,21 @@ def test_parse_disabled_plot_groups_accepts_summary_alias_and_commas():
         "coin_fills",
     }
 
-def test_disable_plotting_help_lists_every_plot_group():
-    assert "hard_stop" in DISABLE_PLOTTING_HELP
-    assert "summary disables balance, twe, pnl, and hard_stop" in DISABLE_PLOTTING_HELP
-    assert "coin_fills disables per-coin fill plots only" in DISABLE_PLOTTING_HELP
+@pytest.mark.asyncio
+async def test_backtest_help_lists_canonical_plot_selection(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["backtest", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        await bt.main()
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--plots" in help_text
+    assert "--disable_plotting" not in help_text
+
+
+@pytest.mark.asyncio
+async def test_backtest_rejects_retired_plot_flag(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["backtest", "--disable_plotting"])
+    with pytest.raises(SystemExit) as exc:
+        await bt.main()
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --disable_plotting" in capsys.readouterr().err
