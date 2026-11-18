@@ -729,13 +729,13 @@ async def _handle_ws(request: web.Request) -> web.StreamResponse:
 
     ws = web.WebSocketResponse(heartbeat=30.0)
     await ws.prepare(request)
-    for message in snapshot_messages:
-        await ws.send_json(message)
     subscription = keys[0] if len(keys) == 1 else None
-    for message in relay.load_recent_messages(subscription):
-        await ws.send_json(message)
     queue = relay.subscribe(subscription)
     try:
+        for message in snapshot_messages:
+            await ws.send_json(message)
+        for message in relay.load_recent_messages(subscription):
+            await ws.send_json(message)
         while not ws.closed:
             message = await queue.get()
             await ws.send_json(message)

@@ -5,6 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Buffer live monitor messages during connection replay so events published while
+  initial data is being sent reach the connected client.
+
 - Retry unfinished monitor event and history rows after an append completes,
   preserving split UTF-8 characters and live relay offsets.
 
