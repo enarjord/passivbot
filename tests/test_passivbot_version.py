@@ -8,7 +8,10 @@ from config.schema import (CONFIG_SCHEMA_VERSION, SUPPORTED_PREVIOUS_CONFIG_SCHE
 
 
 def test_package_version_is_a_valid_normalized_pep440_declaration():
-    assert str(Version(__version__)) == __version__
+    version = Version(__version__)
+    assert str(version) == __version__
+    assert version.release == (9, 0, 0)
+    assert version.dev == 0
 
 
 def test_v9_runtime_schema_has_no_implicit_previous_schema_migration():

@@ -5,7 +5,7 @@ published on 2026-08-10. The [release notes](release_notes_v8.1.0.md) describe t
 
 Development branches contain subsequent changes and can differ in config compatibility. Read
 `CHANGELOG.md` under **Unreleased** at the revision you intend to install. The v9 development
-revision uses schema v9 while its package still reports `8.2.0.dev0`. Record the exact Git commit
+package reports `9.0.0.dev0` and uses config schema `v9.0.0`. Record the exact Git commit
 alongside `passivbot --version` when comparing development checkouts.
 
 | Version surface | Meaning |
