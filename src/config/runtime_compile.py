@@ -1,8 +1,11 @@
 from copy import deepcopy
 
-from .bot import apply_forager_internal_aliases
 from .optimize_bounds import prune_inactive_optimize_strategy_bounds
-from .shared_bot import BOT_POSITION_SIDES, canonicalize_shared_bot_side
+from .shared_bot import (
+    BOT_POSITION_SIDES,
+    canonicalize_shared_bot_side,
+    inject_flattened_shared_bot_side,
+)
 from .strategy import prune_inactive_strategy_subtrees, sync_canonical_strategy_config
 from .transform_log import record_transform
 
@@ -54,7 +57,8 @@ def compile_runtime_config(
     from .bot_inheritance import get_bot_policy, install_bot_policy
     policy = policy if policy is not None else get_bot_policy(result)
     original_keys = {side: set(result["bot"][side]) for side in BOT_POSITION_SIDES}
-    apply_forager_internal_aliases(result)
+    for side in BOT_POSITION_SIDES:
+        inject_flattened_shared_bot_side(result["bot"][side])
     if policy is not None:
         aliases = previous_aliases | frozenset((side, key) for side in BOT_POSITION_SIDES
                             for key in set(result["bot"][side]) - original_keys[side])

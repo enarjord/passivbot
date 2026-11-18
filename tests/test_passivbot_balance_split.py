@@ -70,9 +70,10 @@ def _unit_config(patch):
                 target[key] = deepcopy(value)
 
     merge(config, patch)
-    from config.bot import apply_forager_internal_aliases
+    from config.shared_bot import inject_flattened_shared_bot_side
 
-    apply_forager_internal_aliases(config)
+    for side in ("long", "short"):
+        inject_flattened_shared_bot_side(config["bot"][side])
     return config
 
 

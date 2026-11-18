@@ -43,16 +43,6 @@ def _authored_paths(node, path=""):
         yield path, node
 
 
-def _requires_hsl_migration(node, path=""):
-    """Inspect authored policies before hydration can erase their schema origin."""
-    for path, value in _authored_paths(node, path):
-        if not _is_hsl_path(path):
-            continue
-        if path.endswith("enabled") and value not in (False, None, 0):
-            return True
-    return False
-
-
 def require_current_hsl_schema(config, *, base_config_path="", additional_inputs=()):
     """Reject v8 policy before hydration or CLI/scenario enablement can erase it."""
     from .migrations.v9 import require_v9_runtime_config
@@ -84,24 +74,6 @@ def require_current_hsl_schema(config, *, base_config_path="", additional_inputs
                 raise type(exc)(f"{path} {reference!r} could not be read: {exc}") from exc
             except (ValueError, TypeError) as exc:
                 raise ValueError(f"{path} {reference!r} is invalid: {exc}") from exc
-
-
-def clear_legacy_hsl_authorization(node, path=""):
-    """Clear dormant legacy authority in a copy, including dotted patches."""
-    if isinstance(node, dict):
-        for key in list(node):
-            if str(key).startswith("_"):
-                continue
-            leaf_path = f"{path}.{key}" if path else str(key)
-            if leaf_path.endswith("live.hsl_engine"):
-                del node[key]
-            elif _is_hsl_path(leaf_path) and leaf_path.endswith("restart_after_red_policy"):
-                del node[key]
-            else:
-                clear_legacy_hsl_authorization(node[key], leaf_path)
-    elif isinstance(node, list):
-        for value in node:
-            clear_legacy_hsl_authorization(value, path)
 
 
 def engine(config):

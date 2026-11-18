@@ -521,13 +521,16 @@ def test_import_rejects_cross_month_source_overlap_before_any_write(tmp_path, ex
 def test_startup_never_converts_historical_sources(tmp_path, monkeypatch):
     import candlestick_manager as cm
     import legacy_data_migrator as legacy
+    import ohlcv_legacy_import
 
     def forbidden(*args, **kwargs):
         raise AssertionError("historical conversion attempted during startup")
 
-    for name in ("standardize_cache_directories", "migrate_legacy_data_all_on_init",
+    for name in ("standardize_cache_directories", "migrate_legacy_data_for_exchange",
                  "merge_duplicate_symbol_directories"):
         monkeypatch.setattr(legacy, name, forbidden)
+    monkeypatch.setattr(ohlcv_legacy_import, "import_legacy_range_into_store", forbidden)
+    monkeypatch.chdir(tmp_path)
     history = tmp_path / "historical_data" / "ohlcvs_binance" / "BTC"
     history.mkdir(parents=True)
     np.save(history / "2026-04-01.npy", np.array([[START, 100, 101, 99, 100, 10]], dtype=float))

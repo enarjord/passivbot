@@ -148,7 +148,6 @@ def bot_params(**overrides):
         "entry_trailing_retracement_base_fraction": 0.0,
         "entry_trailing_threshold_base_fraction": 0.0,
         "forager_log_range_ema_span_minutes": 10.0,
-        "filter_volatility_drop_pct": 0.0,
         "forager_volume_ema_span_minutes": 10.0,
         "ema_span_0_minutes": 10.0,
         "ema_span_1_minutes": 20.0,
@@ -720,35 +719,6 @@ class TestOrchestratorMultiSymbol:
         symbols_with_orders = set(o["symbol_idx"] for o in out["orders"])
         # At least one symbol should have orders
         assert len(symbols_with_orders) > 0
-
-    def test_coin_selection_volatility_filter(self):
-        """Test volatility-based coin filtering."""
-        import passivbot_rust as pbr
-
-        # Symbol with low volatility (should be filtered)
-        inp = make_input(
-            balance=1_000.0,
-            symbols=[
-                make_symbol(
-                    0,
-                    bid=100.0,
-                    ask=100.0,
-                    emas=ema_bundle(
-                        m1_close=[[10.0, 100.0], [20.0, 100.0], [math.sqrt(10.0 * 20.0), 100.0]],
-                        m1_log_range=[[1.0, 0.001]],  # Very low volatility
-                    ),
-                    long_bp={
-                        "filter_volatility_drop_pct": 0.5,  # Filter if < 50% of avg
-                        "forager_log_range_ema_span_minutes": 1.0,
-                    },
-                )
-            ],
-        )
-
-        out = compute(pbr, inp)
-
-        # Should compute without errors
-        assert isinstance(out["orders"], list)
 
     def test_coin_selection_preserves_volume_ranking(self):
         """A one-slot forager ranks both eligible candidates by measured volume."""
