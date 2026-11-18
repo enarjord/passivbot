@@ -2404,7 +2404,7 @@ async def run_backtest_suite_async(
     config: Dict[str, Any],
     suite_cfg: Dict[str, Any],
     *,
-    disable_plotting: bool,
+    disable_plotting: bool = False,
     suite_output_root: Optional[Path] = None,
     report_options=None,
 ) -> SuiteSummary:

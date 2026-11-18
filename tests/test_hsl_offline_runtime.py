@@ -203,7 +203,7 @@ async def test_backtest_cli_uses_only_offline_exchange_equivalent_data(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["backtest", str(config_path), "-dp", "all"]
+        ["backtest", str(config_path), "--plots", "none"]
         + (["--backtest.hsl_detailed_report", "true"] if detailed else []),
     )
     await main()

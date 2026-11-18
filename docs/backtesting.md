@@ -447,7 +447,7 @@ the override dataset:
 
 ## Backtest CLI args
 
-- `-dp` to disable individual coin plotting.
+- `--plots none` disables plot rendering. Select individual plots by name with `--plots`.
 - `--suite [y/n]` to override `backtest.suite_enabled` (omit the value to enable, e.g. `--suite`).
 - `--scenarios label1,label2,...` to run only specific scenarios by label (implies `--suite y`).
 - `--suite-config path/to/overrides.json` to merge an additional suite definition onto the base config. Useful when you want to keep suite definitions outside the main config file.
