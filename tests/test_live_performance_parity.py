@@ -65,6 +65,54 @@ def test_unchanged_shards_are_not_read_again(manager, monkeypatch, timeframe, st
         np.testing.assert_array_equal(load(manager, rows, timeframe), rows)
 
 
+@pytest.mark.skipif(sys.platform.startswith('win'), reason='parsed-row reuse requires a metadata-change clock')
+@pytest.mark.parametrize('merge_memory_cache', [False, True])
+def test_compatible_ranges_share_parsed_shards(manager, monkeypatch, merge_memory_cache):
+    """Range bounds within one unchanged shard do not change the loaded rows."""
+    rows = candles(8)
+    persist(manager, rows)
+    np.testing.assert_array_equal(
+        load(manager, rows[1:4], merge_memory_cache=merge_memory_cache), rows
+    )
+    opened = []
+    real_read = manager._load_shard
+
+    def track_read(path, **kwargs):
+        opened.append(path)
+        return real_read(path, **kwargs)
+
+    monkeypatch.setattr(manager, '_load_shard', track_read)
+    result = load(manager, rows[3:7], merge_memory_cache=merge_memory_cache)
+    np.testing.assert_array_equal(result, rows)
+    assert not opened
+    # Consumer mutation does not affect the immutable source rows on a hit.
+    result['c'][-1] = 9.0
+    np.testing.assert_array_equal(
+        load(manager, rows[2:6], merge_memory_cache=merge_memory_cache), rows
+    )
+    assert not opened
+
+
+def test_shard_selection_and_correction_across_requested_ranges(manager, tmp_path):
+    """A neighboring shard and an atomic correction both change the source facts."""
+    rows = candles(6)
+    day_start = int(rows['ts'][-1]) // (1440 * 60_000) * (1440 * 60_000)
+    rows['ts'] = day_start + np.arange(-3, 3) * 60_000
+    persist(manager, rows)
+    np.testing.assert_array_equal(load(manager, rows[:2], merge_memory_cache=False), rows[:3])
+    np.testing.assert_array_equal(load(manager, rows[1:5], merge_memory_cache=False), rows)
+
+    path = Path(manager._shard_path(SYMBOL, manager._date_key(day_start), tf='1m'))
+    corrected = rows[3:].copy()
+    corrected['c'][0] = 88.0
+    replacement = tmp_path / 'replacement.npy'
+    np.save(replacement, corrected)
+    os.replace(replacement, path)
+    np.testing.assert_array_equal(
+        load(manager, rows[2:6], merge_memory_cache=False), np.concatenate([rows[:3], corrected])
+    )
+
+
 @pytest.mark.parametrize('change', ['replace', 'same_size_same_mtime', 'inplace_same_mtime', 'delete', 'corrupt', 'strict'])
 def test_changed_or_unusable_sources_match_uncached_loader(manager, tmp_path, change):
     """Corrections, failures and forced reads cannot inherit a warm certificate."""
@@ -321,16 +369,37 @@ def test_merge_shortcut_matches_last_write_wins_reference(manager, case):
     assert not np.shares_memory(result, incoming)
 
 
+@pytest.mark.parametrize(
+    'indices,corrected',
+    [([1, 2, 3], False), ([1, 2, 3], True), ([1, 3, 5], False), ([1, 3, 5], True)],
+)
+def test_merge_preserves_existing_equal_rows_and_applies_real_corrections(
+    manager, indices, corrected
+):
+    existing = candles(8)
+    existing['bv'][indices] = 0.0
+    incoming = existing[indices].copy()
+    incoming['bv'] = -0.0
+    expected = existing.copy()
+    if corrected:
+        incoming['c'][1] = 99.0
+        expected[indices] = incoming
+
+    merged = manager._merge_overwrite(existing, incoming)
+
+    assert merged.tobytes() == expected.tobytes()
+    assert not np.shares_memory(merged, existing)
+    assert not np.shares_memory(merged, incoming)
+
+
 def test_reuse_bounds_and_restart_reconstruction(manager):
-    """Reuse is disposable and bounded even with many requested ranges."""
+    """Reuse is disposable and bounded even with many shard selections."""
     rows = candles(300); persist(manager, rows)
-    for offset in range(260):
-        manager._load_from_disk(SYMBOL, int(rows['ts'][offset]), int(rows['ts'][-1]))
-    if not sys.platform.startswith('win'):
-        assert len(manager._disk_rows_cache) == 256
-        assert next(iter(manager._disk_rows_cache))[2] == int(rows['ts'][4])
-    else:
-        assert not manager._disk_rows_cache
+    keys = [(SYMBOL, '1m', ((offset, 'primary'),)) for offset in range(260)]
+    for key in keys:
+        manager._remember_disk_rows(key, ('source',), rows)
+    assert len(manager._disk_rows_cache) == 256
+    assert next(iter(manager._disk_rows_cache)) == keys[4]
     assert sum(v[1].nbytes for v in manager._disk_rows_cache.values()) <= 8*1024*1024
     warm = load(manager, rows).copy()
     manager._disk_rows_cache.clear(); manager._cache.clear()

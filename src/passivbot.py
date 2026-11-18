@@ -16113,10 +16113,11 @@ class Passivbot:
             return values.get(float(span))
 
         async def fetch_map(symbol: str, spans: list[float], fn, ema_type: str):
+            """Return the values and whether one primary batch covered every span."""
             out: dict[float, float] = {}
             primary_spans: set[float] = set()
             if not spans:
-                return out
+                return out, False
             metric_key = {
                 "m1_volume": "qv",
                 "m1_log_range": "log_range",
@@ -16188,7 +16189,7 @@ class Passivbot:
                         ema_type, symbol, span, "non_finite_value", "NonFiniteValue"
                     )
             record_forager_gap_consumption(symbol, ema_type, primary_spans)
-            return out
+            return out, batched_values is not None and len(primary_spans) == len(spans)
 
         async def fetch_required_map(
             symbol: str,
@@ -16927,7 +16928,7 @@ class Passivbot:
                         raise
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 if vol is None:
-                    vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
+                    vol, _ = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 if lr1m is None:
                     try:
@@ -16981,20 +16982,33 @@ class Passivbot:
                                 else:
                                     lr1m = {}
                     else:
-                        optional_lr1m = await fetch_map(
+                        optional_spans = [
+                            span for span in m1_lr_spans if span not in required_lr1m
+                        ]
+                        optional_lr1m, complete_primary_batch = await fetch_map(
                             sym,
-                            [span for span in m1_lr_spans if span not in required_lr1m],
+                            optional_spans,
                             ema_lr_1m,
                             "m1_log_range",
                         )
                         lr1m = {**optional_lr1m, **required_lr1m}
+                        # Both consumers request the same strict, cache-only
+                        # finalized window here. The forager keeps its own
+                        # path for projections, overlapping strategy spans and fallbacks.
+                        if (
+                            sym in cache_only_symbols
+                            and optional_spans == m1_lr_spans
+                            and complete_primary_batch
+                        ):
+                            forager_lr1m = dict(optional_lr1m)
                 if is_forager_mode():
-                    forager_lr1m = await fetch_map(
-                        sym,
-                        m1_lr_spans,
-                        ema_forager_lr_1m,
-                        "forager_m1_log_range",
-                    )
+                    if forager_lr1m is None:
+                        forager_lr1m, _ = await fetch_map(
+                            sym,
+                            m1_lr_spans,
+                            ema_forager_lr_1m,
+                            "forager_m1_log_range",
+                        )
                 elif forager_lr1m is None:
                     forager_lr1m = {
                         span: lr1m[span] for span in m1_lr_spans if span in lr1m

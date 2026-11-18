@@ -30,6 +30,9 @@ its own version heading. See [release status](docs/releases.md).
 - Record ordinary close replacement timing in structured live events, from cancel
   acknowledgment through account confirmation, replanning, and create submission.
 
+- Reuse validated candle shards across overlapping EMA windows and reduce work when
+  merging contiguous candle rows into the live cache.
+
 - Support opt-in `optimize.gpu.tuning_mode = "max"` on Apple Silicon Metal.
   It evaluates wider seed and offspring cohorts, retains the configured parent
   population size, and checks shared memory before allocating replay scratch.
