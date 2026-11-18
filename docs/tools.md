@@ -397,8 +397,14 @@ including the strongest metric-to-metric correlations among the displayed metric
 ```shell
 passivbot tool pareto-analyze optimize_results/.../pareto
 passivbot tool pareto-compress optimize_results/.../pareto 8 --output-dir selected_pareto_8
-passivbot tool merge-paretos optimize_results/run_a/pareto optimize_results/run_b/pareto
+passivbot tool merge-paretos optimize_results/run_a/pareto optimize_results/run_b/pareto merged_seeds
+passivbot optimize search-config.json --start merged_seeds
 ```
+
+Merge current v9 fronts that use the same strategy and HSL scope. The output retains each
+enabled side's inherited numeric settings and can seed a fresh search. The new search owns
+side activation, bounds, and scoring. Give the search independent long and short bounds for
+any tuned parameter whose values differ between the two merged sides.
 
 ## Optimizer starting-config preselection
 

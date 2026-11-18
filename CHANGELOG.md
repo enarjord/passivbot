@@ -1633,6 +1633,9 @@ its own version heading. See [release status](docs/releases.md).
 - Add `passivbot tool pareto-plot` for offline interactive 2D and rotatable 3D objective
   scatter plots, with candidate hover details, metric discovery, and PNG export.
 
+- Make `merge-paretos` output reusable v9 optimizer seeds. Each selected side retains its
+  inherited settings and explicit activation, and merge provenance stays outside the config.
+
 - Make live console health easier to interpret: report trailing-input recovery, current close
   coverage and account age, label summary delay and reconnect totals explicitly, and keep routine
   timing and order-refresh mechanics in DEBUG. Summarize replaced HSL observations without hiding
