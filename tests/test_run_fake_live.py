@@ -921,11 +921,12 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
         assert await _async_main(args) == 0
 
         bot = captured["bot"]
-        override = bot.coin_overrides["BTC/USDT:USDT"]
+        symbol = "BTC/USDT:USDT"
+        override = bot.coin_overrides[symbol]
         assert override["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == 0.05
-        assert override["bot"]["long"]["risk_entry_cooldown_minutes"] == 0.05
+        assert bot.bp("long", "risk_entry_cooldown_minutes", symbol) == 0.05
         assert override["bot"]["long"]["unstuck"]["ema_gating_enabled"] is False
-        assert override["bot"]["long"]["unstuck_ema_gating_enabled"] is False
+        assert bot.bp("long", "unstuck_ema_gating_enabled", symbol) is False
         assert override["bot"]["long"]["unstuck"]["loss_allowance_fraction"] == 0.1
         assert (
             override["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
