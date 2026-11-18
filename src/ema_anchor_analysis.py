@@ -9,6 +9,7 @@ import pandas as pd
 
 import passivbot_rust as pbr
 from config.access import require_config_value
+from config.result_records import extract_result_config
 from config.strategy import EMA_ANCHOR_STRATEGY_KIND, get_active_strategy_side, normalize_strategy_kind
 
 
@@ -348,7 +349,7 @@ def calc_ema_anchor_inventory_bands(
 def load_backtest_artifact_dataset(artifact_dir: str | Path, *, coin: str | None = None) -> dict:
     artifact_dir = Path(artifact_dir)
     dataset_meta = _load_json(artifact_dir / "dataset.json")
-    config = _load_json(artifact_dir / "config.json")
+    config = extract_result_config(_load_json(artifact_dir / "config.json"))
     analysis = _load_json(artifact_dir / "analysis.json")
     fills_df = pd.read_csv(artifact_dir / "fills.csv")
     from backtest_results import load_equity_frame

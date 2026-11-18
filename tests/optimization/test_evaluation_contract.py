@@ -274,12 +274,13 @@ def test_result_writers_persist_contract_before_candidate_projection(
             SimpleNamespace(record=entries.append),
         )
         entry = entries[0]
-    assert entry[CONTRACT_KEY] == build_evaluation_contract(config)
+    assert entry["provenance"][CONTRACT_KEY] == build_evaluation_contract(config)
     assert optimize._resume_config_mismatches(entry, config) == []
+    assert "coins" not in entry["config"]["backtest"]
     if suite:
-        assert "coins" not in entry["backtest"]
+        assert "backtest_coins" not in entry["provenance"]
     else:
-        assert entry["backtest"]["coins"] == config["backtest"]["coins"]
+        assert entry["provenance"]["backtest_coins"] == config["backtest"]["coins"]
         config["backtest"]["coins"]["binance"].remove("ETH")
         assert any(
             "backtest.coins" in diff
@@ -356,14 +357,14 @@ def test_real_anchored_candidate_record_preserves_other_anchor_policy():
         build_config_fn=individual_to_config,
         overrides_fn=optimizer_overrides,
     )
-    assert entry["optimizer_anchor"]["id"] == 1
+    assert entry["provenance"]["optimizer_anchor"]["id"] == 1
     assert (
-        entry["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        entry["config"]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
             "threshold_base_fraction"
         ]
         == 0.02
     )
-    assert entry["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == 37.0
+    assert entry["config"]["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == 37.0
     assert _resume_config_mismatches(entry, config) == []
     config[ANCHOR_PLAN_KEY]["anchors"][0]["fixed_values"][0]["value"] = 0.03
     assert any(

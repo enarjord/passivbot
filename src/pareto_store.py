@@ -15,6 +15,7 @@ from pathlib import Path
 import passivbot_rust as pbr
 from config.limits import resolve_reducer_mode
 from config.metrics import resolve_metric_value
+from config.result_records import result_config_view
 from config.scoring import extract_objective_specs
 from optimization.progress import duration, log_tokens
 from pure_funcs import calc_hash
@@ -212,7 +213,7 @@ class ParetoStore:
         )
 
     def _apply_entry_scoring_specs(self, entry: dict) -> None:
-        entry_specs = extract_objective_specs(entry)
+        entry_specs = extract_objective_specs(result_config_view(entry))
         if entry_specs:
             if self.scoring_specs:
                 if self._scoring_signature(self.scoring_specs) != self._scoring_signature(
@@ -236,7 +237,7 @@ class ParetoStore:
         bootstrap_specs = None
         bootstrap_source = None
         for fp, entry in entries:
-            entry_specs = extract_objective_specs(entry)
+            entry_specs = extract_objective_specs(result_config_view(entry))
             if not entry_specs:
                 continue
             if bootstrap_specs is None:
@@ -271,8 +272,7 @@ class ParetoStore:
             metrics_block = entry.get("metrics", {}) or {}
             obj, _ = extract_objectives(
                 entry,
-                scoring_keys=self.scoring_specs
-                or entry.get("optimize", {}).get("scoring"),
+                scoring_keys=self.scoring_specs,
             )
             obj = self._validate_objective_vector(obj)
             violation = extract_violation(entry)
@@ -405,7 +405,7 @@ class ParetoStore:
             try:
                 obj, _ = extract_objectives(
                     entry,
-                    scoring_keys=self.scoring_specs or entry.get("optimize", {}).get("scoring"),
+                    scoring_keys=self.scoring_specs,
                 )
                 self._validate_objective_vector(obj)
                 violation = extract_violation(entry)
@@ -761,17 +761,16 @@ def main():
                 entry = json.load(f)
             h = os.path.splitext(os.path.basename(entry_path))[0].split("_")[-1]
             if metric_names is None:
-                objective_specs = extract_objective_specs(entry)
+                objective_specs = extract_objective_specs(result_config_view(entry))
                 metric_names = [spec.metric for spec in objective_specs]
                 metric_name_map = {spec.metric: spec.metric for spec in objective_specs}
             metrics_block = entry.get("metrics", {}) or {}
             objective_values, extracted_keys = extract_objectives(
                 entry,
-                scoring_keys=objective_specs
-                or entry.get("optimize", {}).get("scoring"),
+                scoring_keys=objective_specs,
             )
             objectives = dict(zip(extracted_keys, objective_values))
-            backtest_cfg = entry.get("backtest", {})
+            backtest_cfg = result_config_view(entry).get("backtest", {})
             reducer_cfg = backtest_cfg.get("reducer", backtest_cfg.get("aggregate"))
             stats_flat: Dict[str, float] = {}
             aggregated_values: Dict[str, float] = {}

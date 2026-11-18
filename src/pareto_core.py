@@ -8,6 +8,7 @@ import numpy as np
 
 from config.scoring import ObjectiveSpec, dominates_objectives, extract_objective_specs
 from config.metrics import resolve_metric_value, reject_retired_metric
+from config.result_records import result_config_view
 from metrics_schema import require_metric_definition, MetricAggregationError
 
 
@@ -45,7 +46,7 @@ def extract_objectives(
         if name != "metric_status":
             reject_retired_metric(name, path="stored objective")
     specs = extract_objective_specs(
-        scoring_keys or entry.get("optimize", {}).get("scoring", [])
+        scoring_keys or result_config_view(entry).get("optimize", {}).get("scoring", [])
     )
     if specs:
         values: list[float] = []

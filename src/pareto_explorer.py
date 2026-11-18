@@ -27,6 +27,7 @@ from config.metrics import (
     CORE_METRIC_DEFINITION_VERSION,
     resolve_metric_value,
 )
+from config.result_records import result_config_view
 from config.scoring import (
     ObjectiveSpec,
     default_objective_goal,
@@ -495,7 +496,7 @@ def _extract_suite_metrics(entry, reducer_cfg=None, scenario_labels=None):
     modes = (
         reducer_cfg
         if reducer_cfg is not None
-        else entry.get("backtest", {}).get("reducer", {})
+        else result_config_view(entry).get("backtest", {}).get("reducer", {})
     )
     labels = tuple(scenario_labels) if scenario_labels is not None else None
     stats, aggregates = {}, {}
@@ -687,7 +688,7 @@ def _extract_objectives(entry):
 
     metrics = entry.get("metrics") or {}
     require_metric_definition(metrics if metrics else entry.get("suite_metrics", {}))
-    specs = extract_objective_specs(entry)
+    specs = extract_objective_specs(result_config_view(entry))
     raw = metrics.get("objectives", {})
     flat = flatten_metric_stats(metrics.get("stats", {}))
     suite_flat, aggregate = _extract_suite_metrics(entry)
@@ -734,7 +735,7 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
         entry = json.loads(contents)
         if not isinstance(entry, Mapping):
             continue
-        specs = extract_objective_specs(entry)
+        specs = extract_objective_specs(result_config_view(entry))
         if not specs:
             continue
         metrics = [spec.metric for spec in specs]

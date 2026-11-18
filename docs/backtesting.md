@@ -296,6 +296,9 @@ The workspace includes `config`, `analysis`, `fills`, `balance_and_equity`, `hlc
 Normal backtests retain exact observations independently of their plots:
 
 - `result.json` versions the result format and identifies its factual artifacts.
+- Saved `config.json` records use `result_version: 1`. Their `config` member is reusable
+  authored policy. Metrics and links to `dataset.json` or `suite_summary.json` sit outside
+  that member. Backtest and config export commands can read the whole saved record.
 - `balance_and_equity.npz` stores integer millisecond clocks and float64 equity/cash
   columns at every native observation. Missing cash observations remain missing.
 - `fills.csv`, `analysis.json`, config, dataset and session metadata remain available.

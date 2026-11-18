@@ -1349,7 +1349,10 @@ def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, t
             )
         )
     saved = json.loads((tmp_path / "config.json").read_text())
-    resumed, _ = build_scenarios(saved["backtest"], base_exchanges=saved["backtest"]["exchanges"])
+    assert saved["result_version"] == 1
+    assert saved["provenance"] == {"suite_summary": "suite_summary.json"}
+    backtest = saved["config"]["backtest"]
+    resumed, _ = build_scenarios(backtest, base_exchanges=backtest["exchanges"])
     assert observed == [["bybit"]]
     assert resumed[0].exchanges == observed[0]
     assert config["backtest"]["exchanges"] == ["binance"]

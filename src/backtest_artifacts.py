@@ -7,6 +7,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from config.result_records import extract_result_config
+
 HLCV_COLUMNS = ("high", "low", "close", "volume")
 
 
@@ -118,7 +120,7 @@ def load_backtest_artifact(artifact_dir: str | Path) -> BacktestArtifact:
     if not artifact_dir.exists():
         raise FileNotFoundError(artifact_dir)
     dataset = _load_json(artifact_dir / "dataset.json")
-    config = _load_json(artifact_dir / "config.json")
+    config = extract_result_config(_load_json(artifact_dir / "config.json"))
     analysis = _load_json(artifact_dir / "analysis.json")
     report_path = artifact_dir / "hsl_report.json"
     hsl_report = None

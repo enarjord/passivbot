@@ -25,6 +25,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from opt_utils import load_results
 from config.limits import normalize_limit_entries
+from config.result_records import extract_result_config, result_config_view
 from config.scoring import (
     default_scoring_weights,
     extract_objective_specs,
@@ -158,7 +159,7 @@ def _extract_objectives(entry, *, statuses=None):
     names = [name for name in objectives if name != "metric_status"]
     for name in names:
         reject_retired_metric(name, path="dashboard objective")
-    specs = extract_objective_specs(entry)
+    specs = extract_objective_specs(result_config_view(entry))
     ordered = [spec.metric for spec in specs] if specs else sorted(names)
     values, labels = {}, {}
     for name in ordered:
@@ -188,7 +189,7 @@ class RunData:
     default_limits: List[str]
     aggregated_metrics: List[str]
     param_metrics: List[str]
-    raw_configs: Dict[str, dict]  # _id -> full JSON config
+    raw_configs: Dict[str, dict]  # _id -> authored JSON config
     display_labels: Dict[str, str]
 
 
@@ -229,7 +230,8 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         with open(path) as f:
             entry = json.load(f)
         config_id = os.path.basename(path)
-        raw_configs[config_id] = entry
+        config = extract_result_config(entry)
+        raw_configs[config_id] = config
         base = {"_id": config_id}
         statuses = {}
         suite_values, scenario_values, scenario_labels = _extract_suite_metrics(
@@ -243,7 +245,7 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         )
         if statuses:
             source_statuses[config_id] = statuses
-        params = _flatten_numeric(entry.get("bot", {}), prefix="bot")
+        params = _flatten_numeric(config.get("bot", {}), prefix="bot")
         row = {**base, **suite_values, **params}
         row.update(objective_values)
         for key in row:
@@ -263,7 +265,7 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         display_labels.update(objective_labels)
         if not scoring_metrics:
             scoring_metrics = objective_cols.copy()
-            limits_cfg = entry.get("optimize", {}).get("limits", {})
+            limits_cfg = config.get("optimize", {}).get("limits", {})
             default_limits = _limits_to_exprs(limits_cfg)
     if not rows:
         return RunData(
@@ -291,6 +293,14 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         raw_configs,
         display_labels,
     )
+
+
+def _export_bot_config(config: dict) -> str:
+    """Keep the bot-only export loadable as a versioned optimizer seed."""
+    output = {"bot": config.get("bot", {})}
+    if "config_version" in config:
+        output["config_version"] = config["config_version"]
+    return json_dumps_streamlined(output, indent=2)
 
 
 def load_history_dataframe(run_dir: str, max_points: int = 400) -> pd.DataFrame:
@@ -1724,10 +1734,10 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
                     items.append(html.Div(f"{key}: {value}", style={"fontSize": "11px"}))
             return items
 
-        for side in ["long", "short"]:
-            if side in bot_params:
-                details_items.append(html.H6(f"{side.capitalize()}", className="mt-2 text-primary"))
-                details_items.extend(render_params(bot_params[side]))
+        for scope in ("portfolio", "global", "long", "short"):
+            if scope in bot_params:
+                details_items.append(html.H6(scope.capitalize(), className="mt-2 text-primary"))
+                details_items.extend(render_params(bot_params[scope]))
 
         details_items.append(html.H6("Key Metrics", className="mt-3"))
         if not row.empty:
@@ -1936,11 +1946,7 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
             return "Config not found", ""
 
         config = run_data.raw_configs[selected_id]
-        # Extract just the bot config for export
-        bot_config = {"bot": config.get("bot", {})}
-        json_str = json_dumps_streamlined(bot_config, indent=2)
-
-        return f"Selected: {selected_id[:24]}...", json_str
+        return f"Selected: {selected_id[:24]}...", _export_bot_config(config)
 
     @app.callback(
         Output("download-config", "data"),
@@ -1956,10 +1962,8 @@ def serve_dash(data_root: str, host: str = "127.0.0.1", port: int = 8050):
         if selected_id not in run_data.raw_configs:
             return no_update
         config = run_data.raw_configs[selected_id]
-        bot_config = {"bot": config.get("bot", {})}
-        json_str = json_dumps_streamlined(bot_config, indent=2)
         filename = f"config_{selected_id[:16]}.json"
-        return dict(content=json_str, filename=filename)
+        return dict(content=_export_bot_config(config), filename=filename)
 
     # =========================================================================
     # CALLBACKS - Filter presets

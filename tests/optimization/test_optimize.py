@@ -64,6 +64,7 @@ from optimize import (
 )
 from multiprocessing_utils import ignore_sigint_in_worker
 from optimization.bounds import Bound
+from config_utils import strip_config_metadata
 from optimization.callback import build_pymoo_record_entry
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.config_adapter import get_optimization_key_paths
@@ -3719,7 +3720,8 @@ class TestApplyFineTuneBounds:
         assert sorted(individual[0] for individual in streamed) == [1, 2]
         assert "failed to use starting config as optimizer seed" in caplog.text
 
-    def test_anchored_seed_stream_preserves_persisted_result_anchor_id(self):
+    @pytest.mark.parametrize("versioned", [False, True])
+    def test_anchored_seed_stream_preserves_persisted_result_anchor_id(self, versioned):
         config = {
             "live": {},
             "optimize": {
@@ -3769,6 +3771,14 @@ class TestApplyFineTuneBounds:
             "id": 1,
             "source": "anchor_1.json",
         }
+        if versioned:
+            from config.result_records import build_result_record
+
+            durable_result["config_version"] = "v9.0.0"
+            anchor = durable_result.pop("optimizer_anchor")
+            durable_result = build_result_record(
+                durable_result, provenance={"optimizer_anchor": anchor}
+            )
 
         streamed, raw_count = configs_to_individuals_streaming(
             [durable_result],
@@ -3782,8 +3792,9 @@ class TestApplyFineTuneBounds:
         assert streamed[0][0] == 1
 
     @pytest.mark.parametrize("anchor_id", [2, 1.9, True, "1"])
+    @pytest.mark.parametrize("versioned", [False, True])
     def test_anchored_seed_stream_rejects_invalid_persisted_anchor_id(
-        self, caplog, anchor_id
+        self, caplog, anchor_id, versioned
     ):
         config = {
             "live": {},
@@ -3831,6 +3842,14 @@ class TestApplyFineTuneBounds:
         durable_result = deepcopy(config)
         durable_result.pop(ANCHOR_PLAN_KEY)
         durable_result["optimizer_anchor"] = {"id": anchor_id}
+        if versioned:
+            from config.result_records import build_result_record
+
+            durable_result["config_version"] = "v9.0.0"
+            anchor = durable_result.pop("optimizer_anchor")
+            durable_result = build_result_record(
+                durable_result, provenance={"optimizer_anchor": anchor}
+            )
 
         caplog.set_level(logging.WARNING)
         streamed, raw_count = configs_to_individuals_streaming(
@@ -4161,10 +4180,11 @@ class TestResultRecorder:
             overrides_fn=optimize.optimizer_overrides,
             overrides_list=["mirror_short_from_long"],
         )
+        entry = entry['config']
         strategy_kind = entry['bot']["portfolio"]['strategy_kind']
 
         assert entry["bot"]["long"]["risk"] == entry["bot"]["short"]["risk"]
-        replay = prepare_config(optimize.clean_config(entry), verbose=False)
+        replay = prepare_config(entry, verbose=False)
         assert replay["bot"]["long"]["forager"] == replay["bot"]["short"]["forager"]
         assert entry["bot"]["long"]["hsl"] == entry["bot"]["short"]["hsl"]
         assert entry["bot"]["long"]["unstuck"] == entry["bot"]["short"]["unstuck"]
@@ -4218,10 +4238,11 @@ class TestResultRecorder:
             assert len(pareto_files) == 1
             saved = json.loads(pareto_files[0].read_text())
             assert saved["metrics"]["effective_start_date"] == "2024-01-02T00:00:00Z"
+            saved = saved['config']
             strategy_kind = saved['bot']["portfolio"]['strategy_kind']
 
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
-            replay = prepare_config(optimize.clean_config(saved), verbose=False)
+            replay = prepare_config(saved, verbose=False)
             assert replay["bot"]["long"]["forager"] == replay["bot"]["short"]["forager"]
             assert saved["bot"]["long"]["hsl"] == saved["bot"]["short"]["hsl"]
             assert saved["bot"]["long"]["unstuck"] == saved["bot"]["short"]["unstuck"]
@@ -4266,10 +4287,11 @@ class TestResultRecorder:
             pareto_files = list((Path(tmpdir) / "pareto").glob("*.json"))
             assert len(pareto_files) == 1
             saved = json.loads(pareto_files[0].read_text())
+            saved = saved['config']
             strategy_kind = saved['bot']["portfolio"]['strategy_kind']
 
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
-            replay = prepare_config(optimize.clean_config(saved), verbose=False)
+            replay = prepare_config(saved, verbose=False)
             assert replay["bot"]["long"]["forager"] == replay["bot"]["short"]["forager"]
             assert saved["bot"]["long"]["hsl"] == saved["bot"]["short"]["hsl"]
             assert saved["bot"]["long"]["unstuck"] == saved["bot"]["short"]["unstuck"]
@@ -5340,7 +5362,7 @@ def test_build_pymoo_record_entry_strips_metadata():
         overrides_list=[],
     )
 
-    assert "_config_path" not in entry
+    assert "_config_path" not in entry["config"]
     assert "suite_metrics" in entry
 
 
@@ -5676,7 +5698,7 @@ def test_validate_resume_results_rejects_non_dict_second_entry(tmp_path: Path):
     entry = _resume_validation_entry()
     packer = optimize.msgpack.Packer(use_bin_type=True)
     (tmp_path / "all_results.bin").write_bytes(
-        packer.pack(optimize.strip_config_metadata(entry)) + packer.pack(1)
+        packer.pack(strip_config_metadata(entry)) + packer.pack(1)
     )
 
     with pytest.raises(ValueError, match="entry 2 is not a result object"):
@@ -5686,7 +5708,7 @@ def test_validate_resume_results_rejects_non_dict_second_entry(tmp_path: Path):
 def test_validate_resume_results_rejects_truncated_trailing_msgpack(tmp_path: Path):
     entry = _resume_validation_entry()
     packer = optimize.msgpack.Packer(use_bin_type=True)
-    (tmp_path / "all_results.bin").write_bytes(packer.pack(optimize.strip_config_metadata(entry)) + b"\x81\xa1x")
+    (tmp_path / "all_results.bin").write_bytes(packer.pack(strip_config_metadata(entry)) + b"\x81\xa1x")
 
     with pytest.raises(ValueError, match="truncated msgpack data"):
         optimize._validate_resume_results(str(tmp_path), deepcopy(entry))
@@ -5707,6 +5729,53 @@ def test_validate_resume_results_counts_entries(tmp_path: Path):
     _write_msgpack_entries(tmp_path / "all_results.bin", [entry, deepcopy(entry)])
 
     assert optimize._validate_resume_results(str(tmp_path), deepcopy(entry)) == 2
+
+
+@pytest.mark.parametrize("compress", [False, True])
+def test_resume_appends_versioned_results_without_leaking_previous_fields(tmp_path, compress):
+    from config.result_records import build_result_record, extract_result_config
+
+    legacy = _resume_validation_entry()
+    metrics = {
+        "definition_version": 2,
+        "objectives": {"cagr_fraction_strategy_equity": 0.1},
+        "gpu_seed_bootstrap": {"source_index": 0},
+    }
+    legacy["metrics"] = deepcopy(metrics)
+    stream = tmp_path / "all_results.bin"
+    _write_msgpack_entries(stream, [legacy])
+    state = {}
+    assert optimize._validate_resume_results(str(tmp_path), legacy, resume_state=state) == 1
+
+    provenance = {
+        "backtest_coins": legacy["backtest"]["coins"],
+        optimize.CONTRACT_KEY: legacy[optimize.CONTRACT_KEY],
+    }
+    authored = extract_result_config(state["previous_data"])
+    first = build_result_record(authored, provenance=provenance, metrics=metrics)
+    second = deepcopy(first)
+    second["metrics"].pop("gpu_seed_bootstrap")
+    second["metrics"]["objectives"]["cagr_fraction_strategy_equity"] = 0.2
+    recorder = ResultRecorder(
+        results_dir=str(tmp_path), sig_digits=6, flush_interval=60,
+        scoring_keys=["cagr_fraction_strategy_equity"], compress=compress,
+        write_all_results=True, starting_iters=1, previous_data=state["previous_data"],
+    )
+    try:
+        recorder.record(first)
+        recorder.record(second)
+    finally:
+        recorder.close()
+
+    assert list(load_results(stream)) == [state["previous_data"], first, second]
+    assert optimize._validate_resume_results(str(tmp_path), legacy) == 3
+
+    changed = deepcopy(legacy)
+    changed["backtest"]["coins"]["binance"].append("BTC")
+    assert any(
+        "backtest.coins" in diff
+        for diff in optimize._resume_config_mismatches(second, changed)
+    )
 
 
 def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path):

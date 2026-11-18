@@ -382,9 +382,9 @@ def test_actual_optimizer_builder_saved_policy_reloads_outside_input_directory(t
         records = []
         optimize._record_individual_result(candidate, config, [], SimpleNamespace(record=records.append))
         entry = records[0]
-    assert entry['bot']['global']['universe']['approved_coins'] == str(coins)
-    assert entry['bot']['long']['universe']['approved_coins'] is None
-    assert entry['bot']['short']['universe']['approved_coins'] == [str(short)]
+    assert entry['config']['bot']['global']['universe']['approved_coins'] == str(coins)
+    assert entry['config']['bot']['long']['universe']['approved_coins'] is None
+    assert entry['config']['bot']['short']['universe']['approved_coins'] == [str(short)]
     assert config == before
     coins.write_text('["BTC"]')
     short.write_text('["ETH"]')
@@ -398,7 +398,7 @@ def test_actual_optimizer_builder_saved_policy_reloads_outside_input_directory(t
     reloaded['backtest']['coins'] = deepcopy(config['backtest']['coins'])
     reloaded[PREPARED_DATASET_KEY] = prepared_identity(reloaded)
     disk_record = json.loads(destination.read_text())
-    assert disk_record[CONTRACT_KEY] == build_evaluation_contract(reloaded)
+    assert disk_record['provenance'][CONTRACT_KEY] == build_evaluation_contract(reloaded)
     # Same prepared candles and coin union, but changed directional membership, cannot reuse fitness.
     coins.write_text('["ETH"]')
     short.write_text('["BTC"]')

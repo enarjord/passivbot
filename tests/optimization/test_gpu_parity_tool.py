@@ -184,16 +184,45 @@ def test_prepared_inputs_reject_conflicting_exchange_alias_coin_lists(tmp_path):
 
 
 @pytest.mark.parametrize("problem", ["coins", "exchange"])
-def test_prepared_inputs_validate_wrapped_config_declarations(tmp_path, problem):
+@pytest.mark.parametrize("versioned", [False, True])
+def test_prepared_inputs_validate_wrapped_config_declarations(tmp_path, problem, versioned):
+    from config.result_records import build_result_record
+
     paths, config, _markets, _candles = _prepared_fixture_files(tmp_path)
     config["optimize"]["bounds"] = {"unused.candidate_gene": [0, 1]}
-    config["backtest"]["coins"] = (
+    membership = (
         {"binance": ["COIN00", "COIN02"]} if problem == "coins" else
         {"bybit": ["COIN00", "COIN01"]}
     )
-    paths[0].write_text(json.dumps({"config": config, "backtest": {"coins": {}}}))
-    with pytest.raises(ValueError, match="config.backtest.coins"):
+    if versioned:
+        config["backtest"].pop("coins")
+        source = build_result_record(config, provenance={"backtest_coins": membership})
+        match = r"provenance\.backtest_coins"
+    else:
+        config["backtest"]["coins"] = membership
+        source = {"config": config, "backtest": {"coins": {}}}
+        match = r"config\.backtest\.coins"
+    paths[0].write_text(json.dumps(source))
+    with pytest.raises(ValueError, match=match):
         gpu_parity.prepared_inputs(_prepared_options(paths))
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_prepared_inputs_accept_supported_result_version(tmp_path, version):
+    from config.result_records import build_result_record
+
+    paths, config, _markets, candles = _prepared_fixture_files(tmp_path)
+    membership = config["backtest"].pop("coins")
+    source = build_result_record(config, provenance={"backtest_coins": membership})
+    source["result_version"] = version
+    paths[0].write_text(json.dumps(source))
+    if version != 1:
+        with pytest.raises(ValueError, match="unsupported saved result version"):
+            gpu_parity.prepared_inputs(_prepared_options(paths))
+        return
+    prepared = gpu_parity.prepared_inputs(_prepared_options(paths))
+    assert prepared[0]["backtest"]["coins"] == membership
+    np.testing.assert_array_equal(prepared[1], candles)
 
 
 def test_prepared_inputs_preserve_wrapped_config_and_clear_gene_bounds(tmp_path):
