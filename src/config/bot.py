@@ -903,22 +903,8 @@ def format_bot_config(
 
 
 def apply_forager_internal_aliases(result: dict) -> None:
-    def _alias_bot_cfg(bot_cfg: dict) -> None:
-        inject_flattened_shared_bot_side(bot_cfg)
-        bot_cfg.setdefault("filter_volatility_drop_pct", 0.0)
-
     for pside in BOT_POSITION_SIDES:
         bot_cfg = result.get("bot", {}).get(pside, {})
         if isinstance(bot_cfg, dict):
-            _alias_bot_cfg(bot_cfg)
-
-    for override in (result.get("coin_overrides") or {}).values():
-        if not isinstance(override, dict):
-            continue
-        override_bot = override.get("bot", {})
-        if not isinstance(override_bot, dict):
-            continue
-        for pside in BOT_POSITION_SIDES:
-            bot_cfg = override_bot.get(pside, {})
-            if isinstance(bot_cfg, dict):
-                _alias_bot_cfg(bot_cfg)
+            inject_flattened_shared_bot_side(bot_cfg)
+            bot_cfg.setdefault("filter_volatility_drop_pct", 0.0)
