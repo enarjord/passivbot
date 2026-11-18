@@ -323,8 +323,7 @@ passivbot backtest CONFIG --plots none
 ```
 
 Plot groups are `equity`, `hsl`, `hsl_episodes`, `coin_fills` and `twe`; `all` and
-`none` select the complete set or disable rendering. The legacy `--disable_plotting`
-switch still suppresses its named groups. Cumulative PnL is no longer generated.
+`none` select the complete set or disable rendering.
 BTC-denominated views, full-history fill plots, stop zooms and dense equity CSV are
 optional. The `twe` plot shows the long and short entry-price notionals separately
 as percentages of wallet balance. It carries the last post-fill snapshot at each

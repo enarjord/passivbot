@@ -2653,7 +2653,6 @@ def add_starting_config_selection_options(parser) -> None:
     )
     parser.add_argument(
         "--compress-starting-configs",
-        "--starting-configs-max",
         type=int,
         default=None,
         metavar="N",

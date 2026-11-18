@@ -5,6 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Select backtest plots with `--plots` and cap the optimizer seed shortlist with
+  `--compress-starting-configs`. Remove the duplicate flags.
+
 - Use `reducer` in CLI limit expressions and objects, and a JSON or HJSON list
   with `--limits`. Use `passivbot tool pareto` and `passivbot tool pareto-analyze`
   for Pareto selection and analysis. Developer exchange probes remain directly

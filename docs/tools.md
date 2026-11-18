@@ -417,7 +417,7 @@ passivbot optimize path/to/suite-config.json \
   -l '{"metric":"peak_recovery_max_days_strategy_equity","penalize_if":"greater_than","reducer":"max","value":120}'
 ```
 
-Optionally add `--compress-starting-configs N` (alias `--starting-configs-max N`) to retain at most
+Optionally add `--compress-starting-configs N` to retain at most
 `N` filtered candidates using the same `anchors-farthest` objective-anchor and diversity selection
 as `passivbot tool pareto-compress N`. Compression may also be used without filtering:
 

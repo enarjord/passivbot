@@ -1227,18 +1227,23 @@ def test_optimize_parser_accepts_short_limit_alias():
     assert args.limit_entries == ["cagr_fraction_strategy_equity > 0.0"]
 
 
-@pytest.mark.parametrize(
-    "flag",
-    ["--compress-starting-configs", "--starting-configs-max"],
-)
-def test_optimize_parser_accepts_starting_config_preselection_options(flag):
+def test_optimize_parser_accepts_starting_config_preselection_options():
     parser = argparse.ArgumentParser()
     add_starting_config_selection_options(parser)
 
-    args = parser.parse_args(["--filter-starting-configs", flag, "60"])
+    args = parser.parse_args(["--filter-starting-configs", "--compress-starting-configs", "60"])
 
     assert args.filter_starting_configs is True
     assert args.starting_configs_max == 60
+
+
+def test_optimize_parser_rejects_retired_starting_config_flag(capsys):
+    parser = argparse.ArgumentParser()
+    add_starting_config_selection_options(parser)
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["--starting-configs-max", "60"])
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --starting-configs-max" in capsys.readouterr().err
 
 
 def test_optimize_parser_accepts_nested_bound_flags_alongside_limit_alias():
