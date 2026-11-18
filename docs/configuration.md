@@ -336,8 +336,8 @@ Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
   - A log-range coefficient of `0` disables that horizon for the affected threshold or retracement.
 - **strategy.trailing_martingale.entry.initial_ema_distance_fraction**:
   - Offset from lower/upper EMA band.
-  - Long initial entry/short unstuck close prices are lower EMA band minus offset.
-  - Short initial entry/long unstuck close prices are upper EMA band plus offset.
+  - Long initial entries use the lower EMA band times `1 - initial_ema_distance_fraction`.
+  - Short initial entries use the upper EMA band times `1 + initial_ema_distance_fraction`.
   - See `ema_span_0_minutes`/`ema_span_1_minutes`.
 - **strategy.trailing_martingale.entry.ema_gate_mode**:
   - Fixed enum, not optimized. Allowed values are `disabled`, `all`, `initial`, and `reentry`.
@@ -381,7 +381,10 @@ The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid`
 
 ### Unstuck Parameters
 
-If a position is stuck, the bot uses profits from other positions to realize losses for the stuck position. If multiple positions are stuck, the position with the lowest price action distance is selected for unstucking.
+If a position is stuck, the bot can spend its realized-loss allowance to reduce the position.
+When several positions are eligible, auto-unstuck prioritizes the highest
+[signed entry distance](ai/numeric_conventions.md#quantities). Positive means the current price
+has moved in favor of the position.
 
 These settings live under `bot.<side>.unstuck`. Effective WEL includes the resolved excess
 allowance: `effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_fraction)`.

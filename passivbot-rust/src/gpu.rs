@@ -581,7 +581,10 @@ mod tests {
         );
         assert!(source.contains("select_ema_multicoin_unstuck_coin("));
         assert!(source.contains("int forced_unstuck_coin"));
-        assert!(source.contains("long_unstuck_diff < short_unstuck_diff"));
+        assert!(source.contains("calc_signed_entry_distance_fraction("));
+        assert!(
+            source.contains("long_entry_distance_fraction > short_entry_distance_fraction")
+        );
         assert!(source.contains("long_unstuck_candidate <= short_unstuck_candidate"));
         assert!(source.contains(
             "const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po)"
@@ -801,7 +804,10 @@ mod tests {
         );
         assert!(source.contains("select_tm_multicoin_unstuck_coin("));
         assert!(source.contains("int forced_unstuck_coin"));
-        assert!(source.contains("long_unstuck_diff < short_unstuck_diff"));
+        assert!(source.contains("calc_signed_entry_distance_fraction("));
+        assert!(
+            source.contains("long_entry_distance_fraction > short_entry_distance_fraction")
+        );
         assert!(source.contains("long_unstuck_candidate <= short_unstuck_candidate"));
         assert!(source.contains("const TrailingMartingaleMulticoinSideConfig config ="));
         assert!(source.contains(

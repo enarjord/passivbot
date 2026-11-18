@@ -16,30 +16,32 @@ SHORT = 1
 
 
 @pytest.mark.parametrize(
-    "pside,pprice,price,expected",
+    "pside,entry,observed,expected",
     [
         (LONG, 100.0, 100.0, 0.0),
-        (LONG, 100.0, 99.0, 0.01),
-        (LONG, 100.0, 101.0, -0.01),
-        (SHORT, 100.0, 100.0, 0.0),
-        (SHORT, 100.0, 101.0, 0.01),
-        (SHORT, 100.0, 99.0, -0.01),
+        (LONG, 100.0, 98.0, -0.02),
+        (LONG, 100.0, 102.0, 0.02),
+        (SHORT, 50.0, 50.0, 0.0),
+        (SHORT, 50.0, 51.0, -0.02),
+        (SHORT, 50.0, 49.0, 0.02),
     ],
 )
-def test_pside_adverse_price_change_fraction(pside, pprice, price, expected):
-    assert pbr.calc_pside_adverse_price_change_fraction(pside, pprice, price) == pytest.approx(expected)
+def test_signed_entry_distance_fraction(pside, entry, observed, expected):
+    assert pbr.calc_signed_entry_distance_fraction(pside, entry, observed) == pytest.approx(
+        expected
+    )
 
 
 @pytest.mark.parametrize("pside", [LONG, SHORT])
-def test_pside_adverse_price_change_fraction_returns_zero_for_non_positive_pprice(pside):
-    assert pbr.calc_pside_adverse_price_change_fraction(pside, 0.0, 100.0) == 0.0
-    assert pbr.calc_pside_adverse_price_change_fraction(pside, float("nan"), 100.0) == 0.0
+@pytest.mark.parametrize("entry", [0.0, -1.0, float("nan")])
+def test_signed_entry_distance_preserves_native_invalid_entry_value(pside, entry):
+    assert pbr.calc_signed_entry_distance_fraction(pside, entry, 100.0) == 0.0
 
 
-def test_adverse_change_keywords_identify_the_reference_and_current_price():
-    assert pbr.calc_pside_adverse_price_change_fraction(
-        pside=LONG, reference_price=100.0, current_price=99.0,
-    ) == pytest.approx(.01)
+def test_entry_distance_keywords_identify_average_entry_and_observed_prices():
+    assert pbr.calc_signed_entry_distance_fraction(
+        pside=LONG, average_entry_price=100.0, observed_price=98.0,
+    ) == pytest.approx(-0.02)
 
 
 @pytest.mark.parametrize(
@@ -54,6 +56,7 @@ def test_absolute_relative_difference_fraction(value, reference, expected):
 @pytest.mark.parametrize("name", [
     "calc_diff", "calc_pprice_diff_int", "calc_pside_price_diff_int",
     "calc_price_diff_pside_int", "calc_order_price_diff",
+    "calc_pside_adverse_price_change_fraction",
 ])
 def test_retired_native_price_helpers_are_not_exported(name):
     assert not hasattr(pbr, name)

@@ -5,6 +5,11 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Show signed Entry Distance % in position logs and monitors, with positive values for favorable
+  price moves on either side. Position telemetry uses the new scale-one
+  `signed_entry_distance_fraction` field. Auto-unstuck preserves its order selection under the
+  new sign convention.
+
 - Include a wallet exposure plot in default backtest reports, with separate
   long and short series and a time-weighted exposure summary.
 

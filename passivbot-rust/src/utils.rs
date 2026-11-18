@@ -1108,22 +1108,26 @@ pub fn calc_pnl_short(entry_price: f64, close_price: f64, qty: f64, c_mult: f64)
     qty.abs() * c_mult * (entry_price - close_price)
 }
 
-/// Signed price change adverse to the position side, relative to reference_price.
-/// Long: 1 - current/reference; short: current/reference - 1. Positive is adverse.
-/// A nonpositive or NaN reference returns zero; an unknown pside still panics.
+/// Signed price move from the average entry price, positive when favorable to the position.
+/// Long: observed/entry - 1; short: 1 - observed/entry.
+/// A nonpositive or NaN entry price returns zero; an unknown pside panics.
 #[pyfunction]
-pub fn calc_pside_adverse_price_change_fraction(pside: usize, reference_price: f64, current_price: f64) -> f64 {
+pub fn calc_signed_entry_distance_fraction(
+    pside: usize,
+    average_entry_price: f64,
+    observed_price: f64,
+) -> f64 {
     match pside {
         LONG => {
-            if reference_price > 0.0 {
-                1.0 - current_price / reference_price
+            if average_entry_price > 0.0 {
+                observed_price / average_entry_price - 1.0
             } else {
                 0.0
             }
         }
         SHORT => {
-            if reference_price > 0.0 {
-                current_price / reference_price - 1.0
+            if average_entry_price > 0.0 {
+                1.0 - observed_price / average_entry_price
             } else {
                 0.0
             }

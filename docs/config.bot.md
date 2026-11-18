@@ -283,9 +283,12 @@ also change the denominator of the post-fill exposure ratio.
 Rust implements the [unstuck calculation](https://github.com/enarjord/passivbot/blob/v9/passivbot-rust/src/risk.rs)
 and its [realized-loss budget](https://github.com/enarjord/passivbot/blob/v9/passivbot-rust/src/utils.rs).
 
-When multiple positions are eligible, auto-unstuck chooses the least stuck
-position first, defined as the lowest pside-aware relative distance between
-position price and market price. TWEL enforcer uses the same selector.
+When multiple positions are eligible, auto-unstuck first tries the candidate with the highest
+[signed entry distance](ai/numeric_conventions.md#quantities). Favorable moves score positive,
+and among underwater positions the shallowest loss scores highest. The planner uses the ask for
+longs and the bid for shorts. Equal scores prioritize the lower symbol index. The
+[total exposure enforcer](#total-exposure-enforcer) prioritizes the lowest projected loss per
+unit of exposure, giving profitable and breakeven candidates a score of zero.
 
 `unstuck.ema_distance_fraction` must keep the EMA-derived trigger price positive:
 - `bot.long.unstuck.ema_distance_fraction > -1.0`

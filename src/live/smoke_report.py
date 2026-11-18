@@ -5279,7 +5279,7 @@ def _risk_event_group(
             "nonpanic_close_orders",
             "flat_confirmations",
             "changed",
-            "price_change_percent",
+            "signed_entry_distance_fraction",
             "status_counts",
             "over_budget_sides",
         )

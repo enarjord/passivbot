@@ -2,10 +2,10 @@ use crate::constants::{LONG, SHORT};
 use crate::entries::calc_min_entry_qty;
 use crate::types::{ExchangeParams, Order, OrderType, TwelEnforcerPolicy};
 use crate::utils::{
-    calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_pside_adverse_price_change_fraction,
-    calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty,
-    round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
-    RoundingMode,
+    calc_ask_order_price_gap_fraction, calc_bid_order_price_gap_fraction, calc_new_psize_pprice,
+    calc_pnl_long, calc_pnl_short, calc_signed_entry_distance_fraction, calc_wallet_exposure,
+    cost_to_qty, quantize_price, quantize_qty, round_dn, round_up, tolerant_round_dn_preserve_step,
+    tolerant_round_up_preserve_step, RoundingMode,
 };
 use std::collections::HashMap;
 
@@ -21,13 +21,13 @@ fn exposure_to_psize(exposure: f64, balance: f64, price: f64, c_mult: f64) -> f6
 struct LeastStuckCandidate {
     collection_idx: usize,
     symbol_idx: usize,
-    price_diff: f64,
+    signed_entry_distance_fraction: f64,
 }
 
 fn compare_least_stuck(a: LeastStuckCandidate, b: LeastStuckCandidate) -> std::cmp::Ordering {
-    match a
-        .price_diff
-        .partial_cmp(&b.price_diff)
+    match b
+        .signed_entry_distance_fraction
+        .partial_cmp(&a.signed_entry_distance_fraction)
         .unwrap_or(std::cmp::Ordering::Equal)
     {
         std::cmp::Ordering::Equal => a.symbol_idx.cmp(&b.symbol_idx),
@@ -38,7 +38,7 @@ fn compare_least_stuck(a: LeastStuckCandidate, b: LeastStuckCandidate) -> std::c
 fn least_stuck_order(candidates: Vec<LeastStuckCandidate>) -> Vec<usize> {
     let mut candidates: Vec<LeastStuckCandidate> = candidates
         .into_iter()
-        .filter(|candidate| candidate.price_diff.is_finite())
+        .filter(|candidate| candidate.signed_entry_distance_fraction.is_finite())
         .collect();
     candidates.sort_by(|a, b| compare_least_stuck(*a, *b));
     candidates
@@ -141,7 +141,11 @@ pub fn gate_entries_by_twel(
         } else {
             continue;
         };
-        let distance = calc_pside_adverse_price_change_fraction(pside, entry.market_price, entry.price);
+        let distance = match pside {
+            LONG => calc_bid_order_price_gap_fraction(entry.price, entry.market_price),
+            SHORT => calc_ask_order_price_gap_fraction(entry.price, entry.market_price),
+            _ => panic!("unknown pside {}", pside),
+        };
         candidates.push(CandidateInternal {
             data: GateEntriesCandidate {
                 qty: entry.qty.abs(),
@@ -486,7 +490,7 @@ where
     #[derive(Clone, Copy, Debug)]
     struct Candidate<'a> {
         input: &'a UnstuckPositionInput,
-        pprice_diff: f64,
+        signed_entry_distance_fraction: f64,
     }
 
     let mut stuck_positions: Vec<Candidate> = Vec::new();
@@ -600,14 +604,20 @@ where
             skip_observed!("inputs_unavailable");
         }
 
-        let pprice_diff =
-            calc_pside_adverse_price_change_fraction(input.side, input.position_price, input.current_price);
-        if !pprice_diff.is_finite() {
+        let signed_entry_distance_fraction = calc_signed_entry_distance_fraction(
+            input.side,
+            input.position_price,
+            input.current_price,
+        );
+        if !signed_entry_distance_fraction.is_finite() {
             skip_observed!("inputs_unavailable");
         }
 
         observe_unstuck(&mut diagnostics, observation, "eligible");
-        stuck_positions.push(Candidate { input, pprice_diff });
+        stuck_positions.push(Candidate {
+            input,
+            signed_entry_distance_fraction,
+        });
     }
 
     if stuck_positions.is_empty() {
@@ -621,7 +631,7 @@ where
             .map(|(collection_idx, candidate)| LeastStuckCandidate {
                 collection_idx,
                 symbol_idx: candidate.input.idx,
-                price_diff: candidate.pprice_diff,
+                signed_entry_distance_fraction: candidate.signed_entry_distance_fraction,
             })
             .collect(),
     );
@@ -1048,7 +1058,6 @@ pub fn calc_twel_enforcer_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::calc_pside_adverse_price_change_fraction;
 
     fn pos(
         idx: usize,
@@ -1222,6 +1231,35 @@ mod tests {
         assert!(rows[1].proposed);
         assert_eq!(rows[0].reason, "eligible");
         assert_eq!(rows[1].reason, "eligible");
+    }
+
+    #[test]
+    fn unstuck_prefers_favorable_moves_and_preserves_symbol_index_ties() {
+        let mut long = unstuck_diagnostic_input(LONG);
+        long.idx = 3;
+        long.position_price = 128.0;
+        long.current_price = 144.0;
+        long.unstuck_ema_gating_enabled = false;
+
+        let mut short = unstuck_diagnostic_input(SHORT);
+        short.idx = 2;
+        short.position_price = 128.0;
+        short.unstuck_ema_gating_enabled = false;
+
+        for (short_price, expected_idx, expected_side) in [
+            (136.0, 3, LONG),  // Short underwater.
+            (120.0, 3, LONG),  // Both profitable, long farther from entry.
+            (112.0_f64.next_up(), 3, LONG),
+            (112.0, 2, SHORT), // Exact tie, lower symbol index wins.
+            (112.0_f64.next_down(), 2, SHORT),
+            (111.0, 2, SHORT), // Both profitable, short farther from entry.
+        ] {
+            short.current_price = short_price;
+            let (idx, side, _) =
+                calc_unstucking_action(1_000.0, 100.0, 100.0, &[long.clone(), short.clone()])
+                    .expect("one eligible position should be selected");
+            assert_eq!((idx, side), (expected_idx, expected_side));
+        }
     }
 
     #[test]
@@ -1432,8 +1470,8 @@ mod tests {
     }
 
     #[test]
-    fn test_twel_reducer_selects_lowest_price_diff() {
-        // One pos deep underwater (higher price_diff), one near breakeven; near breakeven should be reduced first (lowest diff)
+    fn test_twel_reducer_selects_lowest_adverse_loss_per_exposure() {
+        // Reduce the near-breakeven position before the one deep underwater.
         let balance = 1000.0;
         let wel_base = 0.4;
         let twel = 1.2;
@@ -1453,22 +1491,7 @@ mod tests {
             TwelEnforcerPolicy::ReduceOverweight,
             None,
         );
-        assert!(!actions.is_empty());
-        // The action with the smallest price diff should target idx 1
-        let price_diff = |idx: usize| -> f64 {
-            let pos = positions.iter().find(|p| p.idx == idx).unwrap();
-            calc_pside_adverse_price_change_fraction(LONG, pos.position_price, pos.market_price)
-        };
-        let best_idx = actions
-            .iter()
-            .min_by(|(a_idx, _), (b_idx, _)| {
-                price_diff(*a_idx)
-                    .partial_cmp(&price_diff(*b_idx))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(idx, _)| *idx)
-            .unwrap();
-        assert_eq!(best_idx, 1);
+        assert_eq!(actions.first().map(|(idx, _)| *idx), Some(1));
     }
 
     #[test]

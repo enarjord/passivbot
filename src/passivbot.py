@@ -104,6 +104,7 @@ from live.console_health import (
 from live.event_bus import (
     ConsoleSummarySink,
     EventTypes,
+    format_entry_distance_percent,
     format_forager_eligibility_console,
     format_market_snapshot_diagnostic_console,
     format_memory_snapshot_console,
@@ -1418,7 +1419,6 @@ class Passivbot:
         self.price_steps = {}
         self.c_mults = {}
         self.max_leverage = {}
-        self.pside_int_map = {"long": 0, "short": 1}
         self.PB_modes = {"long": {}, "short": {}}
         self._order_churn_gate_state = OrderChurnGateState()
         self._order_churn_risk_active_pairs: tuple[tuple[str, str], ...] = ()
@@ -14287,7 +14287,11 @@ class Passivbot:
         table.padding_width = 0
 
         changed_symbols = list(dict.fromkeys(symbol for symbol, _pside in changed))
-        from live.diagnostic_valuation import DIAGNOSTIC_MAX_AGE_MS, remember_position_quotes
+        from live.diagnostic_valuation import (
+            DIAGNOSTIC_MAX_AGE_MS,
+            observe_signed_entry_distance_fraction,
+            remember_position_quotes,
+        )
 
         snapshots = await self._get_live_market_snapshots(
             changed_symbols,
@@ -14336,17 +14340,12 @@ class Passivbot:
             WEL_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
             WELe_ratio = wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0
 
-            last_price = last_prices[symbol]
-            try:
-                pprice_diff = (
-                    pbr.calc_pside_adverse_price_change_fraction(
-                        self.pside_int_map[pside], new["price"], last_price
-                    )
-                    if last_price
-                    else 0.0
+            last_price = last_prices.get(symbol)
+            signed_entry_distance = None
+            if new["size"] != 0.0 and math.isfinite(new["size"]):
+                signed_entry_distance = observe_signed_entry_distance_fraction(
+                    pside, new["price"], last_price
                 )
-            except:
-                pprice_diff = 0.0
 
             try:
                 upnl = (
@@ -14376,7 +14375,7 @@ class Passivbot:
                     wel_ratio=WEL_ratio,
                     wele_ratio=WELe_ratio,
                     twel_ratio=total_we_by_pside[pside] / twel if twel > 0.0 else 0.0,
-                    price_action_distance=pprice_diff,
+                    signed_entry_distance_fraction=signed_entry_distance,
                     upnl=upnl,
                     last_price=last_price,
                 )
@@ -14405,8 +14404,8 @@ class Passivbot:
                     pbr.round_dynamic(wallet_exposure, 3),
                     " ",
                     wel_str,
-                    " PA dist: ",
-                    round(pprice_diff, 4),
+                    " Entry Distance: ",
+                    format_entry_distance_percent(signed_entry_distance),
                     " upnl: ",
                     pbr.round_dynamic(upnl, 3),
                 ]
