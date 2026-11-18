@@ -10,6 +10,7 @@ from runtime_identity import (
     config_sha256,
     write_runtime_manifest,
 )
+from passivbot_version import __version__
 
 
 def _identity(**overrides) -> RuntimeIdentity:
@@ -89,6 +90,7 @@ def test_build_runtime_identity_records_loaded_binary_without_exposing_config(
     config = {"api_secret": "must-not-be-recorded", "threshold": 0.1}
     identity = build_runtime_identity(config, started_at_ms=123, repo_root=tmp_path)
 
+    assert identity.passivbot_version == __version__
     assert identity.python_git_commit == "f" * 40
     assert identity.python_git_dirty is False
     assert identity.rust_source_sha256 == "1" * 64

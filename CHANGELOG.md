@@ -30,6 +30,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Show disabled sides explicitly in the live startup banner’s position and exposure limits.
 
+- Identify v9 development builds as `9.0.0.dev0` in package metadata, the CLI, and
+  runtime manifests.
+
 - Retain small Trailing Martingale entry EMA updates in native GPU replay to
   reduce one-tick differences in entry prices.
 
