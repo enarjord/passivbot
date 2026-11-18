@@ -56,9 +56,21 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
    position-update timestamp, then require its zero-state replay to match the
    authoritative position. Multi-fill cohorts and later position updates remain pending
    because final size/VWAP equality cannot prove omitted round trips are absent. Generic
-   and update-only position timestamps do not establish this boundary. Successful use
-   emits a warning and a structured fallback diagnostic only after every confirmation
-   predicate, including the required post-snapshot fill generation, has cleared.
+   and update-only position timestamps alone do not establish this boundary.
+   Binance USDⓈ-M futures can prove an update-only reset with a fresh, unsaturated
+   account-trade response for the exact update millisecond. The entire response must
+   belong to the queried symbol and millisecond. The coin-side must have one identified
+   additive execution that matches the singleton cached cohort, the selected fill
+   identity, and the current position's size and entry price when replayed from flat.
+   An explicit opening time, when present, must equal the same millisecond.
+   The fill-refresh owner may probe after the mandatory post-snapshot fetch completes.
+   It handles at most four unresolved coin-sides within a one-second request budget per pass,
+   rotating the order and spacing retries for an unchanged position by at least one minute.
+   The HSL owner publishes its canonical fill observation and readiness before probing. This proof leaves
+   cached history, PnL, coverage metadata and HSL history acquisition times untouched.
+   A failed or incomplete probe leaves the affected trailing side pending. Successful
+   use emits a warning and `fill.position_open_boundary_recovery_used` with
+   `recovery=position_update_fresh_single_fill` after every confirmation predicate clears.
    Ordinary recorded after-state price comparison accepts at most one effective
    executable price tick because exchanges may round or truncate a sub-tick reconstructed
    VWAP. The effective tick is connector-aware, including Hyperliquid's decimal and
@@ -66,7 +78,10 @@ strategy inputs; HSL still uses the Rust best-effort reconciler independently.
    narrower, lower-side interval governs discrepancies that cross a power-of-ten
    boundary; the inclusive boundary admits only floating-point representation slack.
    Each trailing derivation revalidates a previously confirmed side with the complete canonical
-   after-state or opening-boundary replay predicate. A changed raw after-state or replay cohort
+   after-state or boundary replay predicate. A Binance update-time proof is held only while
+   its manager, position facts, and exact cached execution remain current. It can be reacquired
+   after restart and is never persisted. An ordinary plan binds the version of those proofs
+   it consumed and defers if the proofs change before admission. A changed replay cohort
    cannot inherit confirmation from an unchanged fill ID, timestamp, or partial ledger signature.
    Correction pending may recover from a genuinely repaired same-ID fill without inventing a new
    position change or advancing an observation time. Candle acquisition completes before any

@@ -219,10 +219,13 @@ class OrdinaryReceipts:
 
     sources: tuple
     fills: object
+    trailing_resets: object
 
     def mismatch_reason(self, other):
         if self.fills is not other.fills:
             return "hsl_fill_receipt_replaced"
+        if self.trailing_resets is not other.trailing_resets:
+            return "hsl_trailing_reset_evidence_replaced"
         if len(self.sources) != len(other.sources) or any(
             symbol != current_symbol or receipt is not current_receipt
             for (symbol, receipt), (current_symbol, current_receipt)
@@ -1199,6 +1202,7 @@ class Owner:
         return OrdinaryReceipts(
             tuple(sorted(self.sources.items())),
             getattr(self.bot, "_hsl_fill_observation", None),
+            getattr(self.bot, "_trailing_reset_evidence", None),
         )
 
     async def _ordinary_plan(self):

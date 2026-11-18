@@ -2708,10 +2708,27 @@ class FillEventCache:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class TrailingResetFill:
+    """A single execution from a complete trade query at one update millisecond."""
+
+    id: str
+    timestamp: int
+    side: str
+    qty: float
+    price: float
+
+
 class BaseFetcher:
     """Abstract interface for exchange-specific fill fetchers."""
 
     pnl_observations: List[PnlObservation] = []
+
+    async def fetch_trailing_reset_fill(
+        self, symbol: str, pside: str, timestamp: int
+    ) -> TrailingResetFill | None:
+        """Return no evidence unless the connector can prove the complete cohort."""
+        return None
 
     async def fetch(
         self,
@@ -3345,6 +3362,55 @@ class BinanceFetcher(BaseFetcher):
             return
         self._unsupported_symbols.add(symbol)
         logger.debug("[fills] BinanceFetcher skipping unsupported symbol %s", symbol)
+
+    async def fetch_trailing_reset_fill(
+        self, symbol: str, pside: str, timestamp: int
+    ) -> TrailingResetFill | None:
+        if self.portfolio_margin:
+            return None
+        if self._stop_requested():
+            raise asyncio.CancelledError("shutdown requested before trailing reset query")
+        market = self.api.market(symbol)
+        if market["linear"] is not True or market["swap"] is not True:
+            return None
+        limit = min(1000, self.trade_limit)
+        # Count and validate the unfiltered response. A unified parser can filter
+        # rows or truncate the returned list before we establish completeness.
+        trades = await self.api.fapiPrivateGetUserTrades(
+            {
+                "symbol": market["id"],
+                "startTime": timestamp,
+                "endTime": timestamp,
+                "limit": limit,
+            }
+        )
+        if not isinstance(trades, list) or len(trades) >= limit:
+            return None
+        cohort = []
+        for trade in trades:
+            if (
+                not isinstance(trade, dict)
+                or trade.get("symbol") != market["id"]
+                or type(trade.get("time")) is not int
+                or trade["time"] != timestamp
+                or trade.get("positionSide") not in ("LONG", "SHORT")
+                or trade.get("side") not in ("BUY", "SELL")
+                or type(trade.get("id")) is not int
+                or trade["id"] < 0
+            ):
+                return None
+            if trade["positionSide"].lower() == pside:
+                cohort.append(trade)
+        if len(cohort) != 1:
+            return None
+        trade = cohort[0]
+        qty, price = _fill_float(trade.get("qty")), _fill_float(trade.get("price"))
+        if not (math.isfinite(qty) and qty > 0.0 and math.isfinite(price) and price > 0.0):
+            return None
+        side = trade["side"].lower()
+        return TrailingResetFill(
+            str(trade["id"]), timestamp, side, qty if side == "buy" else -qty, price
+        )
 
     async def fetch(
         self,
@@ -6243,6 +6309,12 @@ class FillEventsManager:
         if symbol:
             events = [ev for ev in events if ev.symbol == symbol]
         return list(events)
+
+    async def fetch_trailing_reset_fill(
+        self, symbol: str, pside: str, timestamp: int
+    ) -> TrailingResetFill | None:
+        """Acquire a trailing input without changing fill history or PnL coverage."""
+        return await self.fetcher.fetch_trailing_reset_fill(symbol, pside, timestamp)
 
     @staticmethod
     def pending_pnl_events(events: Iterable[FillEvent]) -> List[FillEvent]:
