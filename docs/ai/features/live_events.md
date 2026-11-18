@@ -12,6 +12,13 @@ eligibility, replay order, or runtime decisions.
 
 ## Signed Price Diagnostics
 
+`position.changed.data.signed_entry_distance_fraction` uses the new average entry price and the
+diagnostic last price. Monitor position rows use the same
+[signed entry distance](../numeric_conventions.md#quantities) convention with their snapshot last
+price. Positive means favorable for either position side. Closed or flat positions and observations
+without a usable entry or last price omit the field. A measured breakeven is zero. Historical
+`price_action_distance` fields use the former adverse-positive convention.
+
 Trailing `current_price_change_from_threshold_fraction` and
 `current_price_change_from_retracement_fraction` report `current / reference - 1`.
 Monitor `next_target_price_offset_fraction` and `next_unstuck_trigger_price_offset_fraction`
@@ -23,8 +30,8 @@ values retained. Console and dashboard percentage formatting is unchanged.
 
 Owned diagnostic fields ending in `_percent` use scale 100: `2.5` means 2.5%, without a numeric
 rescaling from their previous abbreviated spelling. This includes replacement price/quantity
-differences (absolute relative differences), unstuck price changes and changes from a balance peak
-(signed), memory changes, execution-distance samples, progress, budget usage and failure shares.
+differences (absolute relative differences), changes from a balance peak (signed), memory changes,
+execution-distance samples, progress, budget usage and failure shares.
 CPU, memory and budget usage may exceed 100 where the producer's existing contract permits it.
 Percentile qualifiers such as `p95` describe selection, not a percent-valued output. External
 library field names remain unchanged; report producers and consumers use the owned names together.

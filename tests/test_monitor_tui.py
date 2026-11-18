@@ -169,7 +169,7 @@ def test_monitor_tui_prefers_focus_symbol_in_rendering():
                             "wel_ratio": 3.5,
                             "wele_ratio": 2.8,
                             "twel_ratio": 0.41,
-                            "price_action_distance": 0.0071,
+                            "signed_entry_distance_fraction": 0.0071,
                             "upnl": 5.0,
                         },
                         "short": {"size": 0.0, "price": 0.0},
@@ -184,7 +184,7 @@ def test_monitor_tui_prefers_focus_symbol_in_rendering():
                             "wel_ratio": 8.75,
                             "wele_ratio": 7.0,
                             "twel_ratio": 1.03,
-                            "price_action_distance": 0.0143,
+                            "signed_entry_distance_fraction": 0.0143,
                             "upnl": 25.0,
                         },
                         "short": {"size": 0.0, "price": 0.0},
@@ -405,7 +405,7 @@ def test_monitor_tui_render_screen_includes_core_panels():
                             "wel_ratio": 3.5,
                             "wele_ratio": 2.8,
                             "twel_ratio": 0.41,
-                            "price_action_distance": 0.0071,
+                            "signed_entry_distance_fraction": 0.0071,
                             "upnl": 5.0,
                         },
                         "short": {"size": 0.0, "price": 0.0},
@@ -553,7 +553,11 @@ def test_monitor_tui_render_screen_includes_core_panels():
     assert "TWE total | long=0.7000/1.7000 ( 41%) | short=0.0000/- (-)" in rendered
     assert "BTC/USDT" in rendered
     assert "WE=   0.7" in rendered
-    assert "PA= 0.0071" in rendered
+    assert "Entry Distance %" in rendered
+    assert "+0.71%" in rendered
+    panel_heading = next(line for line in rendered.splitlines() if "Entry Distance %" in line)
+    position = next(line for line in rendered.splitlines() if "+0.71%" in line)
+    assert panel_heading.index("Entry Distance %") == position.index("+0.71%")
     assert "TWEL" not in rendered
     assert "| Forager" in rendered
     assert "pend=1" in rendered

@@ -9,6 +9,26 @@ import passivbot_rust as pbr
 DIAGNOSTIC_MAX_AGE_MS = 60_000
 
 
+def observe_signed_entry_distance_fraction(
+    pside: str, entry_price: float | None, observed_price: float | None
+) -> float | None:
+    """Report a valid position price move, with favorable moves positive."""
+    if (
+        pside not in ("long", "short")
+        or entry_price is None
+        or not math.isfinite(entry_price)
+        or entry_price <= 0.0
+        or observed_price is None
+        or not math.isfinite(observed_price)
+        or observed_price <= 0.0
+    ):
+        return None
+    distance = pbr.calc_signed_entry_distance_fraction(
+        0 if pside == "long" else 1, entry_price, observed_price
+    )
+    return distance if math.isfinite(distance) else None
+
+
 def remember_position_quotes(bot, snapshots, positions, *, now_ms):
     """Retain only held-symbol quotes already obtained for position logging."""
     held = {p["symbol"] for p in positions if float(p["size"]) != 0.0}

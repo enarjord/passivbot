@@ -2017,6 +2017,17 @@ def _format_position_console_percentage(value: float | None) -> str:
     return f"{percentage:.4f}%"
 
 
+def format_entry_distance_percent(value: float | None) -> str:
+    if not isinstance(value, (int, float)):
+        return "-"
+    percentage = value * 100.0
+    if not math.isfinite(percentage):
+        return "-"
+    if percentage == 0.0:
+        return "0.00%"
+    return f"{percentage:+.2f}%"
+
+
 def _format_console_label(value: object) -> str:
     text = _ANSI_ESCAPE_RE.sub("", str(value or ""))
     text = _CONTROL_CHARACTER_RE.sub(" ", text)
@@ -2062,6 +2073,11 @@ def _format_console_position_changed(event: LiveEvent) -> str:
             "uPnL=" f"{_format_console_number(_data_number(data, 'upnl'))}",
         )
     )
+    entry_distance = format_entry_distance_percent(
+        _data_number(data, "signed_entry_distance_fraction")
+    )
+    if entry_distance != "-":
+        metrics += f" entry_dist={entry_distance}"
     return (
         f"[pos] {action:>7} {coin:<10} {pside:<5} {old_leg:<22} "
         f"-> {new_leg:<22} | {metrics}"
@@ -2665,9 +2681,11 @@ def _console_unstuck_selection_summary(event: LiveEvent) -> list[str]:
     current_price = _data_number(data, "current_price")
     if current_price:
         parts.append(f"current={current_price:g}")
-    diff_pct = _data_number(data, "price_change_percent")
-    if diff_pct is not None:
-        parts.append(f"pos_pnl_dist={diff_pct:.4f}%")
+    entry_distance = format_entry_distance_percent(
+        _data_number(data, "signed_entry_distance_fraction")
+    )
+    if entry_distance != "-":
+        parts.append(f"entry_dist={entry_distance}")
     allowance = _data_number(data, "allowance")
     if allowance is not None:
         parts.append(f"allowance={allowance:g}")

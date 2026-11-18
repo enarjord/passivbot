@@ -87,6 +87,15 @@ Example initial-focus URL:
 http://127.0.0.1:8765/dashboard?exchange=bitget&user=bitget_01&symbol=BTC/USDT:USDT
 ```
 
+### Entry Distance %
+
+The browser monitor and TUI display signed price change from average entry. For either side,
+a favorable move is positive and an adverse move is negative. The monitor uses its snapshot
+last price and carries the scale-one `signed_entry_distance_fraction` in each measured position row.
+Rows without usable prices omit the field. A value of `-0.02` displays as `-2.00%`. Historical
+records named `price_action_distance` use the former adverse-positive sign. See
+[numeric names and units](ai/numeric_conventions.md#quantities).
+
 ### Reading trade readiness
 
 When a bot appears to wait, compare the observations for the same bot and symbol.

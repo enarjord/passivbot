@@ -12,8 +12,8 @@ except ImportError:  # pragma: no cover
 import pandas as pd
 import numpy as np
 
+from live.diagnostic_valuation import observe_signed_entry_distance_fraction
 from utils import make_get_filepath
-import passivbot_rust as pbr
 
 plt.rcParams["figure.figsize"] = [21, 13]
 
@@ -989,9 +989,9 @@ def plot_pareto_front(df, metrics, minimize=(True, True)):
 def add_metrics_to_fdf(fdf):
     # Signed wallet exposure: long positive, short negative.
     fdf.loc[:, "wallet_exposure"] = fdf.psize * fdf.pprice / fdf.balance
-    fdf.loc[:, "pprice_dist"] = fdf.apply(
-        lambda x: pbr.calc_pside_adverse_price_change_fraction(
-            0 if "long" in x.type else 1, x.pprice, x.price
+    fdf.loc[:, "signed_entry_distance_fraction"] = fdf.apply(
+        lambda x: observe_signed_entry_distance_fraction(
+            "long" if "long" in x.type else "short", x.pprice, x.price
         ),
         axis=1,
     )

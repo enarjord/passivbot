@@ -23,6 +23,7 @@ except ImportError:  # pragma: no cover - exercised by a subprocess import test
 
 import aiohttp
 
+from live.event_bus import format_entry_distance_percent
 from logging_setup import resolve_stable_log_alias
 
 TERMINAL_CONTROL_SUPPORTED = termios is not None and tty is not None
@@ -487,6 +488,11 @@ def _format_event_line(message: dict[str, Any]) -> str:
         parts.append(f"[{pside}]")
     payload = message.get("payload", {})
     if isinstance(payload, dict):
+        entry_distance = format_entry_distance_percent(
+            payload.get("signed_entry_distance_fraction")
+        )
+        if entry_distance != "-":
+            parts.append(f"entry_dist={entry_distance}")
         if "equity" in payload:
             parts.append(f"eq={_fmt_float(payload.get('equity'), 2)}")
         elif "price" in payload and "qty" in payload:
@@ -992,13 +998,14 @@ def _format_position_side_line(row: dict[str, Any], pside: str) -> str:
     pos = row.get(pside, {}) if isinstance(row.get(pside), dict) else {}
     size_text = _fmt_compact_float(pos.get("size"), digits=4)
     price_text = _fmt_compact_float(pos.get("price"), digits=4)
+    entry_distance = format_entry_distance_percent(pos.get("signed_entry_distance_fraction"))
     return (
         f"{str(row.get('label', row.get('symbol', '?'))):<10} "
         f"{pside:<5} "
         f"{size_text:>7}@{price_text:<9} "
+        f"{entry_distance:<16} "
         f"WE={_fmt_compact_float(pos.get('wallet_exposure'), digits=4):>6} | "
         f"{_fmt_pct_ratio(pos.get('wel_ratio')):>4}/{_fmt_pct_ratio(pos.get('wele_ratio')):<4} | "
-        f"PA={_fmt_compact_float(pos.get('price_action_distance'), digits=4):>7} "
         f"uPnL={_fmt_compact_float(pos.get('upnl'), digits=3):>8} "
         f"o{int(row.get('orders', 0) or 0)}"
     )
@@ -1338,7 +1345,8 @@ def render_screen(
     rows = _active_position_rows(snapshot)[:8]
     positions_lines = _render_positions_twe_summary(rows)
     positions_lines.append(
-        "symbol      side    size@price        WE | WEL/WELe | PA / uPnL / o"
+        f"{'symbol':<10} {'side':<5} {'size@price':>17} "
+        f"Entry Distance % {'WE':>9} | WEL/WELe | uPnL / o"
     )
     if rows:
         emitted = 0

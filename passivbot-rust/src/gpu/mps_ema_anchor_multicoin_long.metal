@@ -1179,9 +1179,9 @@ inline int select_ema_multicoin_unstuck_coin(
     int coin_count,
     bool short_side,
     int effective_n_positions,
-    thread float& selected_diff
+    thread float& selected_entry_distance_fraction
 ) {
-    selected_diff = INFINITY;
+    selected_entry_distance_fraction = -INFINITY;
 #if PASSIVBOT_UNSTUCK_ENABLED
     if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
     const float effective_wel = config.twel
@@ -1271,14 +1271,14 @@ inline int select_ema_multicoin_unstuck_coin(
             if (!triggered) continue;
         }
 #endif
-        const float pprice_diff = short_side
-            ? price_now / side.pprice[c] - 1.0f
-            : 1.0f - price_now / side.pprice[c];
-        if (!isfinite(pprice_diff)) continue;
-        if (selected_coin < 0 || pprice_diff < selected_diff
-            || (pprice_diff == selected_diff && c < selected_coin)) {
+        const float signed_entry_distance_fraction = calc_signed_entry_distance_fraction(
+            short_side, side.pprice[c], price_now
+        );
+        if (!isfinite(signed_entry_distance_fraction)) continue;
+        if (selected_coin < 0 || signed_entry_distance_fraction > selected_entry_distance_fraction
+            || (signed_entry_distance_fraction == selected_entry_distance_fraction && c < selected_coin)) {
             selected_coin = c;
-            selected_diff = pprice_diff;
+            selected_entry_distance_fraction = signed_entry_distance_fraction;
         }
     }
     return selected_coin;
@@ -1508,7 +1508,7 @@ inline void generate_ema_multicoin_side_orders(
 #if PASSIVBOT_UNSTUCK_ENABLED
     float balance_peak = balance + account.unstuck_memory.drawdown;
     int unstuck_coin = -1;
-    float best_unstuck_diff = INFINITY;
+    float best_entry_distance_fraction = -INFINITY;
     float selected_unstuck_qty = 0.0f;
     int selected_unstuck_tick = 0;
     for (int c = 0; c < C; ++c) {
@@ -1629,13 +1629,13 @@ inline void generate_ema_multicoin_side_orders(
                 )
             );
         }
-        float pprice_diff = short_side
-            ? price_now / pprice[c] - 1.0f
-            : 1.0f - price_now / pprice[c];
-        if (unstuck_coin < 0 || pprice_diff < best_unstuck_diff
-            || (pprice_diff == best_unstuck_diff && c < unstuck_coin)) {
+        float signed_entry_distance_fraction = calc_signed_entry_distance_fraction(
+            short_side, pprice[c], price_now
+        );
+        if (unstuck_coin < 0 || signed_entry_distance_fraction > best_entry_distance_fraction
+            || (signed_entry_distance_fraction == best_entry_distance_fraction && c < unstuck_coin)) {
             unstuck_coin = c;
-            best_unstuck_diff = pprice_diff;
+            best_entry_distance_fraction = signed_entry_distance_fraction;
             selected_unstuck_qty = reducer_qty;
             selected_unstuck_tick = reducer_tick;
         }
@@ -4129,14 +4129,14 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
             return;
         }
-        float long_unstuck_diff = INFINITY;
-        float short_unstuck_diff = INFINITY;
+        float long_entry_distance_fraction = -INFINITY;
+        float short_entry_distance_fraction = -INFINITY;
         const int long_unstuck_candidate = long_can_generate
             ? select_ema_multicoin_unstuck_coin(
                 long_side, long_config, account,
                 bars, touch_ticks, coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_effective_n_positions,
-                long_unstuck_diff
+                long_entry_distance_fraction
             )
             : -1;
         const int short_unstuck_candidate = short_can_generate
@@ -4144,20 +4144,20 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_side, short_config, account,
                 bars, touch_ticks, coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_effective_n_positions,
-                short_unstuck_diff
+                short_entry_distance_fraction
             )
             : -1;
         if (!account.realized_decay_valid) {
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
             return;
         }
-        // Exact Rust ranks by price difference, then symbol index. Its stable
-        // long-first input order makes long win an equal-symbol tie.
+        // Rust prefers the highest signed entry distance, then the lowest symbol
+        // index. Its stable long-first input order breaks an equal-symbol tie.
         const bool long_unstuck_wins = long_unstuck_candidate >= 0
             && (
                 short_unstuck_candidate < 0
-                || long_unstuck_diff < short_unstuck_diff
-                || (long_unstuck_diff == short_unstuck_diff
+                || long_entry_distance_fraction > short_entry_distance_fraction
+                || (long_entry_distance_fraction == short_entry_distance_fraction
                     && long_unstuck_candidate <= short_unstuck_candidate)
             );
         const int long_unstuck_coin = long_unstuck_wins

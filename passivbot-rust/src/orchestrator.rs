@@ -57,8 +57,8 @@ mod core {
         TwelEnforcerPolicy,
     };
     use crate::utils::{
-        calc_new_psize_pprice, calc_ask_order_price_gap_fraction, calc_bid_order_price_gap_fraction, calc_pnl_long,
-        calc_pnl_short, calc_pside_adverse_price_change_fraction, calc_wallet_exposure,
+        calc_ask_order_price_gap_fraction, calc_bid_order_price_gap_fraction, calc_new_psize_pprice,
+        calc_pnl_long, calc_pnl_short, calc_wallet_exposure,
         classify_close_wave_remainder, close_qty_absorbing_proven_remainder, qty_to_cost, round_,
         round_dn, round_up, tolerant_round_dn_preserve_step, tolerant_round_up_preserve_step,
         CloseWaveRemainder,
@@ -3240,7 +3240,6 @@ mod core {
             return;
         }
 
-        let pside_int = pside.to_pside_int();
         let mut candidates: Vec<Candidate> = Vec::with_capacity(entries.len());
         for (order_idx, o) in entries.iter().enumerate() {
             if !o.price.is_finite() || o.price <= 0.0 || !o.qty.is_finite() {
@@ -3281,7 +3280,10 @@ mod core {
             if !(market_price.is_finite() && market_price > 0.0) {
                 continue;
             }
-            let distance = calc_pside_adverse_price_change_fraction(pside_int, market_price, o.price);
+            let distance = match pside {
+                PositionSide::Long => calc_bid_order_price_gap_fraction(o.price, market_price),
+                PositionSide::Short => calc_ask_order_price_gap_fraction(o.price, market_price),
+            };
             candidates.push(Candidate {
                 order_idx,
                 symbol_idx: o.symbol_idx,

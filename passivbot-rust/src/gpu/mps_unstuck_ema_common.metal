@@ -6,6 +6,15 @@
 #define PASSIVBOT_UNSTUCK_EMA_ENABLED 1
 #endif
 
+// Match Rust's position-side convention: positive means a favorable move.
+inline float calc_signed_entry_distance_fraction(
+    bool short_side, float average_entry_price, float observed_price
+) {
+    return short_side
+        ? 1.0f - observed_price / average_entry_price
+        : observed_price / average_entry_price - 1.0f;
+}
+
 // Price EMAs finalize their normalized warmup at the first usable planning
 // boundary. Between completed candles they retain only this scalar recurrence.
 // Horizons arrive in candle periods after host-side minute scaling.

@@ -80,7 +80,9 @@ def _install_passivbot_rust_stub():
         lambda entry_price, close_price, qty, c_mult=1.0: (entry_price - close_price)
         * qty
     )
-    stub.calc_pside_adverse_price_change_fraction = lambda *args, **kwargs: 0
+    stub.calc_signed_entry_distance_fraction = lambda side, entry, observed: (
+        observed / entry - 1.0 if side == 0 else 1.0 - observed / entry
+    )
 
     def _calc_auto_unstuck_allowance_v9(balance, loss_allowance_fraction, twel, drawdown):
         from v9_risk_reference import allowance, f32, mul

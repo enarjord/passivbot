@@ -50,6 +50,11 @@
     return `${sign}${pct.toFixed(digits)}%`;
   }
 
+  function fmtEntryDistance(value) {
+    if (typeof value !== "number" || !Number.isFinite(value * 100)) return "-";
+    return value === 0 ? "0.00%" : fmtPctRatio(value);
+  }
+
   function fmtAgeMs(tsMs) {
     if (!tsMs) return "-";
     const delta = Math.max(0, Date.now() - Number(tsMs));
@@ -425,6 +430,7 @@
           ["size", fmtCompact(payload.new_size ?? payload.size, 4)],
           ["price", fmtCompact(payload.new_price ?? payload.price, 4)],
           ["upnl", fmtCompact(payload.upnl, 2)],
+          ["entry dist", fmtEntryDistance(payload.signed_entry_distance_fraction)],
         ])
           .map(([key, value]) => `${key} ${value}`)
           .join(" · ");
@@ -662,7 +668,7 @@
         <td class="mono">${escapeHtml(`${fmtCompact(row.side.size)} @ ${fmtCompact(row.side.price)}`)}</td>
         <td class="mono">${escapeHtml(fmtCompact(row.side.wallet_exposure))}</td>
         <td class="mono">${escapeHtml(`${fmtPctRatio(row.side.wel_ratio)} / ${fmtPctRatio(row.side.wele_ratio)}`)}</td>
-        <td class="mono">${escapeHtml(fmtPctRatio(row.side.price_action_distance))}</td>
+        <td class="mono">${escapeHtml(fmtEntryDistance(row.side.signed_entry_distance_fraction))}</td>
         <td class="mono">${escapeHtml(fmtCompact(row.side.upnl, 2))}</td>
         <td class="mono">${escapeHtml(String(row.orderCount))}</td>
       `;

@@ -5083,16 +5083,17 @@ def emit_unstuck_selection_event(
     changed: bool,
 ) -> None:
     try:
+        from live.diagnostic_valuation import observe_signed_entry_distance_fraction
+
         entry = _safe_float(entry_price)
         current = _safe_float(current_price)
-        price_change_percent = None
-        if entry is not None and current is not None and entry > 0.0 and current > 0.0:
-            price_change_percent = (current / entry - 1.0) * 100.0
         data = {
             "changed": bool(changed),
             "entry_price": entry,
             "current_price": current,
-            "price_change_percent": price_change_percent,
+            "signed_entry_distance_fraction": observe_signed_entry_distance_fraction(
+                pside, entry, current
+            ),
             "allowance": _safe_float(allowance),
         }
         bot._emit_live_event(
@@ -5581,7 +5582,7 @@ def emit_position_changed_event(
     wel_ratio: float,
     wele_ratio: float,
     twel_ratio: float,
-    price_action_distance: float,
+    signed_entry_distance_fraction: float | None,
     upnl: float,
     last_price: float | None,
 ) -> None:
@@ -5590,6 +5591,12 @@ def emit_position_changed_event(
         new_size = _safe_float(new.get("size")) or 0.0
         old_price = _safe_float(old.get("price")) or 0.0
         new_price = _safe_float(new.get("price")) or 0.0
+        entry_distance = _safe_finite_float(signed_entry_distance_fraction)
+        entry_distance_data = (
+            {"signed_entry_distance_fraction": entry_distance}
+            if entry_distance is not None
+            else {}
+        )
         status = "succeeded"
         reason_code = str(action).strip().replace(" ", "_") or "position_changed"
         bot._emit_live_event(
@@ -5614,7 +5621,7 @@ def emit_position_changed_event(
                 "wel_ratio": float(wel_ratio),
                 "wele_ratio": float(wele_ratio),
                 "twel_ratio": float(twel_ratio),
-                "price_action_distance": float(price_action_distance),
+                **entry_distance_data,
                 "upnl": float(upnl),
             },
         )

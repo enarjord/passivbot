@@ -6377,7 +6377,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 ids={"cycle_id": "cy_risk_5"},
                 data={
                     "allowance": -12.3,
-                    "price_change_percent": 10.0,
+                    "signed_entry_distance_fraction": 0.1,
                     "changed": True,
                 },
             ),
@@ -6536,7 +6536,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 "latest_ts": 5000,
                 "latest_data": {
                     "changed": True,
-                    "price_change_percent": 10.0,
+                    "signed_entry_distance_fraction": 0.1,
                 },
                 "latest_ids": {"cycle_id": "cy_risk_5"},
             },
@@ -6615,7 +6615,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     summary = summarize_live_smoke_report(report)
     summary_risk_json = json.dumps(summary["risk_events"], sort_keys=True)
     assert "drawdown_raw" not in summary_risk_json
-    assert "price_change_percent" not in summary_risk_json
+    assert "signed_entry_distance_fraction" not in summary_risk_json
     assert summary["risk_events"]["hsl_flat_finalization_anchors"] == {
         "total": 1,
         "source_counts": {"current_time_fallback": 1},
@@ -6820,7 +6820,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert "latest_data" in brief_risk_json
     assert "allowance" not in brief_risk_json
     assert '"sides":' not in brief_risk_json
-    assert "price_change_percent" not in brief_risk_json
+    assert "signed_entry_distance_fraction" not in brief_risk_json
     assert "drawdown_raw" not in brief_risk_json
     assert '"red_threshold":' not in brief_risk_json
     assert "drawdown_threshold_fraction" not in brief_risk_json
