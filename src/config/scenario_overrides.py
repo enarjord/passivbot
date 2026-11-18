@@ -7,7 +7,7 @@ _ATOMIC_SCENARIO_OVERRIDE_ROOTS = frozenset({"coin_overrides"})
 
 
 def normalize_scenario_overrides(
-    overrides: Optional[Dict[str, Any]],
+    overrides: Optional[Dict[str, Any]], *, validate_group=None,
 ) -> Dict[str, Any]:
     """Flatten nested override documents while preserving atomic dynamic mappings."""
     normalized: Dict[str, Any] = {}
@@ -26,6 +26,8 @@ def normalize_scenario_overrides(
                 and "." not in key
                 and root not in _ATOMIC_SCENARIO_OVERRIDE_ROOTS
             ):
+                if validate_group is not None:
+                    validate_group(path, value)
                 visit(value, path)
                 continue
             dotted_path = ".".join(path)

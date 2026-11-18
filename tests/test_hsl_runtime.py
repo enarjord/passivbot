@@ -134,6 +134,28 @@ def test_live_capture_budget_metadata_matches_strict_default_json():
     assert request.metadata == json.dumps(payload, allow_nan=False)
 
 
+@pytest.mark.asyncio
+async def test_native_hsl_uses_original_quote_receipt_age(monkeypatch):
+    from live import market_snapshot
+
+    monkeypatch.setattr(market_snapshot, "utc_ms", lambda: NOW)
+
+    async def fetch():
+        return {
+            SYMBOL: {
+                "bid": 89.9, "ask": 90.1, "last": 90.0,
+                "timestamp": NOW, "snapshot_received_ms": NOW - 25_000,
+            }
+        }
+
+    provider = market_snapshot.MarketSnapshotProvider(exchange_name="fake", fetch_tickers=fetch)
+    # A cache consumer with a looser TTL can still read a quote HSL must reject.
+    marks = await provider.get_snapshots([SYMBOL], max_age_ms=30_000)
+    decisions, unavailable = run(bot(), marks)
+    assert not decisions
+    assert [item.reason for item in unavailable] == ["current_mark_unavailable"]
+
+
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_no_history_current_loss_is_evaluated_for_every_topology(mode, side):

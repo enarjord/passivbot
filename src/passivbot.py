@@ -47,6 +47,7 @@ from fill_events_manager import (
     FillEventsManager,
     FillRefreshWork,
     PNL_SOURCE_SYNTHETIC_DEGRADED,
+    TrailingResetFill,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     _hyperliquid_fill_position_chain,
@@ -130,7 +131,7 @@ from live.market_snapshot import (
     SHARED_QUOTE_CANCEL_GRACE_SECONDS,
 )
 from live.planning_snapshot import PlanningSnapshot, PlanningSnapshotUnavailable
-from passivbot_exceptions import RestartBotException, FatalBotException
+from passivbot_exceptions import FillEventDataError, RestartBotException, FatalBotException
 from live import exchange_params, planner_inputs
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
@@ -191,6 +192,7 @@ BOT_CLOSE_TIMEOUT_SECONDS = (
     SHARED_QUOTE_CLEANUP_SECONDS + SHARED_QUOTE_CANCEL_GRACE_SECONDS + 3.0
 )
 EXECUTION_SCHEDULED_WAIT_SECONDS = 30
+TRAILING_RESET_PROBE_TIMEOUT_SECONDS = 1.0
 
 
 from config.universe import get_authored_side_universe_sources, require_side_universe_sources
@@ -212,6 +214,21 @@ class _OrchestratorPreparation:
     signed_rms_directionality: dict
     forager_signed_rms_directionality: dict
     rms_directionality_unavailable: dict
+
+
+@dataclass(frozen=True)
+class _TrailingResetPosition:
+    state: tuple[float, float]
+    update_ms: int | None
+    open_ms: int | None
+
+
+@dataclass(frozen=True)
+class _TrailingResetEvidence:
+    manager: FillEventsManager
+    position: _TrailingResetPosition
+    generation: int
+    fill: TrailingResetFill
 
 
 class FillHistoryCoverageUnavailable(RuntimeError):
@@ -1628,6 +1645,7 @@ class Passivbot:
             exchange_name=self.exchange,
             fetch_tickers=getattr(self, "fetch_tickers", None),
             fetch_tickers_for_symbols=getattr(self, "fetch_tickers_for_symbols", None),
+            fetch_market_tickers_for_symbols=getattr(self, "fetch_market_tickers_for_symbols", None),
             ticker_strategy=self._market_snapshot_ticker_strategy(),
         )
         if self.monitor_publisher is not None or self._live_event_pipeline is not None:
@@ -8304,6 +8322,8 @@ class Passivbot:
         pside: str,
         state: tuple[float, float],
         anchor: dict | None,
+        *,
+        reset_evidence: _TrailingResetEvidence | None = None,
     ) -> str | None:
         """Return the evidence kind matching a fill anchor to exchange state."""
         if anchor is None:
@@ -8353,6 +8373,15 @@ class Passivbot:
             qty_tolerance=qty_tolerance,
         ):
             return "position_open_boundary"
+        if self._position_update_fill_matches_state(
+            symbol,
+            pside,
+            state,
+            anchor,
+            qty_tolerance=qty_tolerance,
+            evidence=reset_evidence,
+        ):
+            return "position_update_boundary"
         return None
 
     def _position_open_fill_replay_matches_state(
@@ -8404,6 +8433,8 @@ class Passivbot:
         if not events:
             return False
         events.sort(key=lambda event: int(event.timestamp))
+        if sum(int(event.timestamp) == anchor_ts for event in events) != 1:
+            return False
 
         # Start at the first additive fill tied closely to the exchange's
         # opening timestamp. A distant first event means the available history
@@ -8503,17 +8534,116 @@ class Passivbot:
             pprice, position_price, strict_price_tolerance
         )
 
+    def _trailing_reset_position_fact(
+        self, symbol: str, pside: str
+    ) -> _TrailingResetPosition | None:
+        position = self.positions.get(symbol, {}).get(pside)
+        if position is None or not position["size"]:
+            return None
+        return _TrailingResetPosition(
+            (position["size"], position["price"]),
+            self._position_update_timestamp_from_row(position),
+            self._position_open_timestamp_from_row(position),
+        )
+
+    def _position_update_fill_matches_state(
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict,
+        *,
+        qty_tolerance: float,
+        evidence: _TrailingResetEvidence | None,
+    ) -> bool:
+        key = (symbol, pside)
+        if evidence is None:
+            evidence = getattr(self, "_trailing_reset_evidence", {}).get(key)
+        manager = getattr(self, "_pnls_manager", None)
+        minimum = getattr(self, "_trailing_pending_fill_min_generations", {}).get(key, 0)
+        if (
+            evidence is None
+            or evidence.manager is not manager
+            or evidence.position != self._trailing_reset_position_fact(symbol, pside)
+            or evidence.generation < minimum
+        ):
+            return False
+        fill = evidence.fill
+        if (
+            fill.timestamp != anchor["timestamp"]
+            or fill.timestamp != evidence.position.update_ms
+            or evidence.position.open_ms not in (None, fill.timestamp)
+            or fill.side != ("buy" if pside == "long" else "sell")
+        ):
+            return False
+        cohort = [
+            event
+            for event in manager.get_events(fill.timestamp, fill.timestamp, symbol)
+            if event.position_side == pside
+        ]
+        if len(cohort) != 1:
+            return False
+        cached = cohort[0]
+        if (
+            cached.id != fill.id
+            or list(cached.source_ids) != [fill.id]
+            or self._fill_position_change_epoch(cached) != anchor["epoch"]
+            or (cached.side, cached.qty, cached.price, cached.c_mult)
+            != (fill.side, fill.qty, fill.price, 1.0)
+        ):
+            return False
+        size, price = state
+        price_tick = self._effective_position_price_tick(symbol, price, fill.price)
+        price_tolerance = max(price_tick * 0.5, abs(price) * 1e-9, 1e-12)
+        return abs(abs(fill.qty) - abs(size) * self.c_mults[symbol]) <= qty_tolerance and (
+            self._within_absolute_tolerance(fill.price, price, price_tolerance)
+        )
+
+    def _prune_trailing_reset_evidence(self, *, check_fills: bool = False) -> None:
+        if not check_fills:
+            retry = getattr(self, "_trailing_reset_probe_retry", {})
+            for key, (position, _) in tuple(retry.items()):
+                if position != self._trailing_reset_position_fact(*key):
+                    # Drop the in-flight request token as well as its cooldown.
+                    # A subsequent equal-looking snapshot cannot revive the proof.
+                    del retry[key]
+        receipts = getattr(self, "_trailing_reset_evidence", {})
+        if not receipts:
+            return
+        anchors = self._latest_fill_position_change_anchors() if check_fills else {}
+        retained = {}
+        for key, receipt in receipts.items():
+            if (
+                receipt.manager is not self._pnls_manager
+                or receipt.position != self._trailing_reset_position_fact(*key)
+            ):
+                continue
+            if check_fills and self._fill_anchor_position_state_match_kind(
+                *key, receipt.position.state, anchors.get(key)
+            ) != "position_update_boundary":
+                continue
+            retained[key] = receipt
+        if len(retained) != len(receipts):
+            self._trailing_reset_evidence = retained
+
     def _emit_position_open_fill_recovery_used(
-        self, symbol: str, pside: str, anchor: dict
+        self, symbol: str, pside: str, anchor: dict, *, update_boundary: bool = False
     ) -> None:
         """Report boundary recovery only after every confirmation predicate clears."""
         position = self.positions.get(symbol, {}).get(pside, {})
         open_ts = self._position_open_timestamp_from_row(position)
         update_ts = self._position_update_timestamp_from_row(position)
         anchor_ts = int(anchor.get("timestamp") or 0)
+        recovery = "position_open_single_fill"
+        payload = {"open_timestamp": open_ts} if open_ts is not None else {}
+        boundary = "open/update boundary"
+        if update_boundary:
+            recovery = "position_update_fresh_single_fill"
+            boundary = "update boundary confirmed by a complete fresh trade cohort"
         logging.warning(
             "[fills] recovered polluted cached after-state from explicit position "
-            "open/update boundary | symbol=%s pside=%s fill_ts=%s",
+            "%s | symbol=%s pside=%s fill_ts=%s",
+            boundary,
             self._log_symbol(symbol),
             pside,
             anchor_ts,
@@ -8524,8 +8654,8 @@ class Passivbot:
                 EventTypes.FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED,
                 ("diagnostic", "fills", "recovery", "fallback"),
                 {
-                    "recovery": "position_open_single_fill",
-                    "open_timestamp": int(open_ts),
+                    **payload,
+                    "recovery": recovery,
                     "position_update_timestamp": int(update_ts),
                     "fill_timestamp": int(anchor_ts),
                     "cohort_fill_count": 1,
@@ -8951,9 +9081,10 @@ class Passivbot:
                         unavailable_psides[symbol].add(pside)
                         last_position_changes.get(symbol, {}).pop(pside, None)
                         continue
-                    if position_match_kind == "position_open_boundary":
+                    if position_match_kind in ("position_open_boundary", "position_update_boundary"):
                         self._emit_position_open_fill_recovery_used(
-                            symbol, pside, anchor
+                            symbol, pside, anchor,
+                            update_boundary=position_match_kind == "position_update_boundary",
                         )
                     elif position_match_kind == "recorded_after_state_price_tolerance":
                         self._emit_bounded_fill_position_price_discrepancy(
@@ -11966,6 +12097,140 @@ class Passivbot:
                 since_ms=since_ms,
             )
 
+    async def _refresh_trailing_reset_evidence(self, generation: int) -> None:
+        """Probe at most four pending coin-sides under the fill single-flight lock."""
+        if getattr(self, "exchange", None) != "binance" or getattr(
+            self, "is_portfolio_margin", False
+        ):
+            return
+        manager = self._pnls_manager
+        acquire = getattr(manager, "fetch_trailing_reset_fill", None)
+        if not callable(acquire):
+            return
+        pending = getattr(self, "_trailing_fill_confirmation_diagnostics", {})
+        cursor = getattr(self, "_trailing_reset_probe_cursor", None)
+        candidates = sorted(
+            key
+            for key, detail in pending.items()
+            if detail["failed_predicates"] == ["fill_after_state_mismatch"]
+        )
+        if not candidates:
+            return
+        if cursor is not None:
+            candidates = [key for key in candidates if key > cursor] + [
+                key for key in candidates if key <= cursor
+            ]
+        anchors = self._latest_fill_position_change_anchors()
+        retry = getattr(self, "_trailing_reset_probe_retry", {})
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        if now < getattr(self, "_trailing_reset_probe_resume_at", 0.0):
+            return
+        # One minute per unchanged pending position. Keep only active pending
+        # candidates so closed positions cannot grow the retry map.
+        retry = {
+            key: retry[key] for key in candidates if key in retry and retry[key][1] > now
+        }
+        self._trailing_reset_probe_retry = retry
+        attempts = 0
+        received = {}
+        deadline = now + TRAILING_RESET_PROBE_TIMEOUT_SECONDS
+        for key in candidates:
+            minimum = getattr(self, "_trailing_pending_fill_min_generations", {}).get(key)
+            completed = getattr(self, "_trailing_fill_fetch_generation", 0)
+            position = self._trailing_reset_position_fact(*key)
+            anchor = anchors.get(key)
+            if (
+                minimum is None
+                or not minimum <= completed <= generation
+                or position is None
+                or anchor is None
+                or position.update_ms != anchor["timestamp"]
+                or position.open_ms not in (None, position.update_ms)
+                or (key in retry and retry[key][0] == position)
+                or self._fill_anchor_position_state_match_kind(*key, position.state, anchor) is not None
+            ):
+                continue
+            self._trailing_reset_probe_cursor = key
+            request = position, loop.time() + 60.0
+            retry[key] = request
+            symbol, pside = key
+            try:
+                async with asyncio.timeout_at(deadline):
+                    fill = await acquire(symbol, pside, anchor["timestamp"])
+            except TimeoutError:
+                logging.warning(
+                    "[fills] trailing reset query budget exhausted | symbol=%s pside=%s "
+                    "action=keep_trailing_pending",
+                    self._log_symbol(symbol), pside,
+                )
+                break
+            except ccxt_errors.InvalidNonce:
+                raise
+            except (
+                ccxt_errors.BadRequest, ccxt_errors.NetworkError, FillEventDataError, OSError
+            ) as exc:
+                logging.warning(
+                    "[fills] trailing reset query unavailable | symbol=%s pside=%s "
+                    "error_type=%s action=keep_trailing_pending",
+                    self._log_symbol(symbol), pside, bounded_exception_type(exc),
+                )
+                retry_after = getattr(exc, "retry_after_seconds", 0.0)
+                if isinstance(
+                    exc,
+                    (
+                        ccxt_errors.RateLimitExceeded,
+                        ccxt_errors.DDoSProtection,
+                        ccxt_errors.OnMaintenance,
+                    ),
+                ) or retry_after > 0.0:
+                    self._trailing_reset_probe_resume_at = loop.time() + max(60.0, retry_after)
+                    if isinstance(exc, ccxt_errors.RateLimitExceeded):
+                        self._health_rate_limits += 1
+                        run_diagnostic_step(
+                            "record trailing reset probe rate limit",
+                            lambda: self._monitor_record_event(
+                                "error.exchange",
+                                ("error", "exchange", "rate_limit"),
+                                {
+                                    "source": "trailing_reset_probe",
+                                    "message": "rate limit exceeded",
+                                },
+                            ),
+                        )
+                    break
+                fill = None
+            if (
+                fill is not None
+                and manager is self._pnls_manager
+                and retry.get(key) is request
+                and position == self._trailing_reset_position_fact(*key)
+                and minimum == self._trailing_pending_fill_min_generations.get(key)
+            ):
+                received[key] = _TrailingResetEvidence(manager, position, generation, fill)
+            attempts += 1
+            if attempts == 4:
+                break
+        if not received:
+            return
+        anchors = self._latest_fill_position_change_anchors()
+        accepted = {
+            key: receipt
+            for key, receipt in received.items()
+            if key in retry
+            and retry[key][0] is receipt.position
+            and self._fill_anchor_position_state_match_kind(
+                *key, receipt.position.state, anchors.get(key), reset_evidence=receipt
+            ) == "position_update_boundary"
+        }
+        if accepted:
+            # Ordinary admission binds the proof map it consumed. The fill
+            # tape and its coverage remain unchanged by this request.
+            self._trailing_reset_evidence = {
+                **getattr(self, "_trailing_reset_evidence", {}),
+                **accepted,
+            }
+
     def _trailing_fill_history_recovery_start_ms(
         self, age_limit: int | None
     ) -> int | None:
@@ -12010,6 +12275,8 @@ class Passivbot:
         cohort_states: dict[tuple[str, str], dict] = {}
         attempted_cohorts: list[tuple[str, str]] = []
         candidates: list[int] = []
+        proofs = getattr(self, "_trailing_reset_evidence", {})
+        anchors = self._latest_fill_position_change_anchors() if proofs else {}
         for raw_key, detail in diagnostics.items():
             if not isinstance(raw_key, tuple) or len(raw_key) != 2:
                 continue
@@ -12020,6 +12287,11 @@ class Passivbot:
                 continue
             symbol, pside = str(raw_key[0]), str(raw_key[1])
             cohort = (symbol, pside)
+            proof = proofs.get(cohort)
+            if proof is not None and self._fill_anchor_position_state_match_kind(
+                symbol, pside, proof.position.state, anchors.get(cohort)
+            ) == "position_update_boundary":
+                continue
             cohort_state = dict(previous_cohort_states.get(cohort, {}) or {})
             cohort_states[cohort] = cohort_state
             # First satisfy the mandatory fetch generation after the position
@@ -12528,6 +12800,8 @@ class Passivbot:
                     # bounded recent path. Potentially expensive history
                     # widening is reserved for the nonblocking trailing
                     # recovery prefetch.
+                    if trailing_recovery_refresh:
+                        await self._refresh_trailing_reset_evidence(fill_refresh_attempt_generation)
                     recovery_start_ms = (
                         self._trailing_fill_history_recovery_start_ms(pnl_age_limit)
                         if trailing_recovery_refresh
@@ -12580,6 +12854,7 @@ class Passivbot:
                 refresh_mode = f"{refresh_mode}_with_degraded_pnl_repair"
 
             if fill_fetch_completed:
+                self._prune_trailing_reset_evidence(check_fills=True)
                 self._hsl_fill_capture_interval = fill_capture_interval
                 if True and fill_capture_interval is not None:
                     # Capture before yielding again. A later cache mutation or
@@ -12779,6 +13054,15 @@ class Passivbot:
                 level=logging.getLevelName(structured_event_level).lower(),
             )
 
+            if (
+                source == "hsl"
+                and fills_ready
+                and fill_fetch_completed
+                and self._trailing_fill_recovery_prefetch_due()
+            ):
+                # Publish the required fill observation and readiness before the
+                # optional bounded proof adds any transport latency.
+                await self._refresh_trailing_reset_evidence(fill_refresh_attempt_generation)
             return fills_ready
 
         except position_fill_sync.FetchSkipped:
@@ -14175,6 +14459,7 @@ class Passivbot:
                 normalized_position["lastUpdateTimestamp"] = update_ts
             positions_new[symbol][pside] = normalized_position
         self.positions = positions_new
+        self._prune_trailing_reset_evidence()
         position_state = {
             (symbol, pside): (
                 round(float(position.get("size") or 0.0), 12),

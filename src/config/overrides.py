@@ -336,11 +336,13 @@ def _extract_allowed_patch(
                     strategy.pop(kind, None)
 
     allowed = get_allowed_modifications(hsl_signal_mode=hsl_signal_mode)
+    from .authored import validate_authored_boolean
 
     def visit(value, policy, path: tuple[str, ...]):
         if policy is True:
             from .control_sentinels import FORCED_MODE_PATHS, optional_forced_mode
 
+            validate_authored_boolean(value, path, path=_format_override_path(coin, path))
             if path in FORCED_MODE_PATHS:
                 return optional_forced_mode(value, path=_format_override_path(coin, path))
             if value is None and path[-2:] != ("entry_cooldown", "max_duration_minutes"):

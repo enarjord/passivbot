@@ -33,8 +33,16 @@ its own version heading. See [release status](docs/releases.md).
 - Record ordinary close replacement timing in structured live events, from cancel
   acknowledgment through account confirmation, replanning, and create submission.
 
+- Recover Binance USDⓈ-M trailing resets from a complete trade query at the exact
+  position update millisecond when cached replay retains stale position residue.
+  Keep trailing confirmation pending when the boundary has multiple fills or
+  other conflicting evidence. The recovery leaves historical fills and PnL intact.
+
 - Reuse validated candle shards across overlapping EMA windows and reduce work when
   merging contiguous candle rows into the live cache.
+
+- Persist the Bitunix pending-create journal in the documented live container
+  setups so unresolved submissions survive container replacement.
 
 - Support opt-in `optimize.gpu.tuning_mode = "max"` on Apple Silicon Metal.
   It evaluates wider seed and offspring cohorts, retains the configured parent
@@ -69,11 +77,19 @@ its own version heading. See [release status](docs/releases.md).
   panic closes while fill history settles. A protective batch can share one fresh
   account read, with current permission checked at each submission.
 
+- Preserve the original receipt time of Bitunix and Lighter market quotes for live
+  order planning and HSL. Targeted Bitunix refreshes can repair expired quotes with
+  bounded depth reads, and Lighter defers when the oldest quote input has expired.
+
 - Reduce copying when assembling candle history from cached shards.
 
 - Reuse saved optimizer results as base configs for `passivbot optimize` and
   `passivbot download`. Saved metrics and runtime metadata are ignored, and
   config validation still rejects unknown settings.
+
+- Require Boolean values for Boolean settings in v9 configs and overrides. Quoted
+  values such as `"false"` now fail validation instead of enabling monitoring,
+  raw fill payload retention, suite mode, or optimizer limits.
 
 - Reduce CPU use when verifying unchanged fill history during empty and duplicate-only refreshes.
 

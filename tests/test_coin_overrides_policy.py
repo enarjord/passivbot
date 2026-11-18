@@ -140,7 +140,7 @@ def test_new_policy_fields_use_effective_config_and_type_validation():
     ):
         _parse({"BTC": {"bot": {"long": {"entry_cooldown": {"base_duration_minutes": -0.1}}}}})
 
-    with pytest.raises(TypeError, match=r"ema_gating_enabled.*numeric or boolean"):
+    with pytest.raises(TypeError, match=r"ema_gating_enabled must be a boolean"):
         _parse(
             {"BTC": {"bot": {"short": {"unstuck": {"ema_gating_enabled": "false"}}}}}
         )
