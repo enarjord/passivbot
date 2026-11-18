@@ -225,14 +225,14 @@ def _materialize_files(source, *, source_schema_version, base_config_path, span,
         _unwrap_override_document,
         load_override_config,
         nested_update,
-        parse_old_coin_flags,
     )
+    from config.migrations.released_v8_coin_flags import parse_released_v8_coin_flags
     from config.parse import load_raw_config
 
     if _null_policy_enablement is None:
         _null_policy_enablement = {}
     result = deepcopy(source)
-    flags = parse_old_coin_flags(result)
+    flags = parse_released_v8_coin_flags(result)
     old_flags = result.get("live", {}).pop("coin_flags", None)
     if not result.get("coin_overrides"):
         result["coin_overrides"] = flags

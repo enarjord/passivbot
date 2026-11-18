@@ -53,7 +53,6 @@ from config.overrides import (
     get_allowed_modifications as staged_get_allowed_modifications,
     load_override_config as staged_load_override_config,
     nested_update as staged_nested_update,
-    parse_old_coin_flags as staged_parse_old_coin_flags,
     parse_overrides as staged_parse_overrides,
     set_nested_value as staged_set_nested_value,
     set_nested_value_safe as staged_set_nested_value_safe,
@@ -72,14 +71,6 @@ from config.tree_ops import (
 )
 from config.transform_log import ConfigTransformTracker, record_transform
 from config.logging_summary import emit_transform_summary
-from config.migrations import (
-    apply_backward_compatibility_renames as apply_migration_renames,
-    migrate_btc_collateral_settings as migrate_btc_collateral_settings_impl,
-    migrate_config_version as migrate_config_version_impl,
-    migrate_empty_means_all_approved as migrate_empty_means_all_approved_impl,
-    migrate_suite_to_scenarios as migrate_suite_to_scenarios_impl,
-    rename_config_keys as rename_migration_config_keys,
-)
 from pure_funcs import sort_dict_keys, str2bool
 from utils import dump_json_streamlined, normalize_coins_source, symbol_to_coin
 
@@ -563,40 +554,6 @@ def load_override_config(config, coin):
     return staged_load_override_config(config, coin)
 
 
-def parse_old_coin_flags(config) -> dict:
-    return staged_parse_old_coin_flags(config)
-
-
-def _apply_backward_compatibility_renames(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    apply_migration_renames(result, verbose=verbose, tracker=tracker)
-
-
-def _migrate_suite_to_scenarios(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    migrate_suite_to_scenarios_impl(result, verbose=verbose, tracker=tracker)
-
-
-def _migrate_btc_collateral_settings(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    migrate_btc_collateral_settings_impl(result, verbose=verbose, tracker=tracker)
-
-
-def _migrate_config_version(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    migrate_config_version_impl(result, verbose=verbose, tracker=tracker)
-
-
-def _migrate_empty_means_all_approved(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    migrate_empty_means_all_approved_impl(result, verbose=verbose, tracker=tracker)
-
-
 def _ensure_bot_defaults_and_bounds(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
@@ -631,12 +588,6 @@ def format_bot_config(
         warn_deprecations=warn_deprecations,
         tracker=tracker,
     )
-
-
-def _rename_config_keys(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    rename_migration_config_keys(result, verbose=verbose, tracker=tracker)
 
 
 def _sync_with_template(

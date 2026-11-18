@@ -1,11 +1,9 @@
+"""Structural transforms owned by the explicit v8 to v9 converter."""
+
 import logging
 from copy import deepcopy
 from typing import Optional
 
-from config.schema import (
-    CONFIG_SCHEMA_VERSION,
-    SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS,
-)
 from config.reducers import REDUCER_ALIASES, reducer_mapping_from_aliases
 from config.transform_log import ConfigTransformTracker
 from utils import normalize_coins_source
@@ -17,78 +15,6 @@ def _log_config(verbose: bool, level: int, message: str, *args) -> None:
         logging.log(level, prefixed_message, *args)
     else:
         logging.debug(prefixed_message, *args)
-
-
-def _parse_version_tuple(value: object) -> Optional[tuple[int, ...]]:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip().lower()
-    if normalized.startswith("v"):
-        normalized = normalized[1:]
-    parts = normalized.split(".")
-    if not parts or any(not part.isdigit() for part in parts):
-        return None
-    return tuple(int(part) for part in parts)
-
-
-def migrate_config_version(
-    result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
-) -> None:
-    current_version = result.get("config_version")
-    current_parsed = _parse_version_tuple(current_version)
-    target_parsed = _parse_version_tuple(CONFIG_SCHEMA_VERSION)
-    if target_parsed is None:
-        raise ValueError(
-            f"internal error: invalid CONFIG_SCHEMA_VERSION {CONFIG_SCHEMA_VERSION!r}"
-        )
-    supported_previous_parsed = {
-        parsed
-        for version in SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS
-        if (parsed := _parse_version_tuple(version)) is not None
-    }
-    if current_version == CONFIG_SCHEMA_VERSION:
-        return
-    if current_version in (None, ""):
-        _log_config(
-            verbose,
-            logging.INFO,
-            "pre-versioned config detected. attempting migration to schema %s",
-            CONFIG_SCHEMA_VERSION,
-        )
-    elif current_parsed is None:
-        raise ValueError(
-            f"config.config_version must be a semantic version like {CONFIG_SCHEMA_VERSION}; "
-            f"got {current_version!r}"
-        )
-    elif current_parsed > target_parsed:
-        raise ValueError(
-            f"config.config_version {current_version!r} is newer than supported schema "
-            f"{CONFIG_SCHEMA_VERSION}; upgrade Passivbot"
-        )
-    elif (
-        current_parsed != target_parsed
-        and current_parsed[0] >= 8
-        and current_parsed not in supported_previous_parsed
-    ):
-        supported = ", ".join(sorted(SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS))
-        raise ValueError(
-            f"config.config_version {current_version!r} is not a supported previous schema; "
-            f"supported previous schemas: {supported}"
-        )
-    else:
-        _log_config(
-            verbose,
-            logging.INFO,
-            "%s config detected. attempting migration to schema %s",
-            current_version,
-            CONFIG_SCHEMA_VERSION,
-        )
-    result["config_version"] = CONFIG_SCHEMA_VERSION
-    if tracker is not None:
-        if current_version in (None, ""):
-            tracker.add(["config_version"], CONFIG_SCHEMA_VERSION)
-        else:
-            tracker.update(["config_version"], current_version, CONFIG_SCHEMA_VERSION)
 
 
 def migrate_suite_to_scenarios(
@@ -274,9 +200,7 @@ def migrate_empty_means_all_approved(
     _log_config(
         verbose,
         logging.WARNING,
-        "live.empty_means_all_approved is deprecated and will be removed in a future release; "
-        "legacy configs still work for now. Prefer explicit live.approved_coins='all' or per-side "
-        "'all' entries in new configs.",
+        "Converting released-v8 live.empty_means_all_approved; review the resulting v9 universe policies.",
     )
     if tracker is not None:
         tracker.remove(["live", "empty_means_all_approved"], legacy_value)
@@ -301,3 +225,20 @@ def migrate_empty_means_all_approved(
     )
     if tracker is not None:
         tracker.update(["live", "approved_coins"], approved_source, "all")
+
+
+def apply_released_v8_layout_transforms(result: dict) -> None:
+    from .churn_gate import migrate_initial_entry_distance_gate
+    from .gpu_population import migrate_gpu_population
+    from .gpu_screening import migrate_gpu_screening
+    from .renames import apply_backward_compatibility_renames, rename_config_keys
+
+    migrate_gpu_screening(result)
+    migrate_gpu_population(result)
+    migrate_initial_entry_distance_gate(result, verbose=False)
+    apply_backward_compatibility_renames(result, verbose=False)
+    migrate_btc_collateral_settings(result, verbose=False)
+    migrate_empty_means_all_approved(result, verbose=False)
+    migrate_suite_to_scenarios(result, verbose=False)
+    migrate_reducer_terminology(result, verbose=False)
+    rename_config_keys(result, verbose=False)
