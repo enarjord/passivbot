@@ -1628,6 +1628,7 @@ class Passivbot:
             exchange_name=self.exchange,
             fetch_tickers=getattr(self, "fetch_tickers", None),
             fetch_tickers_for_symbols=getattr(self, "fetch_tickers_for_symbols", None),
+            fetch_market_tickers_for_symbols=getattr(self, "fetch_market_tickers_for_symbols", None),
             ticker_strategy=self._market_snapshot_ticker_strategy(),
         )
         if self.monitor_publisher is not None or self._live_event_pipeline is not None:

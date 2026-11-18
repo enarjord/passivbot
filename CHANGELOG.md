@@ -69,6 +69,10 @@ its own version heading. See [release status](docs/releases.md).
   panic closes while fill history settles. A protective batch can share one fresh
   account read, with current permission checked at each submission.
 
+- Preserve the original receipt time of Bitunix and Lighter market quotes for live
+  order planning and HSL. Targeted Bitunix refreshes can repair expired quotes with
+  bounded depth reads, and Lighter defers when the oldest quote input has expired.
+
 - Reduce copying when assembling candle history from cached shards.
 
 - Reuse saved optimizer results as base configs for `passivbot optimize` and

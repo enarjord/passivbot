@@ -5,6 +5,7 @@ import pytest
 
 from market_snapshot import MarketSnapshotProvider
 from live.market_snapshot import MarketSnapshotUnavailable
+from utils import utc_ms
 
 
 @pytest.mark.asyncio
@@ -333,6 +334,97 @@ async def test_market_snapshot_provider_retries_missing_bulk_symbols_strictly():
     assert out["BTC/USDT:USDT"].source == "fetch_tickers"
     assert out["ETH/USDT:USDT"].source == "fetch_tickers_symbols"
     assert out["ETH/USDT:USDT"].last == 200.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retry", [False, True])
+async def test_provider_preserves_local_receipt_through_bulk_and_retry(monkeypatch, retry):
+    from unittest.mock import AsyncMock
+    import live.market_snapshot as snapshots
+
+    observed = 1_800_000_000_000
+    clock = [observed + 2_000]
+    monkeypatch.setattr(snapshots, "utc_ms", lambda: clock[0])
+    ticker = {
+        "bid": 99.0, "ask": 101.0, "last": 100.0,
+        "timestamp": observed + 60_000,
+        "snapshot_received_ms": observed,
+    }
+    provider = MarketSnapshotProvider(
+        exchange_name="fake",
+        fetch_tickers=AsyncMock(return_value={} if retry else {"A": ticker}),
+        fetch_tickers_for_symbols=AsyncMock(return_value={"A": ticker}) if retry else None,
+    )
+
+    quote = (await provider.get_snapshots(["A"], max_age_ms=5_000))["A"]
+    assert quote.fetched_ms == observed
+    assert quote.exchange_timestamp_ms == observed + 60_000
+    clock[0] = observed + 5_001
+    with pytest.raises(MarketSnapshotUnavailable):
+        await provider.get_snapshots(["A"], max_age_ms=5_000, refresh=True)
+
+
+@pytest.mark.asyncio
+async def test_provider_stricter_age_does_not_share_a_weaker_connector_request(monkeypatch):
+    import live.market_snapshot as snapshots
+
+    now = 1_800_000_000_000
+    monkeypatch.setattr(snapshots, "utc_ms", lambda: now)
+    first_started = asyncio.Event()
+    complete_first = asyncio.Event()
+    requests = []
+
+    async def fetch(symbols, *, max_age_ms):
+        requests.append((symbols, max_age_ms))
+        if max_age_ms == 5_000:
+            first_started.set()
+            await complete_first.wait()
+        return {
+            "A": {
+                "bid": 99.0, "ask": 101.0, "last": 100.0,
+                "snapshot_received_ms": now if max_age_ms == 1_000 else now - 2_000,
+            }
+        }
+
+    provider = MarketSnapshotProvider(
+        exchange_name="fake", fetch_tickers=None,
+        fetch_market_tickers_for_symbols=fetch, ticker_strategy="symbols",
+    )
+    first = asyncio.create_task(provider.get_snapshots(["A"], max_age_ms=5_000))
+    await first_started.wait()
+    try:
+        fresh = await asyncio.wait_for(
+            provider.get_snapshots(["A"], max_age_ms=1_000, refresh=True), timeout=1
+        )
+        assert fresh["A"].fetched_ms == now
+    finally:
+        complete_first.set()
+        await first
+    assert requests == [(["A"], 5_000), (["A"], 1_000)]
+    assert provider.get_cached_snapshots(["A"], max_age_ms=5_000) == fresh
+
+
+@pytest.mark.asyncio
+async def test_provider_targeted_refresh_requires_the_connector_to_return_each_quote(monkeypatch):
+    from unittest.mock import AsyncMock
+    import live.market_snapshot as snapshots
+
+    now = 1_800_000_000_000
+    monkeypatch.setattr(snapshots, "utc_ms", lambda: now)
+    ticker = {
+        "bid": 99.0, "ask": 101.0, "last": 100.0, "snapshot_received_ms": now
+    }
+    fetch = AsyncMock(side_effect=[{"A": ticker, "B": ticker}, {"A": ticker}])
+    provider = MarketSnapshotProvider(
+        exchange_name="fake", fetch_tickers=None,
+        fetch_market_tickers_for_symbols=fetch, ticker_strategy="symbols",
+    )
+    await provider.get_snapshots(["A", "B"], max_age_ms=5_000)
+    with pytest.raises(MarketSnapshotUnavailable, match="symbols=B"):
+        await provider.get_snapshots(["A", "B"], max_age_ms=5_000, refresh=True)
+    # The provider can still serve the valid earlier observation to a cache reader.
+    assert provider.get_cached_snapshots(["B"], max_age_ms=5_000)["B"].fetched_ms == now
+    assert fetch.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -1164,7 +1256,7 @@ async def test_shutdown_blocks_cache_reads_and_retry_after_suppressed_cancellati
     await provider.wait_pending()
     assert not calls and provider.pending_tasks() == ()
     provider._cache["A"] = provider._snapshot_from_ticker(
-        "A", {"bid": 99.0, "ask": 101.0, "last": 100.0}, fetched_ms=10**15
+        "A", {"bid": 99.0, "ask": 101.0, "last": 100.0}, fetched_ms=int(utc_ms())
     )
     with pytest.raises(MarketSnapshotUnavailable, match="shutting down"):
         await provider.get_snapshots(["A"])
@@ -1304,7 +1396,7 @@ async def test_completed_fatal_precedes_callback_cache_and_replacement(
     owned = provider.pending_tasks()[0]
     if cached:
         provider._cache["A"] = provider._snapshot_from_ticker(
-            "A", {"bid": 99.0, "ask": 101.0, "last": 100.0}, fetched_ms=10**15
+            "A", {"bid": 99.0, "ask": 101.0, "last": 100.0}, fetched_ms=int(utc_ms())
         )
     # The failing fetch runs first; the new reader then runs before its callbacks.
     release.set()
@@ -1527,7 +1619,7 @@ async def test_all_abandoned_symbol_failures_reach_next_boundary(
     owned = provider.pending_tasks()
     if destination == "cached_reader":
         provider._cache["A"] = provider._snapshot_from_ticker(
-            "A", {"bid": 99.0, "ask": 101.0, "last": 100.0}, fetched_ms=10**15
+            "A", {"bid": 99.0, "ask": 101.0, "last": 100.0}, fetched_ms=int(utc_ms())
         )
     bot = Passivbot.__new__(Passivbot)
     bot.market_snapshot_provider = provider
@@ -1658,7 +1750,7 @@ async def test_unrelated_read_does_not_drain_failure_with_active_waiters(
     owned.add_done_callback(lambda _: callback_seen.set())
     if read_kind == "cached":
         provider._cache["B"] = provider._snapshot_from_ticker(
-            "B", {"bid": 99.0, "ask": 101.0, "last": 100.0}, fetched_ms=10**15
+            "B", {"bid": 99.0, "ask": 101.0, "last": 100.0}, fetched_ms=int(utc_ms())
         )
     release.set()
 

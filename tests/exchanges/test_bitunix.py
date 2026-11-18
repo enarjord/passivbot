@@ -2170,6 +2170,7 @@ async def test_depth_ticker_uses_midpoint_as_synthetic_last():
 
     assert ticker["last"] == 100.0
     assert ticker["source"] == "bitunix_depth_mid"
+    assert ticker["snapshot_received_ms"] == 1_700_000_000_000
 
 
 @pytest.mark.asyncio
@@ -2185,6 +2186,7 @@ async def test_future_exchange_timestamp_does_not_extend_cache_freshness():
         "ask": 101.0,
         "last": 100.0,
         "timestamp": 10**15,
+        "snapshot_received_ms": 60_000,
     }
     client._ticker_received_monotonic[symbol] = 60.0
     fallback = {
@@ -2217,6 +2219,7 @@ async def test_bot_ticker_normalization_preserves_source_and_timestamp():
                     "ask": 101.0,
                     "last": 100.0,
                     "timestamp": 1_700_000_000_000,
+                    "snapshot_received_ms": 1_700_000_000_125,
                     "source": "bitunix_depth_mid",
                 }
             }
@@ -2230,8 +2233,80 @@ async def test_bot_ticker_normalization_preserves_source_and_timestamp():
         "ask": 101.0,
         "last": 100.0,
         "timestamp": 1_700_000_000_000,
+        "snapshot_received_ms": 1_700_000_000_125,
         "source": "bitunix_depth_mid",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("age_ms", "refresh", "strategy", "extra_markets", "expect_depth"),
+    [
+        (1_000, False, "symbols", 0, False),
+        (25_000, False, "symbols", 0, True),
+        (1_000, True, "symbols", 9, False),
+        (25_000, True, "symbols", 9, True),
+        (25_000, True, "bulk", 0, True),
+    ],
+)
+async def test_bitunix_snapshot_respects_receipt_age_and_targeted_refresh(
+    monkeypatch, age_ms, refresh, strategy, extra_markets, expect_depth
+):
+    import live.market_snapshot as snapshots
+
+    now = 1_800_000_000_000
+    monkeypatch.setattr(snapshots, "utc_ms", lambda: now)
+    client = _prepared_client()
+    client.milliseconds = lambda: now
+    client._ensure_ticker_tasks = lambda: None
+    client._ticker_ready.wait = AsyncMock(side_effect=AssertionError("unexpected WS wait"))
+    symbol = "BTC/USDT:USDT"
+    client._ticker_cache[symbol] = {
+        "symbol": symbol,
+        "bid": 89.0,
+        "ask": 91.0,
+        "last": 90.0,
+        "timestamp": now + 60_000,  # venue time is not the local observation stamp
+        "snapshot_received_ms": now - age_ms,
+    }
+    client._ticker_received_monotonic[symbol] = time.monotonic() - age_ms / 1_000
+    for i in range(extra_markets):
+        extra = f"COIN{i}/USDT:USDT"
+        client.markets[extra] = {**_market(), "id": f"COIN{i}USDT", "symbol": extra}
+        client._ticker_cache[extra] = {
+            **client._ticker_cache[symbol], "symbol": extra, "snapshot_received_ms": now - 100,
+        }
+        client._ticker_received_monotonic[extra] = time.monotonic() - 0.1
+    client._request = AsyncMock(return_value={"bids": [["99", "1"]], "asks": [["101", "1"]]})
+    bot = _snapshot_bot()
+    bot.cca = client
+    bot.markets_dict = client.markets
+    provider = snapshots.MarketSnapshotProvider(
+        exchange_name="bitunix",
+        fetch_tickers=bot.fetch_tickers,
+        fetch_tickers_for_symbols=bot.fetch_tickers_for_symbols,
+        fetch_market_tickers_for_symbols=bot.fetch_market_tickers_for_symbols,
+        ticker_strategy=strategy,
+    )
+    quotes = await provider.get_snapshots(
+        list(client.markets), max_age_ms=5_000, refresh=refresh
+    )
+    quote = quotes.pop(symbol)
+    assert len(quotes) == extra_markets
+    assert all(other.fetched_ms == now - 100 for other in quotes.values())
+    if expect_depth:
+        assert quote.last == 100.0
+        assert quote.source == "bitunix_depth_mid"
+        assert quote.fetched_ms == now
+        assert quote.exchange_timestamp_ms is None
+        client._request.assert_awaited_once_with(
+            "GET", "/api/v1/futures/market/depth", params={"symbol": "BTCUSDT", "limit": 1}
+        )
+    else:
+        assert quote.last == 90.0
+        assert quote.fetched_ms == now - age_ms
+        assert quote.exchange_timestamp_ms == now + 60_000
+        client._request.assert_not_awaited()
 
 
 def test_ticker_tasks_restart_when_active_market_ids_change():
@@ -2867,9 +2942,11 @@ async def test_hsl_quote_refresh_does_not_wait_for_unrelated_bitunix_market(
         exchange_name="bitunix",
         fetch_tickers=bot.fetch_tickers,
         fetch_tickers_for_symbols=bot.fetch_tickers_for_symbols,
+        fetch_market_tickers_for_symbols=bot.fetch_market_tickers_for_symbols,
         ticker_strategy=bot._market_snapshot_ticker_strategy(),
     )
     bot.market_snapshot_provider = provider
+    client.milliseconds = lambda: clock[0]
     owner = Owner(bot)
     try:
         # Every pass expires the provider cache, reproducing repeated refreshes.
@@ -2881,6 +2958,7 @@ async def test_hsl_quote_refresh_does_not_wait_for_unrelated_bitunix_market(
                 ask=price + 1,
                 last=price,
                 timestamp=clock[0],
+                snapshot_received_ms=clock[0],
             )
             client._ticker_received_monotonic[symbol] = time.monotonic()
             quotes = await owner.acquire_quotes({symbol})

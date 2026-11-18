@@ -15,6 +15,8 @@ from exchanges.ccxt_bot import CCXTBot
 from exchanges.lighter_balance import validate_balance
 
 from exchanges.lighter_credentials import SIGNER_REVISION, SIGNER_SHA256, client_config
+from live.market_snapshot import MarketSnapshotUnavailable
+from utils import utc_ms
 
 
 def finite(value, name: str, *, positive=False):
@@ -286,13 +288,16 @@ class LighterBot(CCXTBot):
         # Lighter's ticker has last price but no bid/ask. Read actual depth for
         # requested symbols; never substitute a last trade for the spread.
         tickers = await self.cca.fetch_tickers(symbols)
+        tickers_received_ms = int(utc_ms())
 
         async def fetch_book(symbol):
             if self.ccp is not None:
-                return await asyncio.wait_for(
+                book = await asyncio.wait_for(
                     self.ccp.watch_order_book(symbol, limit=10), timeout=15
                 )
-            return await self.cca.fetch_order_book(symbol, limit=10)
+            else:
+                book = await self.cca.fetch_order_book(symbol, limit=10)
+            return book, int(utc_ms())
 
         if self.ccp is not None:
             # CCXT owns subscription reuse and sequence validation. Consume a
@@ -306,7 +311,9 @@ class LighterBot(CCXTBot):
         else:
             books = [await fetch_book(symbol) for symbol in symbols]
         result = {}
-        for symbol, book in zip(symbols, books):
+        for symbol, (book, book_received_ms) in zip(symbols, books):
+            if book_received_ms < tickers_received_ms:
+                raise MarketSnapshotUnavailable("Lighter quote acquisition clock moved backwards")
             bid = finite(book["bids"][0][0], "best bid", positive=True)
             ask = finite(book["asks"][0][0], "best ask", positive=True)
             last = finite(tickers[symbol]["last"], "last trade", positive=True)
@@ -317,6 +324,9 @@ class LighterBot(CCXTBot):
                 "ask": ask,
                 "last": last,
                 "source": "lighter_order_book_and_ticker",
+                # The ticker is the oldest required input even when the book
+                # arrives after a long WebSocket wait.
+                "snapshot_received_ms": tickers_received_ms,
             }
         return result
 

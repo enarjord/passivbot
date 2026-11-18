@@ -712,11 +712,11 @@ the cooldown, and a new process retain the shared recovery policy; no timer prom
 The bulk REST ticker omits bid and ask. Use the official public `tickers` WebSocket for
 authoritative top-of-book and last price, splitting the active market set across connections
 because Bitunix permits at most 300 subscriptions per connection. Refresh those subscriptions when
-the active market-ID set changes. Determine cache freshness from the bounded local receipt time;
-retain exchange timestamps only as quote provenance so future-skewed venue timestamps cannot keep a
-stale quote eligible. A targeted ticker request may use one-row REST depth for at most eight missing
-symbols as a bounded startup fallback, with the bid/ask midpoint labeled as its synthetic last
-through ticker normalization and into snapshot provenance. Broad operation must fail instead of
+the active market-ID set changes. Determine cache freshness from the bounded local receipt time
+and preserve that receipt through normalization and the shared quote cache. Exchange timestamps
+remain provenance. A targeted ticker request may use one-row REST depth for at most eight missing
+or expired symbols, with the bid/ask midpoint labeled as its synthetic last through ticker
+normalization and into snapshot provenance. Broad operation must fail instead of
 fanning out one depth request per market or substituting bid/ask for a last trade. When WebSockets
 are explicitly disabled, live market snapshots select this targeted REST path directly without
 opening or waiting for a public ticker socket; unbounded bulk requests and requests above the
@@ -725,8 +725,11 @@ eight-symbol limit fail closed.
 Live snapshots default to targeted ticker reads even with WebSockets enabled. Only requested
 symbols participate in the bounded readiness wait, so an unrelated silent market cannot delay
 protection of a held position. This still uses the shared websocket cache and retains its freshness
-checks and capped depth fallback. An explicit `market_snapshot_ticker_strategy=bulk` remains an
-operator override.
+checks and capped depth fallback. It applies the caller's stricter freshness age and can repair
+an established stream's stale subset without waiting for cold subscriptions. An explicit refresh
+reads the requested symbols from the connector, bypassing the shared snapshot cache. A WebSocket
+observation within the requested age remains eligible at its original receipt time.
+`market_snapshot_ticker_strategy=bulk` remains an operator override for normal reads.
 
 Bitunix klines return at most 200 rows. The live field names are inverted relative to their units:
 `quoteVol` is base quantity and `baseVol` is quote notional; normalize `quoteVol` as CCXT base
@@ -928,7 +931,9 @@ the same adapter. Discover market age by walking bounded daily pages backward, n
 one pre-listing day from the epoch. Historical sizing uses base units and one-way positions.
 Verify the pinned signer hash before native loading.
 
-Use actual order-book quotes because ticker responses lack bid/ask. Keep cross/isolated margin
+Use actual order-book quotes because ticker responses lack bid/ask. Preserve the earliest local
+receipt of the required last-price and top-of-book observations when certifying their freshness.
+Keep cross/isolated margin
 and leverage together in their per-market configuration transaction. Balance is realized USDC
 collateral and must validate the exact requested account, not CCXT's missing-field zero defaults.
 The synchronous balance CLI and asynchronous trading adapter share this validation.
