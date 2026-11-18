@@ -15004,6 +15004,15 @@ class Passivbot:
         - h1_log_range_emas[symbol][span] = ema_log_range (1h)
         - volumes_long[symbol], log_ranges_long[symbol] (for convenience)
         """
+        # All candle reads in the bundle, including RMS directionality after
+        # the symbol EMA pass, share one remote acquisition deadline.
+        budget = getattr(self.cm, "remote_fetch_budget", None)
+        with budget(10.0) if callable(budget) else nullcontext():
+            return await Passivbot._collect_orchestrator_ema_bundle(self, symbols, modes)
+
+    async def _collect_orchestrator_ema_bundle(
+        self, symbols: list[str], modes: dict[str, dict[str, str]]
+    ):
         # Gather full EMA context for the live symbol universe.
         # Python should provide the market-state bundle; Rust decides which branches use it.
         self._forager_rank_feature_unavailable_by_side = {
@@ -16964,31 +16973,26 @@ class Passivbot:
             fetch_delay_s = float(Passivbot._get_fetch_delay_seconds(self))
         else:
             fetch_delay_s = 0.0
-        # Remote acquisition must not hold the ordinary planner behind a long
-        # pagination/gap-repair pass. Every symbol still reads its cache; existing
-        # missing-input handling scopes absent strategy/ranking data in Rust.
-        budget = getattr(self.cm, "remote_fetch_budget", None)
-        with budget(10.0) if callable(budget) else nullcontext():
-            if fetch_delay_s > 0:
-                # Preserve serial preparation on paced exchanges. The candle manager
-                # spaces actual remote requests; cached symbols need no extra pause.
-                symbol_results = []
-                for sym in ordered_symbols:
-                    Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-                    try:
-                        res = await ema_timings.run_symbol(sym, load_symbol_bundle)
-                    except Exception as e:
-                        res = e
-                    symbol_results.append(res)
-                    # Cached async calls may never suspend; let data maintainers run.
-                    await asyncio.sleep(0)
-                    Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-            else:
-                symbol_tasks = [
-                    asyncio.create_task(ema_timings.run_symbol(sym, load_symbol_bundle))
-                    for sym in ordered_symbols
-                ]
-                symbol_results = await asyncio.gather(*symbol_tasks, return_exceptions=True)
+        if fetch_delay_s > 0:
+            # Preserve serial preparation on paced exchanges. The candle manager
+            # spaces actual remote requests; cached symbols need no extra pause.
+            symbol_results = []
+            for sym in ordered_symbols:
+                Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
+                try:
+                    res = await ema_timings.run_symbol(sym, load_symbol_bundle)
+                except Exception as e:
+                    res = e
+                symbol_results.append(res)
+                # Cached async calls may never suspend; let data maintainers run.
+                await asyncio.sleep(0)
+                Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
+        else:
+            symbol_tasks = [
+                asyncio.create_task(ema_timings.run_symbol(sym, load_symbol_bundle))
+                for sym in ordered_symbols
+            ]
+            symbol_results = await asyncio.gather(*symbol_tasks, return_exceptions=True)
 
         m1_close_emas: dict[str, dict[float, float]] = {}
         m1_volume_emas: dict[str, dict[float, float]] = {}

@@ -3668,8 +3668,11 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
 
 
 @pytest.mark.asyncio
-async def test_shared_live_acquisition_budget_keeps_unavailable_symbol_in_planning_bundle(tmp_path):
+async def test_shared_live_acquisition_budget_includes_rms_and_preserves_cached_inputs(
+    tmp_path, monkeypatch
+):
     import passivbot as pb_mod
+    from live import rms_directionality
 
     slow, ready = "SLOW/USDT:USDT", "READY/USDT:USDT"
     symbols = [slow, ready]
@@ -3686,6 +3689,13 @@ async def test_shared_live_acquisition_budget_keeps_unavailable_symbol_in_planni
     # remote budget does not skip the later symbol's valid local values.
     bot.positions[slow]["long"]["size"] = 1.0
     bot._get_fetch_delay_seconds = lambda: 1.0
+    bot.get_exchange_time = lambda: 21 * ONE_MIN_MS
+    bot.is_pside_enabled = lambda side: side == "long"
+    original_bot_value = bot.bot_value
+    bot.bot_value = lambda side, key: (
+        1.0 if key == "rms_directionality_ema_span_minutes" else original_bot_value(side, key)
+    )
+    monkeypatch.setattr(rms_directionality, "adverse_enabled", lambda bot, side, symbol: side == "long")
     manager = _make_cm(tmp_path)
     budgets = []
 
@@ -3704,7 +3714,20 @@ async def test_shared_live_acquisition_budget_keeps_unavailable_symbol_in_planni
         # Local complete input remains usable even when remote time is spent.
         return 123.0
 
+    rms_reads = []
+
+    async def rms_candles(symbol, **kwargs):
+        rms_reads.append(symbol)
+        if symbol == slow:
+            assert kwargs["allow_remote_fetch"]
+            manager._remote_fetch_time_remaining()
+        rows = np.zeros(21, dtype=CANDLE_DTYPE)
+        rows["ts"] = np.arange(21) * ONE_MIN_MS
+        rows["c"] = 123.0
+        return rows
+
     bot.cm.get_latest_ema_close = symbol_close
+    bot.cm.get_candles = rms_candles
     result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, symbols, bot.PB_modes)
     assert budgets == [10.0]
     assert attempted == set(symbols)
@@ -3712,6 +3735,11 @@ async def test_shared_live_acquisition_budget_keeps_unavailable_symbol_in_planni
     assert result[0][slow] == {}
     assert set(result[0][ready].values()) == {123.0}
     assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {slow}
+    assert rms_reads == symbols
+    assert bot._orchestrator_signed_rms_directionality == {slow: {}, ready: {1.0: 0.0}}
+    assert bot._orchestrator_rms_directionality_unavailable == {
+        slow: {"current": [1.0], "forager": []},
+    }
     # An unavailable member stays in the original cohort. Rust receives explicit
     # absence and retains its existing ranking/consumer readiness authority.
     assert bot._orchestrator_ema_unavailable_symbols == set()
