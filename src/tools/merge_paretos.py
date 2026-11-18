@@ -6,12 +6,15 @@ import hashlib
 import json
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from config.bot_inheritance import get_side_field_catalog, resolve_bot_policy
+from config.migrations.v9 import V9_SCHEMA_VERSION
+from config.result_records import build_result_record, result_config_view
 from config.scoring import ObjectiveSpec
-from config.result_records import result_config_view
+from config.strategy import normalize_strategy_kind, prune_inactive_strategy_subtrees
 from pareto_explorer import (
     ParetoCandidate,
     _normalize_objective_matrix,
@@ -46,6 +49,7 @@ class SideComponent:
     objectives: dict[str, float]
     quality: float
     config_hash: str
+    current_schema: bool
     selectors: tuple[str, ...] = ()
 
 
@@ -64,11 +68,16 @@ def _json_fingerprint(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _entry_bot(entry: Mapping[str, Any]) -> Mapping[str, Any]:
-    config = result_config_view(entry)
+def _config_bot(config: Mapping[str, Any]) -> Mapping[str, Any]:
     bot = config.get("bot")
     if not isinstance(bot, Mapping):
         raise ValueError("Pareto candidate is missing config.bot/bot")
+    if config.get("config_version") == V9_SCHEMA_VERSION:
+        policy = resolve_bot_policy(bot, get_side_field_catalog())
+        resolved = policy.effective_view()
+        resolved["global"] = policy.source_view(include_defaults=True)["global"]
+        prune_inactive_strategy_subtrees({"bot": resolved})
+        return resolved
     return bot
 
 
@@ -117,7 +126,9 @@ def _side_enablement_values(side_config: Mapping[str, Any]) -> tuple[Any, Any]:
     return n_positions_raw, exposure_limit_raw
 
 
-def _side_is_enabled(side_config: Mapping[str, Any]) -> bool:
+def _side_is_enabled(side_config: Mapping[str, Any], *, current_schema=False) -> bool:
+    if current_schema and side_config["enabled"] is not True:
+        return False
     n_positions_raw, exposure_limit_raw = _side_enablement_values(side_config)
     try:
         if n_positions_raw is None or exposure_limit_raw is None:
@@ -165,11 +176,13 @@ def _component_from_candidate(
     *,
     selector: str | None = None,
 ) -> SideComponent | None:
-    bot = _entry_bot(candidate.entry)
+    config = result_config_view(candidate.entry)
+    current_schema = config.get("config_version") == V9_SCHEMA_VERSION
+    bot = _config_bot(config)
     raw_side_config = bot.get(side)
     if not isinstance(raw_side_config, Mapping):
         return None
-    if not _side_is_enabled(raw_side_config):
+    if not _side_is_enabled(raw_side_config, current_schema=current_schema):
         return None
     side_config = copy.deepcopy(dict(raw_side_config))
     config_hash = _json_fingerprint(side_config)
@@ -184,6 +197,7 @@ def _component_from_candidate(
         objectives=dict(candidate.objectives),
         quality=_candidate_quality(front, candidate),
         config_hash=config_hash,
+        current_schema=current_schema,
         selectors=selectors,
     )
 
@@ -210,18 +224,7 @@ def _upsert_component(
         return
     selectors = _merge_selectors(existing.selectors, component.selectors)
     if selectors != existing.selectors:
-        registry[component.config_hash] = SideComponent(
-            side=existing.side,
-            side_config=existing.side_config,
-            base_bot=existing.base_bot,
-            front_index=existing.front_index,
-            pareto_dir=existing.pareto_dir,
-            candidate_path=existing.candidate_path,
-            objectives=existing.objectives,
-            quality=existing.quality,
-            config_hash=existing.config_hash,
-            selectors=selectors,
-        )
+        registry[component.config_hash] = replace(existing, selectors=selectors)
 
 
 def _best_candidate_for_metric(
@@ -344,7 +347,7 @@ def _iter_bound_items(raw: Mapping[str, Any], prefix: tuple[str, ...] = ()):
 
 
 def _bounds_are_nested(bounds: Mapping[str, Any]) -> bool:
-    return any(isinstance(bounds.get(side), Mapping) for side in SIDES)
+    return any(isinstance(bounds.get(scope), Mapping) for scope in ("global", "portfolio", *SIDES))
 
 
 def _bound_side(path: tuple[str, ...]) -> str | None:
@@ -374,11 +377,14 @@ def _merge_bounds(fronts: Sequence[LoadedFront]) -> dict[str, Any]:
     use_nested_output = False
     for front in fronts:
         for candidate in front.candidates:
-            bot = _entry_bot(candidate.entry)
+            config = result_config_view(candidate.entry)
+            current_schema = config.get("config_version") == V9_SCHEMA_VERSION
+            bot = _config_bot(config)
             enabled_sides = {
                 side
                 for side in SIDES
-                if isinstance(bot.get(side), Mapping) and _side_is_enabled(bot[side])
+                if isinstance(bot.get(side), Mapping)
+                and _side_is_enabled(bot[side], current_schema=current_schema)
             }
             if not enabled_sides:
                 continue
@@ -456,10 +462,14 @@ def _build_merged_config(
 ) -> dict[str, Any]:
     config: dict[str, Any] = {
         "bot": _merge_bot(long_component, short_component),
-        "merge_paretos": _merge_metadata(long_component, short_component, phase=phase),
     }
     if merged_bounds:
         config["optimize"] = {"bounds": copy.deepcopy(dict(merged_bounds))}
+    provenance = _merge_metadata(long_component, short_component, phase=phase)
+    if long_component.current_schema:
+        config["config_version"] = V9_SCHEMA_VERSION
+        return build_result_record(config, provenance={"merge_paretos": provenance})
+    config["merge_paretos"] = provenance
     return config
 
 
@@ -501,6 +511,17 @@ def build_merged_configs(
 ) -> tuple[list[dict[str, Any]], MergeStats]:
     if max_outputs < 1:
         raise ValueError("--max must be at least 1")
+
+    configs = [result_config_view(candidate.entry) for front in fronts for candidate in front.candidates]
+    versions = {config.get("config_version") for config in configs}
+    if V9_SCHEMA_VERSION in versions:
+        if versions != {V9_SCHEMA_VERSION}:
+            raise ValueError("current v9 and historical Pareto inputs cannot be merged together")
+        portfolios = [config.get("bot", {}).get("portfolio", {}) for config in configs]
+        if len({normalize_strategy_kind(portfolio.get("strategy_kind")) for portfolio in portfolios}) > 1:
+            raise ValueError("v9 Pareto inputs must use the same portfolio strategy_kind")
+        if len({portfolio.get("hsl", {}).get("scope", "coin") for portfolio in portfolios}) > 1:
+            raise ValueError("v9 Pareto inputs must use the same portfolio HSL scope")
 
     all_components = _collect_all_components(fronts)
     if not all_components["long"]:

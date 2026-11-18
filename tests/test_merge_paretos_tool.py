@@ -279,6 +279,84 @@ def test_merge_paretos_supports_canonical_v9_risk_and_bound_union(tmp_path: Path
     assert all(path.read_bytes() == raw for path, raw in originals.items())
 
 
+def _write_current_v9_candidate(pareto_dir, side, initial_qty):
+    from config.load import prepare_config
+    from config.schema import get_template_config
+    from optimization.callback import build_pymoo_record_entry
+
+    source = get_template_config()
+    bot = source["bot"]
+    for pside in ("long", "short"):
+        bot[pside] = {"enabled": pside == side}
+    strategy = bot["global"]["strategy"]["trailing_martingale"]
+    strategy["entry"]["initial_qty_fraction"] = initial_qty
+    bot["global"]["risk"].update(max_positions=2, total_wallet_exposure_limit_ratio=1.0)
+    source["optimize"].update(
+        scoring=SCORING,
+        bounds={"global": {"strategy": {"trailing_martingale": {
+            "entry": {"initial_qty_fraction": [0.01, 0.1]},
+        }}}},
+    )
+    prepared = prepare_config(source, verbose=False)
+    record = build_pymoo_record_entry(
+        vector=[], template=prepared, prepared_config=prepared, overrides_fn=None, build_config_fn=None,
+        metrics={
+            "definition_version": 2,
+            "objectives": {"omega_ratio_strategy_equity": 2.0, "ulcer_index_fraction_strategy_equity": 0.2},
+        },
+    )
+    assert set(record["config"]["bot"][side]) == {"enabled"}
+    pareto_dir.mkdir(parents=True)
+    path = pareto_dir / f"{side}.json"
+    path.write_text(json.dumps(record))
+    return path
+
+
+def test_merge_paretos_current_results_are_usable_optimizer_seeds(tmp_path):
+    from config.load import load_prepared_config
+    from optimization.bounds import Bound
+    from optimize import configs_to_individuals_streaming, get_starting_configs
+
+    long_path = _write_current_v9_candidate(tmp_path / "long" / "pareto", "long", 0.031)
+    short_path = _write_current_v9_candidate(tmp_path / "short" / "pareto", "short", 0.078)
+    output = tmp_path / "merged"
+    assert main([str(long_path.parent), str(short_path.parent), str(output)]) == 0
+    index = json.loads((output / "index.json").read_text())
+    assert index["count"] == 1
+    path = output / index["files"][0]
+    record = json.loads(path.read_text())
+    assert record["result_version"] == 1
+    provenance = record["provenance"]["merge_paretos"]
+    assert provenance["long"]["source"] == str(long_path)
+    assert provenance["short"]["source"] == str(short_path)
+    assert record["config"]["config_version"] == "v9.0.0"
+    assert "merge_paretos" not in record["config"]
+    bounds = record["config"]["optimize"]["bounds"]
+    assert bounds["global"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == [0.01, 0.1]
+
+    loaded = load_prepared_config(str(path), allow_result_records=True, verbose=False)
+    [seed] = get_starting_configs(str(output))
+    for side, expected in (("long", 0.031), ("short", 0.078)):
+        assert loaded["bot"][side]["enabled"] is True
+        for source in (loaded, seed):
+            assert source["bot"][side]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == expected
+    key_paths = [(side, ("bot", side, "strategy", "trailing_martingale", "entry", "initial_qty_fraction"))
+                 for side in ("long", "short")]
+    bounds = [Bound.from_config(side, [0.01, 0.1]) for side, _ in key_paths]
+    assert configs_to_individuals_streaming([seed], bounds, sig_digits=6, key_paths=key_paths) == (
+        [(0.031, 0.078)], 1,
+    )
+
+
+def test_merge_paretos_requires_consistent_schema_for_current_results(tmp_path):
+    long_path = _write_current_v9_candidate(tmp_path / "long" / "pareto", "long", 0.031)
+    old_short = _make_front(tmp_path, "old-short", enabled_side="short")
+    output = tmp_path / "merged"
+    with pytest.raises(ValueError, match="historical Pareto inputs"):
+        build_merged_configs(_load_fronts([long_path.parent, old_short]), max_outputs=5)
+    assert not output.exists()
+
+
 @pytest.mark.parametrize("count,exposure,enabled", [(2, .5, True), (0, .5, False), (2, 0, False)])
 def test_canonical_pareto_side_enablement(count, exposure, enabled):
     assert _side_is_enabled({"risk": {"max_positions": count, "total_wallet_exposure_limit_ratio": exposure}}) is enabled
