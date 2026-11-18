@@ -192,11 +192,43 @@ def cuda_source(
     return _CUDA_PREAMBLE + storage + source
 
 
+def _hipify(code: str) -> str:
+    """Rewrite CUDA-only constructs so hipRTC can compile them (AMD ROCm)."""
+    code = code.replace("#include <cuda_runtime.h>", "#include <hip/hip_runtime.h>")
+    code = code.replace("#include <cuda.h>", "#include <hip/hip_runtime.h>")
+    # hipRTC already defines ulong (unsigned long); avoid the clash and keep
+    # CUDA's 64-bit semantics under a distinct name.
+    code = re.sub(r"^\s*using\s+ulong\s*=\s*unsigned\s+long\s+long\s*;\s*$", "", code, flags=re.M)
+    code = re.sub(r"\bulong\b", "pb_ulong", code)
+    code = "#define PASSIVBOT_HSL_LOOKBACK 1\nusing pb_ulong = unsigned long long;\n" + code
+    return code
+
+
+def shader_vendor(cupy_module=None) -> str:
+    """Detect the active GPU toolchain: 'hip' for AMD ROCm, 'cuda' for NVIDIA.
+
+    Kept in one place so shader compilation, include rewriting and compiler
+    flags never fork on vendor guesses scattered through the module.
+    """
+
+    runtime = getattr(getattr(cupy_module, "cuda", None), "runtime", None)
+    if getattr(runtime, "is_hip", False):
+        return "hip"
+    try:
+        import torch
+    except Exception:
+        return "cuda"
+    if getattr(getattr(torch, "version", None), "hip", None):
+        return "hip"
+    return "cuda"
+
+
 class CudaShaderLibrary:
     def __init__(self, source: str, *, coin_capacity: int | None = None):
         import cupy
 
         self._cupy = cupy
+        self._vendor = shader_vendor(cupy)
         self._shared_side_replay = _shared_side_replay(source)
         self._scalar_parameters = {}
         self._byte_parameters = {}
@@ -211,8 +243,16 @@ class CudaShaderLibrary:
                 if (match := re.search(r"\bconstant\s+(\w+)\s*&", argument))
             }
         self._module = cupy.RawModule(
-            code=cuda_source(source, coin_capacity=coin_capacity),
-            options=("--std=c++17", "--fmad=false"),
+            code=(
+                _hipify(cuda_source(source, coin_capacity=coin_capacity))
+                if self._vendor == "hip"
+                else cuda_source(source, coin_capacity=coin_capacity)
+            ),
+            options=(
+                ("--std=c++17",)
+                if self._vendor == "hip"
+                else ("--std=c++17", "--fmad=false")
+            ),
         )
         self._module.compile()
 

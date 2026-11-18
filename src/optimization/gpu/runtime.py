@@ -6,6 +6,22 @@ import re
 import time
 
 
+def gpu_vendor(torch_module=None) -> str:
+    """Return the runtime accelerator vendor: 'apple', 'amd', 'nvidia' or 'none'."""
+
+    if torch_module is None:
+        import torch as torch_module
+    mps = getattr(getattr(torch_module, "backends", None), "mps", None)
+    if mps is not None and mps.is_available():
+        return "apple"
+    if getattr(getattr(torch_module, "version", None), "hip", None):
+        return "amd"
+    cuda = getattr(torch_module, "cuda", None)
+    if cuda is not None and cuda.is_available():
+        return "nvidia"
+    return "none"
+
+
 def gpu_device(torch_module=None) -> str:
     if torch_module is None:
         import torch as torch_module
@@ -14,9 +30,11 @@ def gpu_device(torch_module=None) -> str:
     cuda = getattr(torch_module, "cuda", None)
     if cuda is not None and cuda.is_available():
         return "cuda"
+    vendor = gpu_vendor(torch_module)
     raise RuntimeError(
-        "GPU optimization requires available Apple MPS or NVIDIA CUDA; "
-        "use optimize.backend='pymoo' for CPU optimization"
+        f"GPU optimization requires an available accelerator (Apple MPS, "
+        f"NVIDIA CUDA or AMD ROCm); detected {vendor}. "
+        "Use optimize.backend='pymoo' for CPU optimization"
     )
 
 
