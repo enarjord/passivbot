@@ -7773,8 +7773,7 @@ def test_unstuck_monitor_renderer_uses_independent_bounds(pside, strategy_availa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("volume_weight", [0.0, 0.2])
-@pytest.mark.parametrize("volatility_drop_pct", [0.0, 0.34])
-async def test_monitor_rms_directionality_total_uses_rust_ranking(side, volume_weight, volatility_drop_pct):
+async def test_monitor_rms_directionality_total_uses_rust_ranking(side, volume_weight):
     from types import SimpleNamespace
     import passivbot_rust as pbr
     import passivbot_monitor as monitor
@@ -7791,7 +7790,6 @@ async def test_monitor_rms_directionality_total_uses_rust_ranking(side, volume_w
         "n_positions": 1,
         "total_wallet_exposure_limit_ratio": 1.0,
         "forager_score_weights": weights,
-        "filter_volatility_drop_pct": volatility_drop_pct,
         "rms_directionality_ema_span_minutes": 60.0,
     }
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
@@ -7843,7 +7841,7 @@ async def test_monitor_rms_directionality_total_uses_rust_ranking(side, volume_w
         bot_value=lambda s, key: (
             weights
             if key == "forager_score_weights"
-            else (60.0 if key == "rms_directionality_ema_span_minutes" else volatility_drop_pct)
+            else (60.0 if key == "rms_directionality_ema_span_minutes" else 0.0)
         ),
         effective_min_cost_is_low_enough=lambda *args: True,
         build_forager_candidate_payload=legacy_payload,

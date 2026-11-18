@@ -86,7 +86,6 @@ def _rust_bot_params(**overrides):
         "entry_trailing_retracement_base_fraction": 0.0,
         "entry_trailing_threshold_base_fraction": 0.0,
         "forager_log_range_ema_span_minutes": 10.0,
-        "filter_volatility_drop_pct": 0.0,
         "forager_volume_ema_span_minutes": 10.0,
         "ema_span_0_minutes": 10.0,
         "ema_span_1_minutes": 20.0,

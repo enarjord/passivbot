@@ -3,7 +3,7 @@ import math
 from copy import deepcopy
 from typing import Optional
 
-from pure_funcs import sort_dict_keys, str2bool
+from pure_funcs import sort_dict_keys
 
 from .hsl import normalization_template, normalize_hsl
 from .log_output import log_config_message
@@ -16,7 +16,6 @@ from .shared_bot import (
     flatten_shared_bot_side,
     get_bot_group,
     get_grouped_bot_value,
-    inject_flattened_shared_bot_side,
 )
 from .schema import get_expanded_config_prototype
 from .access import require_config_dict
@@ -238,26 +237,6 @@ def _set_hydrated_bot_nested_value(
     )
     if tracker is not None:
         tracker.add(["bot", pside, key, child], value)
-
-
-def _read_legacy_alias(bot_cfg: dict, *keys: str):
-    for key in keys:
-        if key in bot_cfg and bot_cfg[key] is not None:
-            return bot_cfg[key]
-    return None
-
-
-def _derive_close_grid_qty_fraction(bot_cfg: dict, *, path: str) -> Optional[float]:
-    raw_n_closes = _read_legacy_alias(bot_cfg, "n_closes", "n_close_orders")
-    if raw_n_closes is None:
-        return None
-    try:
-        n_closes = int(round(float(raw_n_closes)))
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"{path} legacy n_closes must be numeric") from exc
-    if n_closes <= 0:
-        raise ValueError(f"{path} legacy n_closes must round to a positive integer")
-    return 1.0 / n_closes
 
 
 def _bot_side_enabled(bot_cfg: dict, *, pside: str) -> bool:
@@ -727,89 +706,6 @@ def normalize_risk_config(result: dict, *, tracker: Optional[object] = None) -> 
         risk_cfg['total_exposure_enforcer']['policy'] = normalized_policy
 
 
-def _parse_entry_grid_inflation_flag(raw_value, *, path: str) -> bool:
-    if isinstance(raw_value, bool):
-        return raw_value
-    if isinstance(raw_value, (int, float)) and raw_value in (0, 1):
-        return bool(raw_value)
-    if isinstance(raw_value, str):
-        return str2bool(raw_value)
-    raise TypeError(f"{path} must be a boolean, got {type(raw_value).__name__}")
-
-
-def strip_deprecated_entry_grid_inflation_flags(
-    result: dict,
-    *,
-    verbose: bool = True,
-    tracker: Optional[object] = None,
-) -> None:
-    for pside in BOT_POSITION_SIDES:
-        bot_cfg = result["bot"][pside]
-        if "entry_grid_inflation_enabled" not in bot_cfg:
-            continue
-        raw_value = bot_cfg["entry_grid_inflation_enabled"]
-        normalized = _parse_entry_grid_inflation_flag(
-            raw_value, path=f"bot.{pside}.entry_grid_inflation_enabled"
-        )
-        if normalized:
-            log_config_message(
-                verbose,
-                logging.WARNING,
-                "bot.%s.entry_grid_inflation_enabled is deprecated and has no effect; removing it",
-                pside,
-            )
-        removed = bot_cfg.pop("entry_grid_inflation_enabled")
-        if tracker is not None:
-            tracker.remove(["bot", pside, "entry_grid_inflation_enabled"], removed)
-
-
-def strip_deprecated_coin_override_entry_grid_inflation_flags(
-    result: dict,
-    *,
-    verbose: bool = True,
-    tracker: Optional[object] = None,
-) -> None:
-    for coin, override in (result.get("coin_overrides") or {}).items():
-        if not isinstance(override, dict):
-            continue
-        override_bot = override.get("bot", {})
-        if not isinstance(override_bot, dict):
-            continue
-        for pside in BOT_POSITION_SIDES:
-            bot_cfg = override_bot.get(pside, {})
-            if (
-                not isinstance(bot_cfg, dict)
-                or "entry_grid_inflation_enabled" not in bot_cfg
-            ):
-                continue
-            raw_value = bot_cfg["entry_grid_inflation_enabled"]
-            normalized = _parse_entry_grid_inflation_flag(
-                raw_value,
-                path=f"coin_overrides.{coin}.bot.{pside}.entry_grid_inflation_enabled",
-            )
-            if normalized:
-                log_config_message(
-                    verbose,
-                    logging.WARNING,
-                    "coin_overrides.%s.bot.%s.entry_grid_inflation_enabled is deprecated and"
-                    " has no effect; removing it",
-                    coin,
-                    pside,
-                )
-            removed = bot_cfg.pop("entry_grid_inflation_enabled")
-            if tracker is not None:
-                tracker.remove(
-                    [
-                        "coin_overrides",
-                        coin,
-                        "bot",
-                        pside,
-                        "entry_grid_inflation_enabled",
-                    ],
-                    removed,
-                )
-
-
 def validate_forager_config(
     result: dict,
     *,
@@ -900,11 +796,3 @@ def format_bot_config(
     normalize_position_counts(result, tracker=tracker)
     normalize_risk_config(result, tracker=tracker)
     return sort_dict_keys(result["bot"])
-
-
-def apply_forager_internal_aliases(result: dict) -> None:
-    for pside in BOT_POSITION_SIDES:
-        bot_cfg = result.get("bot", {}).get(pside, {})
-        if isinstance(bot_cfg, dict):
-            inject_flattened_shared_bot_side(bot_cfg)
-            bot_cfg.setdefault("filter_volatility_drop_pct", 0.0)

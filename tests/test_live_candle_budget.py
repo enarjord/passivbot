@@ -155,7 +155,6 @@ async def test_active_candle_refresh_only_fetches_urgent_symbols(monkeypatch):
 
         has_position = pb_mod.Passivbot.has_position
         _urgent_active_candle_symbols = pb_mod.Passivbot._urgent_active_candle_symbols
-        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
         _rank_symbols_by_candle_staleness = (
             pb_mod.Passivbot._rank_symbols_by_candle_staleness
@@ -256,7 +255,6 @@ async def test_active_candle_refresh_ignores_broad_graceful_stop_universe(monkey
 
         has_position = pb_mod.Passivbot.has_position
         _urgent_active_candle_symbols = pb_mod.Passivbot._urgent_active_candle_symbols
-        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
         _rank_symbols_by_candle_staleness = (
             pb_mod.Passivbot._rank_symbols_by_candle_staleness
@@ -900,7 +898,6 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_sym
             return 0.0
 
         has_position = pb_mod.Passivbot.has_position
-        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
         _rank_symbols_by_candle_staleness = (
             pb_mod.Passivbot._rank_symbols_by_candle_staleness
@@ -1030,7 +1027,6 @@ async def test_orchestrator_ema_bundle_fetches_flat_default_normal_planning_symb
             return 0.0
 
         has_position = pb_mod.Passivbot.has_position
-        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
         _rank_symbols_by_candle_staleness = (
             pb_mod.Passivbot._rank_symbols_by_candle_staleness
@@ -1685,7 +1681,6 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
             return 0.0
 
         has_position = pb_mod.Passivbot.has_position
-        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
         _rank_symbols_by_candle_staleness = (
             pb_mod.Passivbot._rank_symbols_by_candle_staleness
@@ -1875,7 +1870,6 @@ async def test_orchestrator_ema_bundle_carries_cached_forager_qv_log_range(
             return 0.0
 
         has_position = pb_mod.Passivbot.has_position
-        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
         _rank_symbols_by_candle_staleness = (
             pb_mod.Passivbot._rank_symbols_by_candle_staleness
@@ -1990,7 +1984,6 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondaries_without_o
 
         has_position = pb_mod.Passivbot.has_position
         get_symbols_with_pos = pb_mod.Passivbot.get_symbols_with_pos
-        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
         _rank_symbols_by_candle_staleness = (
             pb_mod.Passivbot._rank_symbols_by_candle_staleness
@@ -2108,7 +2101,6 @@ async def test_orchestrator_ema_bundle_disables_remote_fetch_for_cache_only_seco
 
         has_position = pb_mod.Passivbot.has_position
         get_symbols_with_pos = pb_mod.Passivbot.get_symbols_with_pos
-        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
         _rank_symbols_by_candle_staleness = (
             pb_mod.Passivbot._rank_symbols_by_candle_staleness
@@ -2216,7 +2208,6 @@ async def test_orchestrator_ema_bundle_scopes_incomplete_cache_only_ranking_by_s
             return 0.0
 
         has_position = pb_mod.Passivbot.has_position
-        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
         _rank_symbols_by_candle_staleness = (
             pb_mod.Passivbot._rank_symbols_by_candle_staleness
