@@ -13,6 +13,9 @@ its own version heading. See [release status](docs/releases.md).
 - Include a wallet exposure plot in default backtest reports, with separate
   long and short series and a time-weighted exposure summary.
 
+- Export compiled per-coin overrides in their authored form so the configuration
+  can be loaded again without runtime fields.
+
 - Use the maintained EMA when a CPU backtest or exact optimizer evaluation has
   an unused volume or log-range EMA with the same span. Affected backtests can
   produce different fills and metrics.
