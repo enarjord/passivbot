@@ -443,7 +443,7 @@ def _materialize_files(source, *, source_schema_version, base_config_path, span,
                     old=deepcopy(value), new={new: deepcopy(value)},
                     reason="explicit released-v8 quantity rename before file/inline merge",
                 ))
-        from config.public_names import rewrite_released_public_names
+        from config.migrations.released_public_names import rewrite_released_public_names
 
         rewrite_released_public_names(inline, record=record_operational)
         result["coin_overrides"][coin] = nested_update(patch, inline)

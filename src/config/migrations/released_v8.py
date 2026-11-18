@@ -1260,7 +1260,7 @@ def materialize_released_v8_optimizer_bounds(
         else:
             shared["hsl"]["drawdown_ratio_threshold"] = shared["hsl"].pop("red_threshold")
             shared["hsl"]["drawdown_ratio_ema_span_minutes"] = shared["hsl"].pop("ema_span_minutes")
-    from config.public_names import rewrite_released_public_names
+    from .released_public_names import rewrite_released_public_names
 
     rewrite_released_public_names({"optimize": {"bounds": defaults}})
     original = config.setdefault("optimize", {}).get("bounds", {})
