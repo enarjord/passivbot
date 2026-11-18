@@ -85,7 +85,8 @@ from asset_inception import (
 from config.risk_memory import (
     normalize_memory_ema_span_minutes,
 )
-from metrics_schema import attach_result_metrics, build_standalone_metrics
+from metrics_schema import build_standalone_metrics
+from config.result_records import build_result_record
 from config.coerce import normalize_hsl_signal_mode
 from config.overrides import parse_overrides
 from config.shared_bot import flatten_shared_bot_side
@@ -102,7 +103,6 @@ from config_utils import (
     update_config_with_args,
     recursive_config_update,
     format_config,
-    strip_config_metadata,
     sanitize_prepared_config_for_dump,
 )
 from backtest_dataset import dump_backtest_dataset_metadata
@@ -3121,27 +3121,15 @@ def post_process(
     original_config = config.get("_original_backtest_config")
     if original_config is not None:
         dump_config(
-            strip_config_metadata(original_config),
+            sanitize_prepared_config_for_dump(original_config),
             f"{results_path}config.original.json",
         )
-    if get_optional_config_value(config, "backtest.hlcvs_data_dir"):
-        sanitized_config = strip_config_metadata(
-            config,
-            keys=(
-                "_raw",
-                "_raw_effective",
-                "_transform_log",
-                "_coins_sources",
-                "_original_backtest_config",
-                "analysis",
-            ),
-        )
-    else:
-        sanitized_config = sanitize_prepared_config_for_dump(config)
-    attach_result_metrics(
-        sanitized_config, metrics=build_standalone_metrics(analysis, exchange)
+    record = build_result_record(
+        sanitize_prepared_config_for_dump(config),
+        provenance={"dataset": "dataset.json"},
+        metrics=build_standalone_metrics(analysis, exchange),
     )
-    dump_config(sanitized_config, f"{results_path}config.json")
+    dump_config(record, f"{results_path}config.json")
     dump_backtest_dataset_metadata(config, exchange, results_path)
     stages["metadata_export"] = time.perf_counter() - export_started
     export_started = time.perf_counter()

@@ -19,6 +19,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Show disabled sides explicitly in the live startup banner’s position and exposure limits.
 
+- Version saved backtest, suite, and optimizer records with authored configuration kept
+  separately from metrics and provenance. Existing saved v9 candidates remain readable.
+
 - Preserve completed planning, ordinary execution and protective work across the
   internal passes of an offline fake-live replay step.
 

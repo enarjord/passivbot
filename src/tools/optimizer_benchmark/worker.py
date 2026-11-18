@@ -402,7 +402,9 @@ def _authored_result_vectors(configs, evaluator):
             vector=vector, metrics=None, template=evaluator.config,
             build_config_fn=build_config, overrides_fn=optimize.optimizer_overrides,
         )
-        vectors.add(tuple(get_path(recorded, path) for _key, path in evaluator.key_paths))
+        # The worker imports the target revision's recorder, which may predate envelopes.
+        authored = recorded.get("config", recorded)
+        vectors.add(tuple(get_path(authored, path) for _key, path in evaluator.key_paths))
     return vectors
 
 

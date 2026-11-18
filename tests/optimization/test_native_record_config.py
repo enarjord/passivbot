@@ -91,7 +91,7 @@ def test_prepared_record_matches_rebuilt_effective_candidate(monkeypatch, policy
             assert actual == expected
             assert plan.record_config == before
             if policy == "anchor":
-                actual["optimizer_anchor"]["tunable_keys"].append("changed")
+                actual["provenance"]["optimizer_anchor"]["tunable_keys"].append("changed")
                 assert plan.record_config == before
             if policy == "weights":
                 assert tuple(supplied) != plan.vector
@@ -172,15 +172,15 @@ def test_out_of_order_and_cached_anchor_duplicates_record_each_owned_config(monk
             search.evaluate_population()
             assert search._record_configs == {}
             assert session.active_candidate_ids == ()
-            actual = [(row["optimizer_anchor"]["id"],
-                       row["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"])
+            actual = [(row["provenance"]["optimizer_anchor"]["id"],
+                       row["config"]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"])
                       for row in records]
             assert actual[:2] == [(1, 0.04), (0, 0.02)]
             assert sorted(actual) == sorted((int(anchor), value) for anchor, value in vectors)
             assert search.state["completed"] == len(vectors)
             for row in records:
-                vector = [float(row["optimizer_anchor"]["id"]),
-                          row["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"]]
+                vector = [float(row["provenance"]["optimizer_anchor"]["id"]),
+                          row["config"]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"]]
                 expected = build_pymoo_record_entry(**{**record_kwargs(base, vector), "metrics": row["metrics"]})
                 assert row == expected
 
@@ -208,7 +208,7 @@ def test_changed_completion_vector_or_custom_builder_uses_existing_record_path(m
             payload = dict(fitness=[0.1, 0.2], constraint_violation=0,
                            evaluation_vector=list(plan.vector) if custom_builder else changed, metrics={})
             search.apply_terminal(0, payload, prepared=(plan.vector, plan.record_config))
-            assert records[0]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == (
+            assert records[0]["config"]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == (
                 0.033 if custom_builder else 0.035
             )
             assert len(calls) == int(custom_builder)

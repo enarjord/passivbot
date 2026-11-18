@@ -25,6 +25,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from opt_utils import load_results
 from config.limits import normalize_limit_entries
+from config.result_records import result_config_view
 from config.scoring import (
     default_scoring_weights,
     extract_objective_specs,
@@ -158,7 +159,7 @@ def _extract_objectives(entry, *, statuses=None):
     names = [name for name in objectives if name != "metric_status"]
     for name in names:
         reject_retired_metric(name, path="dashboard objective")
-    specs = extract_objective_specs(entry)
+    specs = extract_objective_specs(result_config_view(entry))
     ordered = [spec.metric for spec in specs] if specs else sorted(names)
     values, labels = {}, {}
     for name in ordered:
@@ -243,7 +244,8 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         )
         if statuses:
             source_statuses[config_id] = statuses
-        params = _flatten_numeric(entry.get("bot", {}), prefix="bot")
+        config = result_config_view(entry)
+        params = _flatten_numeric(config.get("bot", {}), prefix="bot")
         row = {**base, **suite_values, **params}
         row.update(objective_values)
         for key in row:
@@ -263,7 +265,7 @@ def load_pareto_dataframe(run_dir: str) -> RunData:
         display_labels.update(objective_labels)
         if not scoring_metrics:
             scoring_metrics = objective_cols.copy()
-            limits_cfg = entry.get("optimize", {}).get("limits", {})
+            limits_cfg = config.get("optimize", {}).get("limits", {})
             default_limits = _limits_to_exprs(limits_cfg)
     if not rows:
         return RunData(

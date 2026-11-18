@@ -14,6 +14,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 import numpy as np
 
 from config.metrics import split_metric_stat_suffix
+from config.result_records import result_config_view
 from metrics_schema import (copy_metric_value, decode_metric_value, encode_metric_values, raw_reduce, MetricAggregationError)
 from pareto_core import detect_latest_pareto_dir
 from pareto_explorer import (
@@ -155,8 +156,9 @@ def _flatten_numeric(obj: Any, prefix: str = "") -> Dict[str, float]:
 
 def extract_config_values(candidate: ParetoCandidate) -> Dict[str, float]:
     values: Dict[str, float] = {}
+    config = result_config_view(candidate.entry)
     for section in CONFIG_SECTIONS:
-        payload = candidate.entry.get(section)
+        payload = config.get(section)
         if isinstance(payload, Mapping):
             values.update(_flatten_numeric(payload, section))
     return values
@@ -164,9 +166,10 @@ def extract_config_values(candidate: ParetoCandidate) -> Dict[str, float]:
 
 def extract_bot_parameter_values(candidate: ParetoCandidate) -> Dict[str, float]:
     """Read authored numeric bot parameters, including per-coin bot overrides."""
-    bot = candidate.entry.get("bot")
+    config = result_config_view(candidate.entry)
+    bot = config.get("bot")
     values = _flatten_numeric(bot, "bot") if isinstance(bot, Mapping) else {}
-    overrides = candidate.entry.get("coin_overrides")
+    overrides = config.get("coin_overrides")
     if isinstance(overrides, Mapping):
         for coin, override in overrides.items():
             bot_override = override.get("bot") if isinstance(override, Mapping) else None

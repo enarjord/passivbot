@@ -771,7 +771,7 @@ def test_normal_window_submits_ready_rows_before_sealing_with_backpressure(monke
                 service.release.set()
         assert len(batches[0]) == capacity
         replayed = [value for batch in batches for value in batch]
-        recorded = [row["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] for row in records]
+        recorded = [row["config"]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] for row in records]
         assert len(replayed) == len(recorded) == len(set(submitted)) == 4
         assert sorted(replayed) == sorted(recorded)
         assert all(name.startswith("candidate:") for name in submitted)

@@ -13,7 +13,10 @@ Changing those settings requires a fresh run. Dataset selectors
 `backtest.market_settings_sources`, `backtest.ohlcv_source_dir`, and `backtest.hlcvs_data_dir`
 are compared as configured. Moving input directories therefore requires a fresh run even when
 contents match; input paths are data selectors, not excluded output paths.
-New result records include an `optimizer_evaluation_contract` snapshot. It binds fitness to
+Saved Pareto JSON and reconstructed `all_results.bin` rows have `result_version: 1`, a
+reusable `config`, metrics, and `provenance`. The provenance includes exact single-run
+dataset membership, the selected fine-tune anchor when applicable, and an
+`optimizer_evaluation_contract` snapshot. The snapshot binds fitness to
 content hashes of the prepared candles, BTC prices, timestamps, selected scenario slices, and
 market settings, plus the evaluator's Python source tree, Python runtime, installed distribution
 metadata, and the verified loaded Rust source and artifact.

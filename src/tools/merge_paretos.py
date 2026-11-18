@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from config.scoring import ObjectiveSpec
+from config.result_records import result_config_view
 from pareto_explorer import (
     ParetoCandidate,
     _normalize_objective_matrix,
@@ -63,15 +64,8 @@ def _json_fingerprint(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _entry_config(entry: Mapping[str, Any]) -> Mapping[str, Any]:
-    wrapped = entry.get("config")
-    if isinstance(wrapped, Mapping):
-        return wrapped
-    return entry
-
-
 def _entry_bot(entry: Mapping[str, Any]) -> Mapping[str, Any]:
-    config = _entry_config(entry)
+    config = result_config_view(entry)
     bot = config.get("bot")
     if not isinstance(bot, Mapping):
         raise ValueError("Pareto candidate is missing config.bot/bot")
@@ -79,7 +73,7 @@ def _entry_bot(entry: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _entry_optimize_bounds(entry: Mapping[str, Any]) -> Mapping[str, Any]:
-    config = _entry_config(entry)
+    config = result_config_view(entry)
     optimize = config.get("optimize")
     if not isinstance(optimize, Mapping):
         return {}
