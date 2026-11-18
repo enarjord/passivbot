@@ -38,6 +38,7 @@ services:
       - ./api-keys.json:/data/api-keys.json:ro
       - ./logs/:/data/logs/
       - ./monitor/:/data/monitor/
+      - "${PB_STATE_DIR:-./var}:/app/var"
     working_dir: /app
     # Example:
     # PB_USER=bitget_01 docker compose --profile live up passivbot-live
