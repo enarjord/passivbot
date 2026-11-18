@@ -133,3 +133,25 @@ python -c "import sys; print(sys.executable)"
 Both paths should belong to the intended venv. Then follow the
 [locked rebuild and verification procedure](ai/runbooks/rust_extension.md#rebuild-and-verify).
 If necessary, recreate the venv with Python 3.12 or 3.14 and reinstall.
+
+## Bitunix ordinary creates are paused
+
+Look for `[bitunix] ordinary create recovery pending` in the logs or
+`unresolved_create_attempt` on a create deferral event. A failed ordinary placement
+can keep a durable reservation when the exchange outcome is ambiguous. This includes
+error code `710003`, which can also start an entry cooldown for the affected symbol.
+While the reservation is pending, all ordinary creates for the account are deferred,
+including new closes on other symbols. Cancellations and dedicated Hard Stop Loss
+protection still use their normal admission checks.
+
+Keep the journal in `var/bitunix/<user>/create_attempts.sqlite3` and retain the same
+account alias and [persistent data directory](container_deployment.md#persistent-live-state)
+across restarts. Passivbot reconciles the original client order ID against fresh open
+orders or order history and confirms any executed quantity with fills. When a lookup
+misses, the reservation stays active and recovery retries. Cooldown expiry and restart
+leave durable evidence available for that recovery.
+
+If recovery stays pending, inspect venue orders and fills for the journaled client order
+ID and any known venue order ID. Preserve the journal and establish the original order
+outcome before authorizing further creates or rolling back to a version that cannot read
+the journal. [Recovery details](ai/features/exchange_integrations.md#recovery-of-ordinary-creations)
