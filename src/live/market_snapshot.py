@@ -45,9 +45,13 @@ class MarketSnapshot:
             and float(self.last) > 0.0
         )
 
+    def is_fresh(self, now_ms: int, max_age_ms: int) -> bool:
+        return 0 < self.fetched_ms <= now_ms and now_ms - self.fetched_ms <= max_age_ms
+
 
 TickerFetcher = Callable[[], Awaitable[dict[str, Any]]]
 SymbolTickerFetcher = Callable[[list[str]], Awaitable[dict[str, Any]]]
+MarketTickerFetcher = Callable[..., Awaitable[dict[str, Any]]]
 CacheSink = Callable[[str, float, int], None]
 
 
@@ -60,6 +64,7 @@ class MarketSnapshotProvider:
         exchange_name: str,
         fetch_tickers: Optional[TickerFetcher],
         fetch_tickers_for_symbols: Optional[SymbolTickerFetcher] = None,
+        fetch_market_tickers_for_symbols: Optional[MarketTickerFetcher] = None,
         ticker_strategy: str = "bulk",
         cache_sink: Optional[CacheSink] = None,
         logger: Optional[logging.Logger] = None,
@@ -67,6 +72,7 @@ class MarketSnapshotProvider:
         self.exchange_name = str(exchange_name or "").lower()
         self._fetch_tickers = fetch_tickers
         self._fetch_tickers_for_symbols = fetch_tickers_for_symbols
+        self._fetch_market_tickers_for_symbols = fetch_market_tickers_for_symbols
         self._ticker_strategy = str(ticker_strategy or "bulk").lower()
         if self._ticker_strategy not in {"bulk", "symbols"}:
             self._ticker_strategy = "bulk"
@@ -74,7 +80,7 @@ class MarketSnapshotProvider:
         self._log = logger or logging.getLogger("passivbot.market_snapshot")
         self._cache: dict[str, MarketSnapshot] = {}
         self._fetch_task: Optional[asyncio.Task] = None
-        self._symbol_fetch_tasks: dict[tuple[str, ...], asyncio.Task] = {}
+        self._symbol_fetch_tasks: dict[tuple, asyncio.Task] = {}
         self._pending_failures: dict[asyncio.Task, Exception] = {}
         self._observed_tasks = weakref.WeakSet()
         self._active_readers: dict[asyncio.Task, int] = {}
@@ -83,11 +89,9 @@ class MarketSnapshotProvider:
 
     def get_cached(self, symbol: str, *, now_ms: int, max_age_ms: int) -> Optional[MarketSnapshot]:
         snap = self._cache.get(symbol)
-        if snap is None:
-            return None
-        if int(now_ms) - int(snap.fetched_ms) > int(max_age_ms):
-            return None
-        return snap if snap.is_valid() else None
+        if snap is not None and snap.is_fresh(now_ms, max_age_ms) and snap.is_valid():
+            return snap
+        return None
 
     def get_cached_snapshots(
         self, symbols: Iterable[str], *, max_age_ms: int
@@ -103,7 +107,7 @@ class MarketSnapshotProvider:
         snapshots = {}
         for symbol in ordered_symbols:
             snap = self.get_cached(symbol, now_ms=now, max_age_ms=max_age_ms)
-            if snap is None or not 0 < snap.fetched_ms <= now:
+            if snap is None:
                 return None
             snapshots[symbol] = snap
         return snapshots
@@ -120,7 +124,7 @@ class MarketSnapshotProvider:
         # including when this read could otherwise use the cache.
         self.raise_pending_failure()
 
-        now = utc_ms()
+        now = int(utc_ms())
         out: dict[str, MarketSnapshot] = {}
         if not refresh:
             for symbol in ordered_symbols:
@@ -131,14 +135,16 @@ class MarketSnapshotProvider:
         missing = [s for s in ordered_symbols if s not in out]
         if not missing:
             return out
-        if self._fetch_tickers is None and self._fetch_tickers_for_symbols is None:
+        if self._fetch_tickers is None and not self._has_symbol_fetcher():
             raise RuntimeError(
                 f"[market] ticker snapshot fetch unavailable | exchange={self.exchange_name} "
                 f"missing={len(missing)}"
             )
 
         try:
-            fetched, source = await self._fetch_tickers_for_missing(missing)
+            fetched, source = await self._fetch_tickers_for_missing(
+                missing, max_age_ms=max_age_ms, refresh=refresh
+            )
         except Exception as exc:
             self._log.warning(
                 "[market] ticker snapshot fetch failed | exchange=%s symbols=%s "
@@ -158,27 +164,15 @@ class MarketSnapshotProvider:
                 f"missing={len(missing)}"
             ) from exc
 
-        fetched_ms = utc_ms()
-        cached = 0
-        for raw_symbol, ticker in fetched.items():
-            symbol = str(raw_symbol)
-            snap = self._snapshot_from_ticker(symbol, ticker, fetched_ms=fetched_ms, source=source)
-            if snap is None:
-                continue
-            self._cache[symbol] = snap
-            cached += 1
-            if self._cache_sink is not None:
-                try:
-                    self._cache_sink(symbol, float(snap.last), int(snap.fetched_ms))
-                except Exception as exc:
-                    self._log.debug(
-                        "[market] snapshot cache sink failed | symbol=%s "
-                        "error_type=%s action=preserve_snapshot",
-                        symbol,
-                        bounded_exception_type(exc),
-                    )
+        fetched_ms = int(utc_ms())
+        received = self._remember_tickers(fetched, fetched_ms, source)
+        require_returned_quote = refresh and self._fetch_market_tickers_for_symbols is not None
 
         for symbol in missing:
+            if require_returned_quote:
+                returned = received.get(symbol)
+                if returned is None or not returned.is_fresh(fetched_ms, max_age_ms):
+                    continue
             snap = self.get_cached(symbol, now_ms=fetched_ms, max_age_ms=max_age_ms)
             if snap is None:
                 continue
@@ -188,11 +182,11 @@ class MarketSnapshotProvider:
         if (
             missing_after
             and source != "fetch_tickers_symbols"
-            and self._fetch_tickers_for_symbols is not None
+            and self._has_symbol_fetcher()
         ):
             try:
                 symbol_fetched = await self._fetch_tickers_for_symbols_shared(
-                    missing_after
+                    missing_after, max_age_ms=max_age_ms
                 )
             except Exception as exc:
                 self._log.warning(
@@ -212,32 +206,13 @@ class MarketSnapshotProvider:
                     f"[market] ticker missing-symbol retry failed for {self.exchange_name}; "
                     f"missing={len(missing_after)}"
                 ) from exc
-            retry_ms = utc_ms()
-            retry_cached = 0
-            for raw_symbol, ticker in symbol_fetched.items():
-                symbol = str(raw_symbol)
-                if symbol not in missing_after:
-                    continue
-                snap = self._snapshot_from_ticker(
-                    symbol,
-                    ticker,
-                    fetched_ms=retry_ms,
-                    source="fetch_tickers_symbols",
-                )
-                if snap is None:
-                    continue
-                self._cache[symbol] = snap
-                retry_cached += 1
-                if self._cache_sink is not None:
-                    try:
-                        self._cache_sink(symbol, float(snap.last), int(snap.fetched_ms))
-                    except Exception as exc:
-                        self._log.debug(
-                            "[market] snapshot cache sink failed | symbol=%s "
-                            "error_type=%s action=preserve_snapshot",
-                            symbol,
-                            bounded_exception_type(exc),
-                        )
+            retry_ms = int(utc_ms())
+            requested = set(missing_after)
+            retry_received = self._remember_tickers(
+                {symbol: ticker for symbol, ticker in symbol_fetched.items() if str(symbol) in requested},
+                retry_ms,
+                "fetch_tickers_symbols",
+            )
             for symbol in missing_after:
                 snap = self.get_cached(symbol, now_ms=retry_ms, max_age_ms=max_age_ms)
                 if snap is None:
@@ -250,7 +225,7 @@ class MarketSnapshotProvider:
                 len(missing_after),
                 max(0, len(missing_after) - len(retry_misses)),
                 len(retry_misses),
-                retry_cached,
+                len(retry_received),
             )
 
         self._log.debug(
@@ -259,31 +234,49 @@ class MarketSnapshotProvider:
             len(ordered_symbols),
             sum(1 for symbol in missing if symbol in out),
             sum(1 for symbol in missing if symbol not in out),
-            cached,
+            len(received),
             source,
         )
-        if any(symbol not in out for symbol in missing):
-            missing_after = [symbol for symbol in missing if symbol not in out]
+        # A hit selected before the fetch may expire while other symbols are in flight.
+        now = int(utc_ms())
+        missing_after = [
+            symbol for symbol in ordered_symbols
+            if symbol not in out or not out[symbol].is_fresh(now, max_age_ms)
+        ]
+        if missing_after:
             raise MarketSnapshotUnavailable(
                 f"[market] ticker snapshots incomplete | exchange={self.exchange_name} "
                 f"missing={len(missing_after)} symbols={','.join(missing_after[:12])}"
             )
         return out
 
-    async def _fetch_tickers_for_missing(self, missing: list[str]) -> tuple[dict[str, Any], str]:
-        if self._ticker_strategy == "symbols" and self._fetch_tickers_for_symbols is not None:
-            fetched = await self._fetch_tickers_for_symbols_shared(missing)
+    def _has_symbol_fetcher(self) -> bool:
+        return (
+            self._fetch_market_tickers_for_symbols is not None
+            or self._fetch_tickers_for_symbols is not None
+        )
+
+    async def _fetch_tickers_for_missing(
+        self, missing: list[str], *, max_age_ms: int, refresh: bool
+    ) -> tuple[dict[str, Any], str]:
+        targeted_refresh = refresh and self._fetch_market_tickers_for_symbols is not None
+        if (self._ticker_strategy == "symbols" or targeted_refresh) and self._has_symbol_fetcher():
+            fetched = await self._fetch_tickers_for_symbols_shared(
+                missing, max_age_ms=max_age_ms
+            )
             return fetched, "fetch_tickers_symbols"
         if self._fetch_tickers is not None:
             fetched = await self._fetch_tickers_shared()
             return fetched, "fetch_tickers"
-        fetched = await self._fetch_tickers_for_symbols_shared(missing)
+        fetched = await self._fetch_tickers_for_symbols_shared(
+            missing, max_age_ms=max_age_ms
+        )
         return fetched, "fetch_tickers_symbols"
 
-    async def _fetch_validated(self, fetcher, *args) -> dict[str, Any]:
+    async def _fetch_validated(self, fetcher, *args, **kwargs) -> dict[str, Any]:
         # Result-shape validation belongs to the shared owner too: readers may
         # all time out before a connector returns a malformed result.
-        fetched = await fetcher(*args)
+        fetched = await fetcher(*args, **kwargs)
         if not isinstance(fetched, dict):
             raise MarketSnapshotPayloadError(
                 f"[market] ticker snapshot fetch returned non-dict for {self.exchange_name}: "
@@ -309,15 +302,23 @@ class MarketSnapshotProvider:
         # planning reader sharing the same underlying exchange request.
         return await self._await_shared(task)
 
-    async def _fetch_tickers_for_symbols_shared(self, symbols: list[str]) -> dict[str, Any]:
+    async def _fetch_tickers_for_symbols_shared(
+        self, symbols: list[str], *, max_age_ms: int
+    ) -> dict[str, Any]:
         self._ensure_open()
         self.raise_pending_failure()
-        if self._fetch_tickers_for_symbols is None:
+        fetcher = self._fetch_market_tickers_for_symbols or self._fetch_tickers_for_symbols
+        if fetcher is None:
             return {}
-        key = tuple(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
+        requested = tuple(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
+        options = {}
+        key = (requested,)
+        if self._fetch_market_tickers_for_symbols is not None:
+            options = dict(max_age_ms=max_age_ms)
+            key = (requested, max_age_ms)
         task = self._symbol_fetch_tasks.get(key)
         if task is None or task.done():
-            task = asyncio.create_task(self._fetch_validated(self._fetch_tickers_for_symbols, list(key)))
+            task = asyncio.create_task(self._fetch_validated(fetcher, list(requested), **options))
             self._symbol_fetch_tasks[key] = task
             def finished(done):
                 if self._symbol_fetch_tasks.get(key) is done:
@@ -440,10 +441,39 @@ class MarketSnapshotProvider:
             return None
         return out
 
+    def _remember_tickers(self, tickers, now_ms: int, source: str) -> dict[str, MarketSnapshot]:
+        received = {}
+        for raw_symbol, ticker in tickers.items():
+            symbol = str(raw_symbol)
+            snap = self._snapshot_from_ticker(symbol, ticker, fetched_ms=now_ms, source=source)
+            if snap is None:
+                continue
+            received[symbol] = snap
+            previous = self._cache.get(symbol)
+            if previous is not None and snap.fetched_ms < previous.fetched_ms <= now_ms:
+                continue
+            self._cache[symbol] = snap
+            if self._cache_sink is not None:
+                try:
+                    self._cache_sink(symbol, float(snap.last), snap.fetched_ms)
+                except Exception as exc:
+                    self._log.debug(
+                        "[market] snapshot cache sink failed | symbol=%s "
+                        "error_type=%s action=preserve_snapshot",
+                        symbol,
+                        bounded_exception_type(exc),
+                    )
+        return received
+
     def _snapshot_from_ticker(
         self, symbol: str, ticker: Any, *, fetched_ms: int, source: str = "fetch_tickers"
     ) -> Optional[MarketSnapshot]:
         if not isinstance(ticker, dict):
+            return None
+        # Cached and compound connector reads supply the original local receipt.
+        # A venue timestamp describes the payload and cannot certify local age.
+        received_ms = ticker.get("snapshot_received_ms", fetched_ms)
+        if type(received_ms) is not int or not 0 < received_ms <= fetched_ms:
             return None
         last = self._coerce_positive(ticker.get("last"))
         if last is None:
@@ -467,7 +497,7 @@ class MarketSnapshotProvider:
             bid=float(bid),
             ask=float(ask),
             last=float(last),
-            fetched_ms=int(fetched_ms),
+            fetched_ms=received_ms,
             source=str(source),
             exchange_timestamp_ms=exchange_ts,
         )

@@ -1477,6 +1477,7 @@ class BitunixClient:
             "/api/v1/futures/market/depth",
             params={"symbol": self.market(symbol)["id"], "limit": 1},
         )
+        received_at = self.milliseconds()
         if not isinstance(data, dict):
             raise ValueError("Bitunix depth response has invalid shape")
         bids = data.get("bids") or []
@@ -1492,7 +1493,7 @@ class BitunixClient:
             "bid": bid,
             "ask": ask,
             "last": (bid + ask) / 2.0,
-            "timestamp": self.milliseconds(),
+            "snapshot_received_ms": received_at,
             "source": "bitunix_depth_mid",
             "info": data,
         }
@@ -1546,6 +1547,7 @@ class BitunixClient:
                                     "ask": ask,
                                     "last": last,
                                     "timestamp": timestamp,
+                                    "snapshot_received_ms": received_at,
                                     "info": deepcopy(row),
                                 }
                                 self._ticker_received_monotonic[
@@ -1597,19 +1599,38 @@ class BitunixClient:
             )
 
     def _ticker_is_fresh(
-        self, symbol: str, now_monotonic: float
+        self,
+        symbol: str,
+        now_monotonic: float,
+        *,
+        now_ms: int,
+        max_age_ms: int,
     ) -> bool:
-        if symbol not in self._ticker_cache:
+        ticker = self._ticker_cache.get(symbol)
+        if ticker is None:
             return False
         received_monotonic = self._ticker_received_monotonic.get(symbol)
         if received_monotonic is None:
             return False
+        received_ms = ticker.get("snapshot_received_ms")
         age_ms = (now_monotonic - received_monotonic) * 1000.0
-        return 0.0 <= age_ms <= self.TICKER_MAX_AGE_MS
+        return (
+            0.0 <= age_ms <= max_age_ms
+            and type(received_ms) is int
+            and 0 < received_ms <= now_ms
+            and now_ms - received_ms <= max_age_ms
+        )
 
     async def fetch_tickers(
-        self, symbols: list[str] | None = None, params: dict | None = None
+        self,
+        symbols: list[str] | None = None,
+        params: dict | None = None,
+        *,
+        max_age_ms: int | None = None,
     ) -> dict[str, dict]:
+        age_limit = self.TICKER_MAX_AGE_MS
+        if max_age_ms is not None:
+            age_limit = min(age_limit, max_age_ms)
         await self._ensure_markets()
         desired = list(
             dict.fromkeys(
@@ -1639,12 +1660,27 @@ class BitunixClient:
                 for symbol in desired
             }
         self._ensure_ticker_tasks()
+
+        def missing_tickers():
+            now_monotonic = time.monotonic()
+            now_ms = self.milliseconds()
+            return [
+                symbol for symbol in desired
+                if not self._ticker_is_fresh(
+                    symbol, now_monotonic, now_ms=now_ms, max_age_ms=age_limit
+                )
+            ]
+
         deadline = time.monotonic() + self.TICKER_WAIT_SECONDS
         while time.monotonic() < deadline:
-            now_monotonic = time.monotonic()
-            if all(
-                self._ticker_is_fresh(symbol, now_monotonic)
-                for symbol in desired
+            missing = missing_tickers()
+            # A live targeted read can repair an established stream's stale
+            # subset promptly. Give cold subscriptions their normal startup wait.
+            if not missing or (
+                symbols
+                and max_age_ms is not None
+                and len(missing) <= self.MAX_DEPTH_FALLBACK_SYMBOLS
+                and all(symbol in self._ticker_cache for symbol in missing)
             ):
                 break
             try:
@@ -1655,14 +1691,14 @@ class BitunixClient:
                 self._ticker_ready.clear()
             except asyncio.TimeoutError:
                 pass
-        now_monotonic = time.monotonic()
+        missing = missing_tickers()
+        missing_set = set(missing)
         result = {
             symbol: deepcopy(self._ticker_cache[symbol])
             for symbol in desired
-            if self._ticker_is_fresh(symbol, now_monotonic)
+            if symbol not in missing_set
         }
         if symbols:
-            missing = [symbol for symbol in desired if symbol not in result]
             if len(missing) > self.MAX_DEPTH_FALLBACK_SYMBOLS:
                 raise NetworkError(
                     "Bitunix ticker websocket missing "
@@ -2460,10 +2496,17 @@ class BitunixBot(CCXTBot):
             raw = fetched[symbol]
             if raw.get("timestamp") is not None:
                 ticker["timestamp"] = int(raw["timestamp"])
+            ticker["snapshot_received_ms"] = raw["snapshot_received_ms"]
             source = raw.get("source")
             if isinstance(source, str) and source.strip():
                 ticker["source"] = source.strip()
         return tickers
+
+    async def fetch_market_tickers_for_symbols(
+        self, symbols: list[str], *, max_age_ms: int
+    ) -> dict:
+        fetched = await self.cca.fetch_tickers(symbols, max_age_ms=max_age_ms)
+        return self._normalize_tickers(fetched)
 
     def _normalize_balance_diagnostics(self, fetched: object) -> dict:
         """Expose only documented Bitunix account components for diagnostics."""

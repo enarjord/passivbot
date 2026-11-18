@@ -1095,6 +1095,44 @@ async def test_websocket_quote_failure_propagates_and_never_uses_last_as_bid():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("websocket", [True, False])
+async def test_snapshot_uses_oldest_quote_component_receipt(monkeypatch, websocket):
+    import exchanges.lighter as lighter
+    import live.market_snapshot as snapshots
+
+    clock = [1_800_000_000_000]
+    monkeypatch.setattr(lighter, "utc_ms", lambda: clock[0])
+    monkeypatch.setattr(snapshots, "utc_ms", lambda: clock[0])
+
+    async def fetch_book(symbol, limit):
+        assert symbol == SYMBOL
+        clock[0] += book_delay_ms
+        return {"bids": [[1999, 1]], "asks": [[2001, 1]]}
+
+    b = bot()
+    b.cca = SimpleNamespace(
+        fetch_tickers=AsyncMock(return_value={SYMBOL: {"last": 2000}}),
+        fetch_order_book=fetch_book,
+    )
+    b.ccp = SimpleNamespace(watch_order_book=fetch_book) if websocket else None
+    provider = snapshots.MarketSnapshotProvider(
+        exchange_name="lighter",
+        fetch_tickers=None,
+        fetch_tickers_for_symbols=b.fetch_tickers_for_symbols,
+        ticker_strategy="symbols",
+    )
+    book_delay_ms = 12_000
+    with pytest.raises(snapshots.MarketSnapshotUnavailable):
+        await provider.get_snapshots([SYMBOL], max_age_ms=10_000)
+
+    book_delay_ms = 2_000
+    before_book = clock[0]
+    quote = (await provider.get_snapshots([SYMBOL], max_age_ms=10_000))[SYMBOL]
+    assert quote.fetched_ms == before_book
+    assert clock[0] - quote.fetched_ms == book_delay_ms
+
+
+@pytest.mark.asyncio
 async def test_signed_order_writes_are_serialized():
     from exchanges.ccxt_bot import CCXTBot
 
