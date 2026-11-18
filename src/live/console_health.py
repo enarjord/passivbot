@@ -23,6 +23,7 @@ _ORDINARY_DEFER_REASONS = {
     "current_inputs_changed",
     "hsl_candle_receipt_replaced",
     "hsl_fill_receipt_replaced",
+    "hsl_trailing_reset_evidence_replaced",
     "market_inputs_unavailable",
     "ordinary_plan_retired",
     "ordinary_transport_unavailable",
