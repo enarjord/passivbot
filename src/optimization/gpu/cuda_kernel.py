@@ -200,7 +200,10 @@ def _hipify(code: str) -> str:
     # CUDA's 64-bit semantics under a distinct name.
     code = re.sub(r"^\s*using\s+ulong\s*=\s*unsigned\s+long\s+long\s*;\s*$", "", code, flags=re.M)
     code = re.sub(r"\bulong\b", "pb_ulong", code)
-    code = "#define PASSIVBOT_HSL_LOOKBACK 1\nusing pb_ulong = unsigned long long;\n" + code
+    preamble = "using pb_ulong = unsigned long long;\n"
+    if "PASSIVBOT_HSL_LOOKBACK" not in code:
+        preamble = "#define PASSIVBOT_HSL_LOOKBACK 1\n" + preamble
+    code = preamble + code
     return code
 
 
@@ -249,7 +252,9 @@ class CudaShaderLibrary:
                 else cuda_source(source, coin_capacity=coin_capacity)
             ),
             options=(
-                ("--std=c++17",)
+                # hipRTC rejects NVRTC's --fmad=false; clang's FP contraction
+                # default would still change rounding, so pin it explicitly.
+                ("--std=c++17", "-ffp-contract=off")
                 if self._vendor == "hip"
                 else ("--std=c++17", "--fmad=false")
             ),
