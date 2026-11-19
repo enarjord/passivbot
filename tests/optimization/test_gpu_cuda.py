@@ -793,7 +793,7 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
     from optimization.gpu.native import CudaBacktestService
     from optimization.gpu.executor import BacktestRequest
     from optimization.native_results import CandidateEvaluation, CanonicalResultScorer, ResultSlot
-    from optimize import Evaluator, SuiteEvaluator
+    from optimize import Evaluator, SuiteEvaluator, _requested_metric_reducers
     from metrics_schema import build_scenario_metrics
     from suite_runner import ScenarioResult, SuiteScenario
     from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
@@ -803,11 +803,13 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "512",
     ]))
-    config["optimize"]["bounds"] = {"long_entry_initial_qty_fraction": [0.01, 0.03]}
-    for side in ("long", "short"):
-        for key in ("n_positions", "total_wallet_exposure_limit_ratio"):
-            value = config["bot"][side]["risk"][key]
-            config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
+    # v9 bounds are nested per side/strategy; risk sizing is a fixed config value.
+    config["optimize"]["bounds"] = {
+        side: {"strategy": {"trailing_martingale": {
+            "entry": {"initial_qty_fraction": [0.01, 0.03]},
+        }}}
+        for side in ("long", "short")
+    }
     config["optimize"]["scoring"] = [
         {"metric": "cagr_fraction_strategy_equity", "goal": "max", "scenario": "base"},
         {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min", "scenario": None, "aggregate": "max"},
@@ -815,7 +817,8 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
     config["optimize"]["limits"] = [
         {"metric": "backtest_completion_fraction", "penalize_if": "less_than", "value": 0.99},
     ]
-    requested_metrics = (*DEFAULT_METRICS, "backtest_completion_fraction")
+    requested_metrics = (*DEFAULT_METRICS, "backtest_completion_fraction",
+                         "ulcer_index_fraction_strategy_equity")
     manager = SharedArrayManager()
     try:
         specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
@@ -865,9 +868,17 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
             rows = []
             for label in scenario_configs:
                 result = received[f"{candidate_id}:{label}"]
-                per_exchange = {"binance": dict(result.metrics, liquidated=result.liquidated)}
-                rows.append(ScenarioResult(SuiteScenario(label, None, None, None, None), per_exchange,
-                                           build_scenario_metrics(per_exchange), 0.0, None))
+                per_exchange = {"binance": dict(
+                    result.metrics, liquidated=result.liquidated, **(result.metadata or {})
+                )}
+                rows.append(ScenarioResult(
+                    SuiteScenario(label, None, None, None, None), per_exchange,
+                    build_scenario_metrics(
+                        per_exchange,
+                        required_metrics=scorer.required_metrics(label),
+                        reducers=_requested_metric_reducers(
+                            base.scoring_specs, base.limit_checks, suite=True),
+                    ), 0.0, None))
             expected = suite.score_scenario_results(rows)
             assert payload["fitness"] == expected["objectives"]
             assert payload["metrics"]["suite_metrics"] == expected["suite_metrics"]
@@ -883,20 +894,26 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
     from optimization.gpu.native import CudaBacktestService
     from optimization.gpu.service import SharedAccountReplay
     from optimization.native_planning import NativeCandidatePlanner, ScenarioBinding
+    from config.inherited_bounds import prepare_bound_plan
     from optimization.native_session import NativeEvaluationSession
-    from optimize import Evaluator, SuiteEvaluator, config_to_individual
+    from optimize import (
+        Evaluator, SuiteEvaluator, _canonicalize_optimizer_individual, config_to_individual,
+    )
     from shared_arrays import SharedArrayManager
     from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
 
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "512",
     ]))
-    config["optimize"]["bounds"] = {}
-    for side in ("long", "short"):
-        for key in ("n_positions", "total_wallet_exposure_limit_ratio"):
-            value = config["bot"][side]["risk"][key]
-            config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
-        config["optimize"]["bounds"][f"{side}_entry_initial_qty_fraction"] = [0.01, 0.05]
+    # v9 bounds are nested per side/strategy; risk sizing is a fixed config value.
+    config["optimize"]["bounds"] = {
+        side: {"strategy": {"trailing_martingale": {
+            "entry": {"initial_qty_fraction": [0.01, 0.05]},
+        }}}
+        for side in ("long", "short")
+    }
+    metrics = (*DEFAULT_METRICS, "ulcer_index_fraction_strategy_equity")
+    prepare_bound_plan(config)
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.025,
     }
@@ -906,21 +923,11 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
         {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min"},
     ]
     config["optimize"]["limits"] = []
-    scenario_configs = {label: deepcopy(config) for label in ("base", "stress")}
-    for label, value in scenario_configs.items():
-        value["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.025
-        value["bot"]["short"] = deepcopy(value["bot"]["long"])
-        if label == "stress":
-            value["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.03
 
     def forbidden(*_args, **_kwargs):
         pytest.fail("CPU orchestration must never run a CPU simulation")
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
-    reference = {label: SharedAccountReplay(
-        config=value, mss=markets, exchange="binance", hlcvs=candles, btc=btc,
-        timestamps=timestamps, needed_metrics=DEFAULT_METRICS, batch_size=1,
-    ).evaluate_results([{}])[0] for label, value in scenario_configs.items()}
     manager = SharedArrayManager()
     try:
         specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
@@ -929,13 +936,26 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
             label=label, exchanges=["binance"], config=deepcopy(config), msss={"binance": markets},
             overrides={"bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.03}
             if label == "stress" else {},
-        ) for label in scenario_configs]
+        ) for label in ("base", "stress")]
+        base_vector = config_to_individual(
+            config, base.bounds, optimization_shape=base.optimization_shape)
+        base_config = _canonicalize_optimizer_individual(
+            [float(value) for value in base_vector], base.config, base.bounds,
+            base.sig_digits, base.key_paths, tuple(config["optimize"]["enable_overrides"]))
         suite = SuiteEvaluator(base, contexts, {"default": "mean"})
+        scenario_configs = {
+            ctx.label: suite.build_scenario_candidate_config(base_config, ctx)
+            for ctx in contexts
+        }
+        reference = {label: SharedAccountReplay(
+            config=value, mss=markets, exchange="binance", hlcvs=candles, btc=btc,
+            timestamps=timestamps, needed_metrics=metrics, batch_size=1,
+        ).evaluate_results([{}])[0] for label, value in scenario_configs.items()}
         monkeypatch.setattr(base, "evaluate", forbidden)
         monkeypatch.setattr(suite, "evaluate", forbidden)
         bindings = [ScenarioBinding(label, label, PreparedGpuDataset(
             config=value, markets=markets, exchange="binance", hlcvs=specs[0], btc=specs[1],
-            timestamps=specs[2], candle_coins=config["backtest"]["coins"]["binance"], metrics=DEFAULT_METRICS,
+            timestamps=specs[2], candle_coins=config["backtest"]["coins"]["binance"], metrics=metrics,
         )) for label, value in scenario_configs.items()]
         planner = NativeCandidatePlanner(suite, bindings)
         vector = config_to_individual(config, base.bounds, optimization_shape=base.optimization_shape)

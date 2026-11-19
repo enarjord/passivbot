@@ -10,6 +10,13 @@ import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
+# This module exercises the Apple Metal path; elsewhere the kernels it drives
+# are not the backend under test, so skip it instead of asserting Metal parity.
+pytestmark = pytest.mark.skipif(
+    getattr(getattr(torch, "backends", None), "mps", None) is None
+    or not torch.backends.mps.is_available(),
+    reason="Apple Metal (MPS) backend unavailable",
+)
 
 from optimization.gpu.runtime import (
     gpu_device,
