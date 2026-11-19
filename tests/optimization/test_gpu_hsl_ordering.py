@@ -27,14 +27,17 @@ def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides,
     from tools.gpu_parity import build_parser, fixture_inputs, run_comparison, DEFAULT_TOLERANCES
     from optimization.gpu.parity import MetricTolerance
 
+    # This two-day fixture annualises the equity ratio, so the GPU float32
+    # equity parity (1e-5) is amplified by 365.25 * 1440 / bars in CAGR.
+    bars = 3000
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", sides, "--coins", str(coins),
-        "--bars", "3000", "--seed", "43", "--hsl", mode,
+        "--bars", str(bars), "--seed", "43", "--hsl", mode,
     ]))
     for side in ("long", "short"):
         enabled = sides == "both" or side == sides
         inputs[0]["bot"][side]["risk"].update(
-            max_positions=1 if enabled else 0,
+            max_positions=coins if enabled else 0,
             total_wallet_exposure_limit_ratio=2 if enabled else 0,
         )
         inputs[0]["bot"][side]["hsl"].update(
@@ -51,8 +54,10 @@ def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides,
         inputs[1][1800:, 1, :3] *= 1.3
     metrics = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day",
                "hsl_triggers_per_year", "hsl_triggers_per_year", "hsl_red_time_fraction")
+    annualisation = 365.25 * 1440.0 / bars
     policies = {**DEFAULT_TOLERANCES,
-                "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
+                "cagr_fraction_strategy_equity": MetricTolerance(
+                    1e-5 * annualisation, 1e-3 * annualisation),
                 "hsl_triggers_per_year": MetricTolerance(1e-6, 1e-6),
                 "hsl_red_time_fraction": MetricTolerance(1e-8, 1e-5)}
     report = run_comparison(inputs, "binance", metrics, policies, gpu_engine="native")
