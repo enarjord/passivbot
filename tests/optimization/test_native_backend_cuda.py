@@ -10,6 +10,17 @@ import msgpack
 import pytest
 from opt_utils import load_results
 
+torch = pytest.importorskip("torch")
+
+# This module asserts CUDA device attributes (e.g. MaxBlocksPerMultiprocessor)
+# and CUDA CLI semantics. ROCm exposes a HIP device without those properties,
+# so everything asserted here describes a backend this host does not have.
+pytestmark = pytest.mark.skipif(
+    getattr(getattr(torch, "version", None), "hip", None) is not None
+    or getattr(getattr(torch, "version", None), "cuda", None) is None,
+    reason="CUDA-only module; ROCm/HIP exposes no CUDA device attributes",
+)
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("suite", [False, True])
