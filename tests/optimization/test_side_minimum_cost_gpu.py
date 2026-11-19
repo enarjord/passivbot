@@ -87,7 +87,8 @@ def test_actual_gpu_asymmetric_replay_matches_native_counts(monkeypatch, kind, p
         bot["risk"]["max_positions"] = 1 if sides == "both" or side == sides else 0
         bot["entry_cooldown"]["base_duration_minutes"] = 1000.0
         strategy = bot["strategy"][kind]
-        strategy["ema_span_0_minutes"], strategy["ema_span_1_minutes"] = 2.0, 3.0
+        spans = strategy["entry"] if kind == "trailing_martingale" else strategy
+        spans["ema_span_0_minutes"], spans["ema_span_1_minutes"] = 2.0, 3.0
         if kind == "ema_anchor":
             strategy.update(base_qty_fraction=0.001, offset_fraction=0.0, entry_qty_exposure_coefficient=0.0)
         else:

@@ -123,7 +123,10 @@ def test_ema_gate_uses_constant_memory_without_a_history_queue(sides, max_loss_p
     enabled = max_loss_pct < 1.0
     assert runner.loss_gate_enabled == enabled
     assert not hasattr(runner, "_unstuck_pnl_buffers")
-    assert runner.settings[-1].item() == float(enabled)
+    # Packed gate slot: single-side ABI keeps it at 14; the fused two-side
+    # vector appends side-policy entries and carries it at 16.
+    gate_slot = 14 if runner.settings.numel() == 16 else 16
+    assert runner.settings[gate_slot].item() == float(enabled)
 
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
@@ -178,7 +181,8 @@ def test_ema_loss_gate_memory_reuse_specialization_and_scratch(side, mode):
     runner.hsl_disabled_specialization = False
     _, general = raw(proxy, candidates)
     compare(expected, general)
-    runner.hsl_scratch_budget_bytes = runner._history_bytes_per_candidate() * 2
+    runner.hsl_scratch_budget_bytes = (runner._history_workspace_bytes()
+                                      + runner._history_bytes_per_candidate() * 2)
     _, split = raw(proxy, candidates, profile=True)
     compare(expected, split)
     assert runner.last_profile["candidate_batch_count"] == 2
