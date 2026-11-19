@@ -31,6 +31,13 @@ from optimization.interrupts import OptimizerInterruptRequested
 
 
 class BatchReplay(Protocol):
+    """Registered replay: supplies structured rows with terminal status.
+
+    The device service names that surface 'evaluate_results'; lighter test
+    doubles return ReplayResult rows from 'evaluate'. The executor prefers
+    the status-carrying surface instead of interpreting raw row shapes.
+    """
+
     def evaluate(self, candidates: list[dict]) -> list[ReplayResult]: ...
 
 
@@ -41,6 +48,28 @@ class ReplayResult:
     metrics: Mapping[str, float | None]
     liquidated: bool
     metadata: Mapping | None = None
+
+    @classmethod
+    def from_row(cls, row: Mapping) -> "ReplayResult":
+        """Normalize one simulator row that carries terminal status inline.
+
+        evaluate() surfaces status-bearing dicts; structured consumers keep it
+        in typed attributes. This is the single shape conversion, so no caller
+        has to guess what a replay returned.
+        """
+        values = dict(row)
+        try:
+            liquidated = values.pop("liquidated")
+        except KeyError:
+            raise RuntimeError(
+                "GPU replay row lacks terminal liquidation status"
+            ) from None
+        metadata = {
+            key: values.pop(key)
+            for key in ("metric_status", "metric_metadata")
+            if key in values
+        }
+        return cls(values, liquidated, metadata)
 
 
 @dataclass(frozen=True)
@@ -461,7 +490,8 @@ class GpuBacktestService:
                 compilation = collect_compilation() if self._batch_policy is not None else nullcontext()
                 with compilation:
                     try:
-                        rows = replay.evaluate([dict(item.request.parameters) for item in batch])
+                        evaluate = getattr(replay, "evaluate_results", None) or replay.evaluate
+                        rows = evaluate([dict(item.request.parameters) for item in batch])
                     finally:
                         del replay
                     # Validate the whole producer batch before releasing any success.

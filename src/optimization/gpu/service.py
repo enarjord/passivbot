@@ -1765,6 +1765,7 @@ class SharedAccountReplay:
         return result
 
     def evaluate(self, candidates: list[dict]) -> list[dict]:
+        """Plain metric rows; status is available through evaluate_results()."""
         return self._evaluate(candidates, include_status=False)
 
     def _core_hsl_configured_enablement(self, candidates):
@@ -1783,8 +1784,12 @@ class SharedAccountReplay:
             result.append(enabled)
         return result
 
-    def evaluate_results(self, candidates: list[dict]):
-        """Preserve actual simulator terminal status for authoritative consumers."""
+    def evaluate_results(self, candidates: list[dict]) -> list["ReplayResult"]:
+        """Preserve actual simulator terminal status for authoritative consumers.
+
+        Rows leave the simulator as plain dicts; ReplayResult.from_row performs
+        the single shape conversion for consumers that require typed status.
+        """
         return self._evaluate(candidates, include_status=True)
 
     def _refresh_dispatch_memory(self, requested_width, residency):
@@ -1929,13 +1934,16 @@ class SharedAccountReplay:
                 stage_started = time.perf_counter()
             if include_status:
                 from optimization.gpu.executor import ReplayResult
-                for row in rows:
-                    row = dict(row)
-                    flag = row.pop("liquidated")
-                    metadata = {key: row.pop(key) for key in ("metric_status", "metric_metadata") if key in row}
-                    results.append(ReplayResult(row, flag, metadata))
+                results.extend(ReplayResult.from_row(row) for row in rows)
             else:
-                results.extend(rows)
+                # Plain rows are the same metric mapping the executor publishes;
+                # terminal status stays only in the structured surface above.
+                for row in rows:
+                    plain = dict(row)
+                    plain.pop("liquidated", None)
+                    plain.pop("metric_status", None)
+                    plain.pop("metric_metadata", None)
+                    results.append(plain)
             if max_throughput:
                 del raw_output, packet
             start += len(chunk)

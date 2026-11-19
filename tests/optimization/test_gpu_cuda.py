@@ -477,6 +477,7 @@ def test_cuda_disabled_hsl_specialization_matches_full_hsl_state(cuda):
             multicoin_bars=128,
             coins=5,
             seed=11,
+            portfolio_hsl_disabled=True,
         )
         runner = proxy.runners["long"]
         if not compact_hsl:
