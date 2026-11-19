@@ -254,7 +254,9 @@ class CudaShaderLibrary:
             options=(
                 # hipRTC rejects NVRTC's --fmad=false; clang's FP contraction
                 # default would still change rounding, so pin it explicitly.
-                ("--std=c++17", "-ffp-contract=off")
+                # AMD's loop unroller miscompiles the fused replay kernel at
+                # -O2/-O3 (null-pointer GPU fault), so keep unrolling off.
+                ("--std=c++17", "-ffp-contract=off", "-fno-unroll-loops")
                 if self._vendor == "hip"
                 else ("--std=c++17", "--fmad=false")
             ),
