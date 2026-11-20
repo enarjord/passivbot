@@ -1489,6 +1489,12 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             _record_fresh_entry_orders(
                 bot, "record_blocked_orders", [order], ex.reason_code
             )
+            if ex.reason_code == ReasonCodes.ORDINARY_CREATE_WAVE_STOPPED:
+                message = "create order skipped because an earlier create stopped the wave"
+            elif ex.reason_code == ReasonCodes.EXCHANGE_MARGIN_RETRY:
+                message = "entry order deferred during the exchange margin retry interval"
+            else:
+                message = "create order skipped because account state changed before exchange submission"
             passivbot_cls._emit_execution_create_filter_event(
                 bot,
                 event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
@@ -1497,11 +1503,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 order_count=1,
                 symbols=[order["symbol"]],
                 wave=wave,
-                message=(
-                    "create order skipped because an earlier create stopped the wave"
-                    if ex.reason_code == ReasonCodes.ORDINARY_CREATE_WAVE_STOPPED
-                    else "create order skipped because account state changed before exchange submission"
-                ),
+                message=message,
             )
             continue
         if not bot.did_create_order(ex):

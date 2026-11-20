@@ -343,6 +343,7 @@ class ReasonCodes:
     ACCOUNT_CANCEL_FIRST_BARRIER = "account_cancel_first_barrier"
     UNRESOLVED_CREATE_ATTEMPT = "unresolved_create_attempt"
     ORDINARY_CREATE_WAVE_STOPPED = "ordinary_create_wave_stopped"
+    EXCHANGE_MARGIN_RETRY = "exchange_margin_retry"
     CANCEL_BATCH_CAPACITY = "cancel_batch_capacity"
     BATCH_CAPACITY = "batch_capacity"
     LENGTH_MISMATCH = "length_mismatch"

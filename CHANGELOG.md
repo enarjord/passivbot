@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Back off Bitget UTA entry submissions for 60 seconds after an insufficient-margin
+  rejection for that symbol and position side, while keeping the bot online to
+  manage existing positions.
+
 - Let explicitly selected OHLCV directories define each coin's simulation window.
   Warn and record the requested and available starts when history begins late.
   BTC benchmarks still require coverage across the full prepared range.
