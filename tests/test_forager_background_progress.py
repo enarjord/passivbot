@@ -253,7 +253,13 @@ async def test_candidate_rms_repairs_history_in_pages_with_fresh_ws_tail_and_res
         bot.bot_value = lambda side, key: {"rms_directionality": 1.0} if key == "forager_score_weights" else span
         bot.bp = lambda side, key, coin: {"adverse_directionality": 0.0} if key == "entry_cooldown_weights_minutes" else 0.0
         bot._get_fetch_delay_seconds = lambda: 0.0
-        bot._forager_target_staleness_ms = lambda *args: 0
+        def target_staleness(surface_count, max_calls):
+            # One ordinary 1m surface sets the freshness target. The separate
+            # RMS page below still needs to run and consume the fetch token.
+            assert (surface_count, max_calls) == (1, 4)
+            return 0
+
+        bot._forager_target_staleness_ms = target_staleness
         bot._forager_refresh_budget = lambda *a, **k: 1
         return bot
 

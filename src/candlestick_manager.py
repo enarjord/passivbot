@@ -4801,7 +4801,7 @@ class CandlestickManager:
         This method never fetches remote data and never includes the current
         in-progress timeframe bucket. It inspects disk cache plus runtime 1m
         cache and reports whether the requested completed candle windows are
-        covered.
+        covered without retaining the disk history in the runtime candle cache.
         """
         ts_now = _utc_now_ms() if now_ms is None else int(now_ms)
         requested = windows or {"1m": 1, "15m": 1, "1h": 1}
@@ -4842,7 +4842,9 @@ class CandlestickManager:
             combined = np.empty((0,), dtype=CANDLE_DTYPE)
             if end_ts >= start_ts:
                 try:
-                    loaded = self._load_from_disk(symbol, start_ts, end_ts, timeframe=tf_norm)
+                    loaded = self._load_from_disk(
+                        symbol, start_ts, end_ts, timeframe=tf_norm, merge_memory_cache=False
+                    )
                     if loaded is not None and loaded.size:
                         disk_arr = self._slice_ts_range(_ensure_dtype(loaded), start_ts, end_ts)
                 except Exception as exc:

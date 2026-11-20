@@ -236,9 +236,11 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
    finalized suffix outside the deferred range remains refreshable. Adjacent missing ranges with
    different retry epochs remain separate, even when their reason matches, so fresh evidence never
    inherits an older range's retry cooldown. Refresh scheduling prioritizes
-   never-attempted 1m fetches before native 1h backfills. Staleness targets count
-   only surfaces handled by this background
-   refresher, excluding urgent active symbols. A native 1h range with a fresh tail and only an
+   never-attempted 1m fetches before native 1h backfills. Staleness targets count the
+   ordinary 1m and required native 1h surfaces refreshed in the background. Historical
+   RMS pages share the fetch budget without extending the freshness target. Coverage
+   inspections keep long disk windows out of the runtime candle cache. A native 1h
+   range with a fresh tail and only an
    unavailable leading prefix remains nontradable and is retried at most once per 24 hours after a
    successful nonempty fetch which still proves the same requested leading-prefix gap; changed
    requirements, empty results, partial pagination failures, and other failed fetches remain

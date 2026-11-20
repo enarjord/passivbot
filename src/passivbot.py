@@ -18845,6 +18845,10 @@ class Passivbot:
             h1_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
             if h1_hours > 0 and sym in required_h1_symbols:
                 surface_specs.append(("1h", sym, h1_hours))
+        # Planning derives its age limit from the fresh candle surfaces.
+        # Historical repair shares the fetch budget without delaying tail refreshes.
+        target_age_ms = self._forager_target_staleness_ms(len(surface_specs), max_calls)
+
         from live.rms_directionality import RMS_CACHE_KIND, history_candle_count
 
         # An RMS window can be much deeper than the ordinary EMA/WS tail.
@@ -18866,9 +18870,6 @@ class Passivbot:
         if not surface_specs:
             return
         required_surface_count = len(surface_specs)
-        target_age_ms = self._forager_target_staleness_ms(
-            required_surface_count, max_calls
-        )
         eligible_surface_keys = {
             (sym, timeframe) for timeframe, sym, _ in surface_specs
         }
