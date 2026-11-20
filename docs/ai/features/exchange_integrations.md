@@ -214,6 +214,15 @@ Primary reference: `src/fill_events_manager.py` (`BybitFetcher._fetch_positions_
 
 ## KuCoin Futures
 
+KuCoin Futures can reject a private request with code `400002` when its signed
+timestamp is outside the accepted window. At the CCXT REST transport boundary,
+retry only `futuresPrivate` GET requests once through normal throttling and signing.
+A successful retry supplies fresh exchange data. If it fails, propagate the failure
+to the existing caller policy. The transport logs the retry without request details.
+Authentication failures and write requests retain the existing policy.
+
+Primary reference: [KuCoin Futures error codes](https://www.kucoin.com/docs-new/error-code/futures).
+
 ### Authoritative futures book quotes
 
 Use the public `allTickers` endpoint through CCXT's explicit

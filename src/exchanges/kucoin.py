@@ -4,6 +4,7 @@ from exchanges.ipv4_transport import IPv4TransportMixin
 from passivbot import logging
 import ccxt.pro as ccxt_pro
 import ccxt.async_support as ccxt_async
+from ccxt.base.errors import InvalidNonce
 import asyncio
 import math
 import passivbot_rust as pbr
@@ -51,7 +52,28 @@ def _add_kucoin_broker_name_header(signed: dict, options: dict) -> dict:
     return signed
 
 
-class AsyncKucoinBrokerFutures(IPv4TransportMixin, ccxt_async.kucoinfutures):
+class _KucoinFuturesReadRetry:
+    async def fetch2(
+        self, path, api="public", method="GET", params=None, headers=None, body=None, config=None
+    ):
+        params = {} if params is None else params
+        config = {} if config is None else config
+        fetch = super().fetch2
+        try:
+            return await fetch(path, api, method, params, headers, body, config)
+        except InvalidNonce:
+            # Pinned CCXT maps KuCoin 400002 (invalid request timestamp) to
+            # InvalidNonce. Repeat only signed Futures reads through CCXT's
+            # normal rate limiter and signer to get a fresh timestamp.
+            if api != "futuresPrivate" or method != "GET":
+                raise
+            logging.warning("[exchange] KuCoin Futures rejected read timestamp; retrying once")
+        return await fetch(path, api, method, params, headers, body, config)
+
+
+class AsyncKucoinBrokerFutures(
+    _KucoinFuturesReadRetry, IPv4TransportMixin, ccxt_async.kucoinfutures
+):
     """Asynchronous KuCoin futures exchange with broker tagging support."""
 
     def __init__(self, config=None):
@@ -69,7 +91,9 @@ class AsyncKucoinBrokerFutures(IPv4TransportMixin, ccxt_async.kucoinfutures):
         return signed
 
 
-class ProKucoinBrokerFutures(IPv4TransportMixin, ccxt_pro.kucoinfutures):
+class ProKucoinBrokerFutures(
+    _KucoinFuturesReadRetry, IPv4TransportMixin, ccxt_pro.kucoinfutures
+):
     """Websocket-enabled KuCoin futures exchange with broker tagging support."""
 
     def __init__(self, config=None):
