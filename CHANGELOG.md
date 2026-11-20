@@ -230,6 +230,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.
 
+- Let ordinary live planning briefly join an in-flight required fill
+  confirmation before deferring for missing fills.
+
 - Skip formatting and caller lookup for suppressed candle logs.
 
 - Move routine listing-age cache progress to debug logs and keep fetch failures visible.
