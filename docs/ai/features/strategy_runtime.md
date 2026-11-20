@@ -575,8 +575,10 @@ including scenarios supplied externally. A complete atomic weight-object pin fre
 an incomplete replacement fails rather than inheriting missing coordinates.
 
 Forager may carry a complete cached observation only within the existing candidate
-age budget, without feeding invented flat returns. Cooldown requires a current
-completed window. Their values remain separate in the input envelope. Missing
+age budget, including when a symbol moves from cache-only to remote-enabled planning.
+After a remote candle timeout, try the canonical local window. Candle corrections
+invalidate affected observations and all ages are rechecked at the decision cutoff.
+Cooldown requires a current completed window. Their values remain separate in the input envelope. Missing
 RMS is scoped to the consuming entry or ranking branch; closes remain independent.
 Live `rms_directionality_unavailable` carries separate `current` and `forager` span
 lists. RMS transport failures must not set the generic missing-strategy-input

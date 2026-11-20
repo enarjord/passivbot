@@ -3,10 +3,11 @@ import asyncio
 import math
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 import passivbot as pb
-from candlestick_manager import CandlestickManager, ONE_MIN_MS
+from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
 from config.schema import get_expanded_config_prototype
 from live.hsl_live import Owner
 
@@ -198,3 +199,87 @@ async def test_candidate_maintainer_cancellation_drains_only_its_registry_worker
         if replacement is not None:
             replacement.cancel()
         await asyncio.gather(maintainer, *([replacement] if replacement else []), return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_candidate_rms_repairs_history_in_pages_with_fresh_ws_tail_and_restart(tmp_path, monkeypatch):
+    from live.rms_directionality import history_candle_count, load
+
+    now = 1_800_000_000_000
+    symbol = "APT/USDT:USDT"
+    span = 12.5
+    count = history_candle_count(span)
+    end = now - ONE_MIN_MS
+    start = end - (count - 1) * ONE_MIN_MS
+    gap_start = start + 30 * ONE_MIN_MS
+    gap_end = gap_start + 169 * ONE_MIN_MS
+
+    def row(ts):
+        price = 10 + (ts - start) / ONE_MIN_MS * 0.01
+        return [ts, price, price, price, price, 2.0]
+
+    class PublicFixture:
+        id = "fixture"
+
+        def __init__(self):
+            self.calls = []
+
+        async def fetch_ohlcv(self, symbol, timeframe="1m", since=None, limit=None, params=None):
+            self.calls.append(since)
+            return [row(ts) for ts in range(int(since), end + 1, ONE_MIN_MS)][:limit]
+
+    exchange = PublicFixture()
+    monkeypatch.setattr(pb, "utc_ms", lambda: now)
+    monkeypatch.setattr(pb, "compute_live_warmup_windows", lambda *a, **k: ({symbol: 6}, {}, {}))
+
+    def make_bot():
+        bot = pb.Passivbot.__new__(pb.Passivbot)
+        bot.config = get_expanded_config_prototype()
+        bot.config["live"]["candles"].update(max_ohlcv_fetches_per_minute=4,
+                                             max_forager_candle_refresh_seconds=0)
+        bot.config["bot"]["long"]["forager"]["score_weights"]["rms_directionality"] = 1.0
+        bot.cm = CandlestickManager(exchange=exchange, exchange_name="fixture",
+                                    cache_dir=str(tmp_path), default_window_candles=6)
+        bot.cm._now_ms_callback = lambda: now
+        bot.stop_signal_received = bot._shutdown_in_progress = False
+        bot.approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
+        bot.positions = bot.open_orders = {}
+        bot.is_forager_mode = lambda side=None: side in (None, "long")
+        bot.is_pside_enabled = lambda side: side == "long"
+        bot.is_approved = lambda side, coin: side == "long"
+        bot.get_max_n_positions = lambda side: 1
+        bot.get_current_n_positions = lambda side: 0
+        bot.get_exchange_time = lambda: now
+        bot.bot_value = lambda side, key: {"rms_directionality": 1.0} if key == "forager_score_weights" else span
+        bot.bp = lambda side, key, coin: {"adverse_directionality": 0.0} if key == "entry_cooldown_weights_minutes" else 0.0
+        bot._get_fetch_delay_seconds = lambda: 0.0
+        bot._forager_target_staleness_ms = lambda *args: 0
+        bot._forager_refresh_budget = lambda *a, **k: 1
+        return bot
+
+    bot = make_bot()
+    try:
+        data = [row(ts) for ts in range(start, end, ONE_MIN_MS) if not gap_start <= ts <= gap_end]
+        bot.cm._persist_batch(symbol, np.array([tuple(r) for r in data], dtype=CANDLE_DTYPE), last_refresh_ms=now)
+        bot.cm._persist_batch(symbol, np.array([tuple(row(end))], dtype=CANDLE_DTYPE), source="ws")
+        assert not (await load(bot, [symbol], {symbol}))[1][symbol]
+
+        await bot._refresh_forager_candidate_candles()
+        health = bot.cm.get_completed_candle_health(symbol, {"1m": count}, now_ms=now)["timeframes"]["1m"]
+        assert health["missing_spans"] == [(gap_start, gap_end - 100 * ONE_MIN_MS)]
+        assert not (await load(bot, [symbol], {symbol}))[1][symbol]
+    finally:
+        bot.cm.close()
+
+    restarted = make_bot()
+    try:
+        await restarted._refresh_forager_candidate_candles()
+        before = len(exchange.calls)
+        assert before >= 2
+        current, ranking, missing = await load(restarted, [symbol], {symbol})
+        assert current == ranking and ranking[symbol][span] > 0.99
+        assert not missing
+        await restarted._refresh_forager_candidate_candles()
+        assert len(exchange.calls) == before
+    finally:
+        restarted.cm.close()

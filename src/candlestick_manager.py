@@ -5131,6 +5131,7 @@ class CandlestickManager:
                 "refreshable_missing_candles": int(
                     refreshable_missing_candles
                 ),
+                "refreshable_missing_spans": refreshable_missing_spans,
                 "refresh_needed": bool(refreshable_missing_candles > 0),
                 "open_tail_gap": bool(open_tail_gap),
                 "tail_gap_candles": int(tail_gap_candles),

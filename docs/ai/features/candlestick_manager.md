@@ -223,6 +223,11 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
    does not spawn a worker. Existing per-surface budgets, retry delays and full candidate
    cohorts remain authoritative. Shutdown cancels and drains its registered worker;
    an old owner's cancellation must not touch a replacement maintainer registry.
+   RMS forager scoring adds a separate one-minute coverage surface for the full
+   RMS history window. It shares the candidate fetch budget and checks historical
+   gaps even when the WS tail is fresh. Each attempt repairs a bounded, due
+   missing range through the canonical candle store, so the next scan resumes
+   from persisted coverage across retries and restart.
    This acquisition work is never awaited by the protective lane. Completed-candle health reports
    whether missing minutes are currently refreshable separately
    from raw coverage. Verified internal `no_trades` continuity and unresolved known gaps whose retry

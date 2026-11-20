@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Keep live forager RMS ranking available from complete local candles or a
+  recent valid score when remote candle work times out. Repair missing RMS
+  candle history in the background even when the latest candle is fresh.
+
 - Let explicitly selected OHLCV directories define each coin's simulation window.
   Warn and record the requested and available starts when history begins late.
   BTC benchmarks still require coverage across the full prepared range.
