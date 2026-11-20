@@ -200,11 +200,7 @@ def _hipify(code: str) -> str:
     # CUDA's 64-bit semantics under a distinct name.
     code = re.sub(r"^\s*using\s+ulong\s*=\s*unsigned\s+long\s+long\s*;\s*$", "", code, flags=re.M)
     code = re.sub(r"\bulong\b", "pb_ulong", code)
-    preamble = "using pb_ulong = unsigned long long;\n"
-    if "PASSIVBOT_HSL_LOOKBACK" not in code:
-        preamble = "#define PASSIVBOT_HSL_LOOKBACK 1\n" + preamble
-    code = preamble + code
-    return code
+    return "using pb_ulong = unsigned long long;\n" + code
 
 
 def shader_vendor(cupy_module=None) -> str:
@@ -215,11 +211,14 @@ def shader_vendor(cupy_module=None) -> str:
     """
 
     runtime = getattr(getattr(cupy_module, "cuda", None), "runtime", None)
-    if getattr(runtime, "is_hip", False):
-        return "hip"
+    is_hip = getattr(runtime, "is_hip", None)
+    if is_hip is not None:
+        return "hip" if is_hip else "cuda"
     try:
         import torch
-    except Exception:
+    except ModuleNotFoundError as error:
+        if error.name != "torch":
+            raise
         return "cuda"
     if getattr(getattr(torch, "version", None), "hip", None):
         return "hip"
@@ -245,12 +244,9 @@ class CudaShaderLibrary:
                 for index, argument in enumerate(signature.split(","))
                 if (match := re.search(r"\bconstant\s+(\w+)\s*&", argument))
             }
+        code = cuda_source(source, coin_capacity=coin_capacity)
         self._module = cupy.RawModule(
-            code=(
-                _hipify(cuda_source(source, coin_capacity=coin_capacity))
-                if self._vendor == "hip"
-                else cuda_source(source, coin_capacity=coin_capacity)
-            ),
+            code=_hipify(code) if self._vendor == "hip" else code,
             options=(
                 # hipRTC rejects NVRTC's --fmad=false; clang's FP contraction
                 # default would still change rounding, so pin it explicitly.

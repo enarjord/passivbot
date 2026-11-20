@@ -30,6 +30,87 @@ def test_runtime_selects_cuda_without_mps():
 
 
 @pytest.mark.parametrize(
+    "cupy_is_hip,torch_hip,expected",
+    [(False, "7.0", "cuda"), (True, None, "hip"), (None, "7.0", "hip"), (None, None, "cuda")],
+)
+def test_shader_vendor_prefers_cupy(monkeypatch, cupy_is_hip, torch_hip, expected):
+    from optimization.gpu.cuda_kernel import shader_vendor
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(version=SimpleNamespace(hip=torch_hip)))
+    runtime = SimpleNamespace() if cupy_is_hip is None else SimpleNamespace(is_hip=cupy_is_hip)
+    assert shader_vendor(SimpleNamespace(cuda=SimpleNamespace(runtime=runtime))) == expected
+
+
+@pytest.mark.parametrize(
+    "mps,cuda,hip,vendor,device",
+    [
+        (True, False, None, "apple", "mps"),
+        (None, True, None, "nvidia", "cuda"),
+        (None, True, "7.0", "amd", "cuda"),
+        (None, False, "7.0", "none", None),
+        (None, False, None, "none", None),
+    ],
+)
+def test_gpu_vendor_requires_an_available_device(mps, cuda, hip, vendor, device):
+    from optimization.gpu.runtime import gpu_vendor
+
+    backends = SimpleNamespace() if mps is None else SimpleNamespace(
+        mps=SimpleNamespace(is_available=lambda: mps)
+    )
+    torch = SimpleNamespace(
+        backends=backends,
+        cuda=SimpleNamespace(is_available=lambda: cuda),
+        version=SimpleNamespace(hip=hip),
+    )
+    assert gpu_vendor(torch) == vendor
+    if device is not None:
+        assert gpu_device(torch) == device
+    else:
+        message = "ROCm but reports no available GPU" if hip else "GPU optimization requires"
+        with pytest.raises(RuntimeError, match=message):
+            gpu_device(torch)
+
+
+@pytest.mark.parametrize("is_hip", [False, True])
+def test_shader_library_uses_vendor_source_and_compiler_flags(monkeypatch, is_hip):
+    from optimization.gpu.cuda_kernel import CudaShaderLibrary
+
+    captured = {}
+
+    class RawModule:
+        def __init__(self, *, code, options):
+            captured.update(code=code, options=options)
+
+        def compile(self):
+            captured["compiled"] = True
+
+    monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace(
+        cuda=SimpleNamespace(runtime=SimpleNamespace(is_hip=is_hip)),
+        RawModule=RawModule,
+    ))
+    source = """#define PASSIVBOT_HSL_LOOKBACK 1440
+        kernel void test(device ulong* out, uint i [[thread_position_in_grid]]) {
+            ulong my_ulong = i;
+            out[i] = my_ulong;
+        }
+    """
+    CudaShaderLibrary(source)
+    assert captured["compiled"] is True
+    if is_hip:
+        code = captured["code"]
+        assert "#include <hip/hip_runtime.h>" in code
+        assert "#include <cuda_runtime.h>" not in code
+        assert "using ulong =" not in code
+        assert code.count("using pb_ulong = unsigned long long;") == 1
+        assert "pb_ulong my_ulong = i;" in code
+        assert code.count("#define PASSIVBOT_HSL_LOOKBACK 1440") == 1
+        assert captured["options"] == ("--std=c++17", "-ffp-contract=off", "-fno-unroll-loops")
+    else:
+        assert captured["code"] == cuda_source(source)
+        assert captured["options"] == ("--std=c++17", "--fmad=false")
+
+
+@pytest.mark.parametrize(
     "source", ["kernel void missing_index() {}", "kernel void k(uint i [[other]]) {}"]
 )
 def test_unknown_shader_dialect_is_rejected(source):
@@ -400,10 +481,10 @@ def test_cuda_shared_account_one_coin_reuses_isolated_candidate_state(
         for runner in runners:
             runner.max_dispatch_candidate_bars = 2 * 31
     candidates = [{}, {f"{side}_total_wallet_exposure_limit_ratio": 0.5 for side in replay.sides}, {}]
-    expected = [replay.evaluate([candidate])[0] for candidate in candidates]
+    expected = [replay.evaluate_results([candidate])[0].metrics for candidate in candidates]
     assert expected[0]["gross_turnover_ratio_per_day"] > 0
     with GpuBacktestService(batch_size=2, max_pending=3) as service:
-        service.register_dataset("one-coin", replay)
+        service.register_dataset("one-coin", SimpleNamespace(evaluate=replay.evaluate_results))
         for repeat in range(2):
             futures = [service.submit(BacktestRequest(f"{repeat}:{i}", "one-coin", candidate))
                        for i, candidate in enumerate(candidates)]
@@ -437,7 +518,7 @@ def test_cuda_async_service_reuses_replay_and_preserves_metrics(cuda, case):
         seed=11,
     )
     with GpuBacktestService(batch_size=2, max_batch_delay=0.001) as service:
-        service.register_dataset("fixture", proxy)
+        service.register_dataset("fixture", SimpleNamespace(evaluate=proxy.evaluate_results))
         observations = []
         for repeat in range(2):
             futures = [
@@ -453,7 +534,7 @@ def test_cuda_async_service_reuses_replay_and_preserves_metrics(cuda, case):
             observations.append([rows[f"{repeat}:{i}"] for i in range(len(candidates))])
 
     # Different batch shapes and a different calling thread cannot change simulation.
-    expected = proxy.evaluate(candidates)
+    expected = [row.metrics for row in proxy.evaluate_results(candidates)]
     for actual in observations:
         for row, baseline in zip(actual, expected):
             assert row.keys() == baseline.keys()
@@ -528,7 +609,7 @@ def test_cuda_factory_owns_replay_lifetime_and_matches_direct_metrics(cuda, monk
         replay = construct()
         references.append(weakref.ref(replay))
         try:
-            yield replay
+            yield SimpleNamespace(evaluate=replay.evaluate_results)
         finally:
             events.append(("exit", get_ident()))
 
@@ -544,7 +625,7 @@ def test_cuda_factory_owns_replay_lifetime_and_matches_direct_metrics(cuda, monk
     assert events == [("enter", service._thread.ident), ("exit", service._thread.ident)]
     assert service._thread.ident != main_thread
     assert references[0]() is None
-    expected = construct().evaluate([{}])[0]
+    expected = construct().evaluate_results([{}])[0].metrics
     for row in metrics:
         for name, value in expected.items():
             np.testing.assert_allclose(row[name], value, rtol=1e-6, atol=1e-7, err_msg=name)
@@ -637,7 +718,7 @@ def test_cuda_prepared_service_reuses_packing_and_bounds_resident_scenarios(cuda
             expected = original_class(
                 config=candidate_config, hlcvs=values, mss=markets, btc=btc, timestamps=timestamps,
                 exchange="binance", batch_size=2, needed_metrics=DEFAULT_METRICS,
-            ).evaluate([{}])[0]
+            ).evaluate_results([{}])[0].metrics
             assert rows[name].keys() == expected.keys()
             for metric in expected:
                 np.testing.assert_array_equal(rows[name][metric], expected[metric], err_msg=metric)
