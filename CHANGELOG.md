@@ -5,6 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Retry a KuCoin Futures private read once with a fresh signature when KuCoin
+  rejects its request timestamp. Persistent timestamp errors still surface to the bot.
+
 - Buffer live monitor messages during connection replay so events published while
   initial data is being sent reach the connected client.
 
