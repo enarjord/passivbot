@@ -139,7 +139,7 @@ async def test_replacement_timing_requires_post_cancel_fills_and_the_admitted_or
     close_replacement_diagnostics.observe_create_sent(bot, create_wave, amended, 3200)
     _observe(bot, monkeypatch, now_ms=4000, resting=[{**amended, "id": "new"}])
 
-    [(timing, envelope)] = timings
+    [(timing, envelope), (coverage, coverage_envelope)] = timings
     assert timing == {
         "outcome": "create_sent",
         "elapsed_ms": 2100,
@@ -151,6 +151,16 @@ async def test_replacement_timing_requires_post_cancel_fills_and_the_admitted_or
     }
     assert envelope["symbol"] == _SYMBOL
     assert envelope["pside"] == "long"
+    assert coverage == {
+        "outcome": "resting_close_observed",
+        "elapsed_ms": 3000,
+        "cancel_wave_id": 4,
+        "account_confirmed_ms": 1100,
+        "first_plan_ms": 1700,
+        "resting_coverage": "full",
+    }
+    assert coverage_envelope["symbol"] == envelope["symbol"]
+    assert coverage_envelope["pside"] == envelope["pside"]
 
 
 @pytest.mark.asyncio
@@ -277,14 +287,74 @@ async def test_delay_requires_current_uncovered_cohort_and_reports_restored_quan
     assert "elapsed=60.0s" in caplog.messages[0]
     assert "resting_close_qty=0/2" in caplog.messages[0]
     assert "last_planning_defer=fills" in caplog.messages[0]
-    assert "resting close observed" in caplog.messages[1]
+    assert "close replacement partially covered" in caplog.messages[1]
+    assert "close replacement resolved" not in caplog.text
     assert "resting_close_qty=1.5/2" in caplog.messages[1]
     assert [
-        (timing["outcome"], timing["elapsed_ms"])
+        (timing["outcome"], timing["elapsed_ms"], timing["resting_coverage"])
         for timing, _envelope in timings
-    ] == [("still_waiting", 60_030), ("resting_close_observed", 63_000)]
-    assert timings[0][0]["last_missing_surfaces"] == ["fills"]
+    ] == [
+        ("coverage_unconfirmed", 60_000, "unknown"),
+        ("still_waiting", 60_030, "zero"),
+        ("resting_close_observed", 63_000, "partial"),
+    ]
+    assert timings[1][0]["last_missing_surfaces"] == ["fills"]
     assert all("account_confirmed_ms" not in timing for timing, _envelope in timings)
+
+
+@pytest.mark.asyncio
+async def test_confirmed_coverage_waits_for_venue_observation_after_send(
+    scenario, monkeypatch, caplog
+):
+    bot, old, new, cancel_wave = scenario
+    cancel_wave["id"] = 4
+    timings = _record_timings(bot)
+    close_replacement_diagnostics.observe_plan(bot, cancel_wave, [old], [new], 900)
+    await _cancel(bot, old, cancel_wave, monkeypatch)
+    create_wave = {"id": 7}
+    close_replacement_diagnostics.observe_plan(bot, create_wave, [], [new], 3000)
+    close_replacement_diagnostics.observe_admission(bot, [new], 3000)
+    close_replacement_diagnostics.observe_create_sent(bot, create_wave, new, 3100)
+
+    incomplete = {**new, "id": "unknown-qty", "amount": 1.5}
+    partial = {**new, "id": "partial", "remaining": 0.5}
+    complete = {**new, "id": "complete", "remaining": 1.5}
+    with caplog.at_level(logging.INFO):
+        _observe(bot, monkeypatch, now_ms=61_000, resting=[partial, incomplete])
+        _observe(bot, monkeypatch, now_ms=62_000, resting=[partial, incomplete])
+        assert not caplog.records
+        _observe(bot, monkeypatch, now_ms=63_000)
+        _observe(bot, monkeypatch, now_ms=64_000, resting=[partial, complete])
+        _observe(bot, monkeypatch, now_ms=65_000, resting=[partial, complete])
+
+    assert [record.levelname for record in caplog.records] == ["WARNING", "INFO"]
+    assert "resting_close_qty=0/2" in caplog.messages[0]
+    assert "close replacement resolved" in caplog.messages[1]
+    assert "resting_close_qty=2/2" in caplog.messages[1]
+    assert [
+        (timing["outcome"], timing.get("resting_coverage"), timing["cancel_wave_id"])
+        for timing, _envelope in timings
+    ] == [
+        ("create_sent", None, 4),
+        ("coverage_unconfirmed", "unknown", 4),
+        ("still_waiting", "zero", 4),
+        ("resting_close_observed", "full", 4),
+    ]
+    assert not bot._console_close_replacements
+
+
+def test_duplicate_order_rows_cannot_overstate_coverage(scenario):
+    bot, old, new, _wave = scenario
+    partial = {**new, "id": "partial", "remaining": 1.5}
+    bot.fetched_open_orders = [partial, dict(partial)]
+    assert close_replacement_diagnostics._resting_coverage(
+        bot, _SCOPE, old["id"], 2.0
+    ) == ("partial", 1.5)
+
+    bot.fetched_open_orders.append({**partial, "remaining": 2.0})
+    assert close_replacement_diagnostics._resting_coverage(
+        bot, _SCOPE, old["id"], 2.0
+    ) == ("unknown", None)
 
 
 @pytest.mark.asyncio
@@ -341,6 +411,8 @@ async def test_flat_or_changed_intent_clears_warning_without_claiming_coverage(
     assert "last_create_defer=state_change_detected" in caplog.messages[0]
     assert "last_planning_defer=fills" in caplog.messages[0]
     assert resolution in caplog.messages[1]
+    assert "close replacement ended" in caplog.messages[1]
+    assert "close replacement resolved" not in caplog.text
     assert len(caplog.records) == 2
     outcome = "position_closed" if resolution == "position closed" else "no_close_in_plan"
     assert [timing["outcome"] for timing, _envelope in timings] == [
