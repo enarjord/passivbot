@@ -5,6 +5,16 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Let explicitly selected OHLCV directories define each coin's simulation window.
+  Warn and record the requested and available starts when history begins late.
+  BTC benchmarks still require coverage across the full prepared range.
+
+- Reject unreadable or empty external daily candle files unless a healthy
+  same-day alternative is available. Invalidate prepared caches when selected
+  external coin or BTC candle files change.
+
+- Warn when an individual coin lacks enough candles to trade after warmup.
+
 - Retry a KuCoin Futures private read once with a fresh signature when KuCoin
   rejects its request timestamp. Persistent timestamp errors still surface to the bot.
 

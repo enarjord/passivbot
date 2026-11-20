@@ -111,6 +111,7 @@ from utils import (
     MarketIdentifierExchangeMismatch,
     UnknownMarketIdentifier,
     coin_to_symbol,
+    create_coin_symbol_map_cache,
     heuristic_symbol_to_coin,
     looks_like_exact_market_identifier,
     utc_ms,
@@ -131,6 +132,8 @@ from backtest_display import format_backtest_metrics
 from copy import deepcopy
 from hlcv_preparation import (
     HLCV_PREPARATION_ALGORITHM_VERSION,
+    _filter_forced_sources_for_coins,
+    _forced_hyperliquid_stock_perp_alias,
     _load_and_reconcile_combined_sources,
     prepare_hlcvs,
     prepare_hlcvs_combined,
@@ -149,6 +152,7 @@ from hlcvs_manifest import (
 )
 from hlcvs_override import load_hlcvs_data_override
 from ohlcv_utils import aggregate_hlcvs, align_and_aggregate_hlcvs
+from external_ohlcv_source import ExternalSourceChangedError, external_source_revision
 from warmup_utils import (
     compute_backtest_warmup_minutes,
     compute_per_coin_warmup_minutes,
@@ -1528,20 +1532,33 @@ def check_keys(dict0, dict1):
     return check_nested(dict0, dict1)
 
 
-def get_cache_hash(config, exchange):
-    from preparation_identity import CACHE_REQUEST_SCHEMA_VERSION, gap_tolerance_minutes
+def _prime_external_source_symbol_maps(venues):
+    """Derive missing symbol maps from local metadata before fingerprinting candles."""
+    for venue in sorted(venues):
+        cache_dir = Path("caches") / venue
+        if (cache_dir / "coin_to_symbol_map.json").is_file():
+            continue
+        markets_path = cache_dir / "markets.json"
+        try:
+            with markets_path.open(encoding="utf-8") as stream:
+                markets = json.load(stream)
+        except FileNotFoundError:
+            continue  # In particular, an unused Binance fallback need not have metadata.
+        except (OSError, ValueError) as exc:
+            logging.debug("Cannot initialize external source symbol map for %s: %s", venue, type(exc).__name__)
+            continue  # The normal loader owns validation when the venue is actually needed.
+        if isinstance(markets, dict) and markets and all(
+            isinstance(market, dict) and market.get("symbol") for market in markets.values()
+        ):
+            create_coin_symbol_map_cache(venue, markets, verbose=False)
 
+
+def _cache_market_identities(config, exchange, coins=None):
+    """Resolve the same source identities for cache keys and source revision checks."""
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
-    data_coins = effective_backtest_data_coins(config)
-    minimum_coin_age = {side: minimum_coin_age_days(config, side) for side in POSITION_SIDES}
+    data_coins = effective_backtest_data_coins(config) if coins is None else coins
     coin_sources = config.get("backtest", {}).get("coin_sources") or {}
-    coin_sources_sorted = sorted((str(k), str(v)) for k, v in coin_sources.items())
-    market_settings_sources = (
-        config.get("backtest", {}).get("market_settings_sources") or {}
-    )
-    market_settings_sources_sorted = sorted(
-        (str(k), str(v)) for k, v in market_settings_sources.items()
-    )
+    market_settings_sources = config.get("backtest", {}).get("market_settings_sources") or {}
     identity_exchanges = (
         [
             *exchanges_cfg,
@@ -1558,14 +1575,77 @@ def get_cache_hash(config, exchange):
             if str(venue).strip()
         }
     )
+    has_external_source = bool(config.get("backtest", {}).get("ohlcv_source_dir"))
+    if has_external_source:
+        _prime_external_source_symbol_maps(set(identity_exchanges) | {"binance"})
+    forced_stock_perp_aliases = set()
+    stock_perp_candidate_venues = {"hyperliquid"}
+    if has_external_source and exchange == "combined" and "hyperliquid" in identity_exchanges:
+        forced_sources = _filter_forced_sources_for_coins(
+            coin_sources, data_coins, defer_unavailable=True
+        )
+        forced_stock_perp_aliases = {
+            alias for coin in data_coins
+            if (alias := _forced_hyperliquid_stock_perp_alias(coin, forced_sources))
+        }
+        if config["backtest"].get("volume_normalization", True):
+            # Combined preparation also reads overlap candidates on other venues.
+            stock_perp_candidate_venues.update(
+                to_standard_exchange_name(venue)
+                for venue in [*exchanges_cfg, *forced_sources.values()]
+            )
     resolved_market_identities = []
     for venue in identity_exchanges:
-        for coin in data_coins:
+        venue_coins = (
+            sorted(set(data_coins) | forced_stock_perp_aliases)
+            if venue in stock_perp_candidate_venues and forced_stock_perp_aliases else data_coins
+        )
+        for coin in venue_coins:
             try:
                 symbol = coin_to_symbol(coin, venue, verbose=False)
             except MarketIdentifierResolutionError:
                 symbol = None
             resolved_market_identities.append((venue, str(coin), symbol))
+    return resolved_market_identities
+
+
+def _external_source_revision(config, exchange, identities=None):
+    """Include selected coin directories and every eligible external BTC source."""
+    source = config.get("backtest", {}).get("ohlcv_source_dir")
+    if not source:
+        return None
+    identities = list(_cache_market_identities(config, exchange) if identities is None else identities)
+    venues = {venue for venue, _coin, _symbol in identities} | {"binance"}
+    for venue in sorted(venues):
+        try:
+            symbol = coin_to_symbol("BTC", venue, verbose=False)
+        except MarketIdentifierResolutionError:
+            symbol = None
+        identities.append((venue, "BTC", symbol))
+    return external_source_revision(source, identities)
+
+
+def _assert_external_source_unchanged(config, exchange, expected):
+    """Never publish or return prepared arrays under a newer raw-source identity."""
+    if expected is not None and _external_source_revision(config, exchange) != expected:
+        raise ExternalSourceChangedError("External OHLCV source changed during preparation; retry")
+
+
+def get_cache_hash(config, exchange, *, source_revision=None):
+    from preparation_identity import CACHE_REQUEST_SCHEMA_VERSION, gap_tolerance_minutes
+
+    exchanges_cfg = require_config_value(config, "backtest.exchanges")
+    data_coins = effective_backtest_data_coins(config)
+    minimum_coin_age = {side: minimum_coin_age_days(config, side) for side in POSITION_SIDES}
+    coin_sources = config.get("backtest", {}).get("coin_sources") or {}
+    coin_sources_sorted = sorted((str(k), str(v)) for k, v in coin_sources.items())
+    market_settings_sources = (
+        config.get("backtest", {}).get("market_settings_sources") or {}
+    )
+    market_settings_sources_sorted = sorted(
+        (str(k), str(v)) for k, v in market_settings_sources.items()
+    )
+    resolved_market_identities = _cache_market_identities(config, exchange, data_coins)
     to_hash = {
         "cache_request_schema_version": CACHE_REQUEST_SCHEMA_VERSION,
         "coins": data_coins,
@@ -1581,6 +1661,10 @@ def get_cache_hash(config, exchange):
         "resolved_market_identities": resolved_market_identities,
         "hlcv_preparation_algorithm_version": HLCV_PREPARATION_ALGORITHM_VERSION,
     }
+    if source_revision is None:
+        source_revision = _external_source_revision(config, exchange, resolved_market_identities)
+    if source_revision is not None:
+        to_hash["external_source_revision"] = source_revision
     if exchange == "combined":
         to_hash["volume_normalization"] = bool(
             config.get("backtest", {}).get("volume_normalization", True)
@@ -1813,7 +1897,7 @@ def _inception_market_identity_matches(previous, current):
     )
 
 
-def _preserve_cached_inception_facts(config, exchange, mss):
+def _preserve_cached_inception_facts(config, exchange, mss, *, cache_hash=None, source_revision=None):
     """Carry matching, verified facts through independent candle-cache rebuilds.
 
     A transient lookup cannot erase a known fact. New positive facts win; only
@@ -1825,7 +1909,8 @@ def _preserve_cached_inception_facts(config, exchange, mss):
                   and _current_inception_timestamp(settings) is None]
     if not unresolved:
         return mss
-    cache_hash = get_cache_hash(config, exchange)
+    if cache_hash is None:
+        cache_hash = get_cache_hash(config, exchange, source_revision=source_revision)
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
     if cache_dir is None:
         return mss
@@ -1859,8 +1944,11 @@ def _preserve_cached_inception_facts(config, exchange, mss):
 
 def load_coins_hlcvs_from_cache(
     config, exchange, warmup_minutes=0, *, inception_fact_coins=None, allow_unresolved_inception=False,
+    source_revision=None,
 ):
-    cache_hash = get_cache_hash(config, exchange)
+    if source_revision is None:
+        source_revision = _external_source_revision(config, exchange)
+    cache_hash = get_cache_hash(config, exchange, source_revision=source_revision)
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
     if cache_dir and os.path.exists(cache_dir):
         manifest = load_hlcvs_manifest(cache_dir)
@@ -1914,6 +2002,17 @@ def load_coins_hlcvs_from_cache(
         hlcvs = verified_arrays["hlcvs"]
         timestamps = verified_arrays["timestamps"]
         btc_usd_prices = verified_arrays["btc_usd_prices"]
+        try:
+            if (
+                source_revision is not None
+                and _external_source_revision(config, exchange) != source_revision
+            ):
+                raise ExternalSourceChangedError(
+                    "External OHLCV source changed while loading cache; retry"
+                )
+        except BaseException:
+            release_materialized_payload(hlcvs)
+            raise
         logging.info(f"{exchange} Loaded hlcvs data from cache {cache_dir}")
         results_path = oj(
             require_config_value(config, "backtest.base_dir"), exchange, ""
@@ -1934,9 +2033,14 @@ def save_coins_hlcvs_to_cache(
     force_overwrite=False,
     *,
     inception_fact_coins=None,
+    source_revision=None,
 ):
-    mss = _preserve_cached_inception_facts(config, exchange, mss)
-    cache_hash = get_cache_hash(config, exchange)
+    if source_revision is None:
+        source_revision = _external_source_revision(config, exchange)
+    else:
+        _assert_external_source_unchanged(config, exchange, source_revision)
+    cache_hash = get_cache_hash(config, exchange, source_revision=source_revision)
+    mss = _preserve_cached_inception_facts(config, exchange, mss, cache_hash=cache_hash)
     cache_dir = _get_hlcvs_cache_dir_for_save(
         config,
         exchange,
@@ -1977,6 +2081,7 @@ def save_coins_hlcvs_to_cache(
                         corrected.append(coin)
                 if not unresolved and not corrected:
                     verify_hlcvs_manifest(cache_dir, existing_manifest)
+                    _assert_external_source_unchanged(config, exchange, source_revision)
                     return cache_dir
                 logging.info(
                     "[hlcvs] refreshing cache inception: unresolved=%s corrected=%s", unresolved, corrected,
@@ -2020,6 +2125,7 @@ def save_coins_hlcvs_to_cache(
         )
         raise_if_backtest_cancel_requested("cache publish")
         with _hlcvs_cache_publish_lock(cache_dir):
+            _assert_external_source_unchanged(config, exchange, source_revision)
             _replace_hlcvs_cache_directory(cache_dir, tmp_cache_dir, backup_cache_dir)
         published = True
     finally:
@@ -2286,6 +2392,12 @@ def warn_hlcv_valid_range_coverage(config, coins, mss, timestamps):
                 missing_minutes,
             )
         tradable_rows = last_idx - first_idx + 1
+        warm_minutes = int(meta.get("warmup_minutes", 0))
+        if first_idx + warm_minutes > last_idx:
+            logging.warning(
+                "[hlcvs] %s has only %d valid candles for %d warmup minutes; no post-warmup trading",
+                coin, tradable_rows, warm_minutes,
+            )
         synthetic_count = int(meta.get("synthetic_gap_fill_count", 0) or 0)
         if meta.get("synthetic_gap_fill_tradable"):
             if synthetic_count:
@@ -2422,6 +2534,7 @@ async def prepare_hlcvs_mss(
             btc_usd_prices,
             timestamps,
         )
+    source_revision = _external_source_revision(config, exchange)
     cache_requirements = (
         {} if inception_fact_coins is None
         else {"inception_fact_coins": inception_fact_coins}
@@ -2432,7 +2545,8 @@ async def prepare_hlcvs_mss(
             None
             if force_refetch_gaps
             else load_coins_hlcvs_from_cache(
-                config, exchange, backtest_warmup_minutes, allow_unresolved_inception=True, **cache_requirements,
+                config, exchange, backtest_warmup_minutes, allow_unresolved_inception=True,
+                source_revision=source_revision, **cache_requirements,
             )
         )
         if result:
@@ -2469,6 +2583,11 @@ async def prepare_hlcvs_mss(
             )
             warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
             assert_hlcv_has_tradable_coverage(coins, mss)
+            try:
+                _assert_external_source_unchanged(config, exchange, source_revision)
+            except BaseException:
+                release_materialized_payload(hlcvs)
+                raise
             # Pass through cached timestamps if they were stored; fall back to None otherwise
             return (
                 coins,
@@ -2479,6 +2598,8 @@ async def prepare_hlcvs_mss(
                 btc_usd_prices,
                 timestamps,
             )
+    except ExternalSourceChangedError:
+        raise  # Retry a changed external snapshot rather than silently mixing inputs.
     except MemoryError:
         raise  # Resource admission cannot be repaired by refetching the same history.
     except Exception as e:
@@ -2524,7 +2645,7 @@ async def prepare_hlcvs_mss(
             "for the requested range"
         )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
-    mss = _preserve_cached_inception_facts(config, exchange, mss)
+    mss = _preserve_cached_inception_facts(config, exchange, mss, source_revision=source_revision)
     mss = await _resolve_prepared_inception(config, exchange, coins, mss, **cache_requirements)
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
     _validate_hlcvs_valid_windows_from_mss(
@@ -2540,6 +2661,8 @@ async def prepare_hlcvs_mss(
     if is_offline():
         mss.setdefault("__meta__", {})["offline_snapshot"] = data_manifest()
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
+    if source_revision is not None:
+        cache_requirements["source_revision"] = source_revision
     try:
         cache_dir = save_coins_hlcvs_to_cache(
             config,

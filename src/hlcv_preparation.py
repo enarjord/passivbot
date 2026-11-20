@@ -96,6 +96,7 @@ class ProgressTracker:
 
 from config.access import require_config_value, require_live_value
 from ohlcv_utils import get_days_in_between, load_ohlcv_data
+from external_ohlcv_source import source_directory_candidates
 from procedures import get_first_timestamps_unified
 from utils import (
     MarketIdentifierExchangeMismatch,
@@ -858,28 +859,10 @@ class HLCVManager:
         days = get_days_in_between(start_day, end_day)
 
         frames = []
-        candidates: list[str] = []
-
-        # Mirror CandlestickManager's symbol sanitization for Windows compatibility
-        windows_compat = os.name == "nt" or os.getenv("WINDOWS_COMPATIBILITY") == "1"
-
-        for name in (coin, symbol):
-            if not name:
-                continue
-            # Original name
-            candidates.append(name)
-            # Variant with "/" replaced by "_"
-            if "/" in name:
-                candidates.append(name.replace("/", "_"))
-            # In Windows compatibility mode, also mirror CandlestickManager's ":" -> "_"
-            if windows_compat and ("/" in name or ":" in name):
-                candidates.append(name.replace("/", "_").replace(":", "_"))
-
-        # De-duplicate while preserving order
-        seen = set()
-        candidates = [c for c in candidates if not (c in seen or seen.add(c))]
+        candidates = source_directory_candidates(coin, symbol)
         for day in days:
             loaded = False
+            present = False
             for name in candidates:
                 base_dir = exchange_root / name
                 if not base_dir.exists():
@@ -888,8 +871,9 @@ class HLCVManager:
                     filepath = base_dir / f"{day}{ext}"
                     if not filepath.exists():
                         continue
+                    present = True
                     try:
-                        df = load_ohlcv_data(str(filepath))
+                        df = load_ohlcv_data(str(filepath), repair_duplicates_on_disk=False)
                     except Exception as exc:
                         logging.warning(
                             "[%s] source dir load failed for %s %s: %s",
@@ -905,6 +889,11 @@ class HLCVManager:
                         break
                 if loaded:
                     break
+            if present and not loaded:
+                raise HlcvsDataIntegrityError(
+                    f"Invalid external OHLCV day: {self.exchange}/{coin} {day}; "
+                    "no readable, nonempty candle file"
+                )
 
         if not frames:
             return None
@@ -967,21 +956,22 @@ class HLCVManager:
                 requested_start_ts = start_ts
                 first_row_ts = int(df.timestamp.iloc[0])
                 if first_row_ts > start_ts:
-                    listing = await _corroborated_source_listing_boundary(self, self.exchange, coin, symbol)
-                    if listing is None or first_row_ts != listing // 60_000 * 60_000:
-                        message = (f"Unverified source directory prefix: {self.exchange}/{coin} "
-                                   f"{start_ts}..{first_row_ts}; {self.ohlcv_source_dir}")
-                        if is_offline():
-                            raise OfflineDataError(message)
-                        logging.warning(message)
-                        return empty_df
-                    # Start at the independently confirmed listing minute.
+                    # An explicitly selected directory defines the caller's data
+                    # window. Its first row is not evidence of market inception.
+                    # Keep the original request in offline snapshots and do not invent
+                    # prices before the first real candle for this coin/source.
+                    logging.warning(
+                        "[%s] %s external OHLCV starts at %s after requested %s; "
+                        "missing leading candles are excluded",
+                        self.exchange, coin, ts_to_date(first_row_ts), ts_to_date(start_ts),
+                    )
                     start_ts = first_row_ts
+                last_row_ts = int(df.timestamp.iloc[-1])
                 if is_offline():
-                    if int(df.timestamp.iloc[-1]) < end_ts:
+                    if last_row_ts < end_ts:
                         raise OfflineDataError(
                             f"Incomplete source directory candles: {self.exchange}/{coin} "
-                            f"{start_ts}..{end_ts}; {self.ohlcv_source_dir}"
+                            f"{requested_start_ts}..{end_ts}; {self.ohlcv_source_dir}"
                         )
                 self.load_cc()
                 assert self.cm is not None
@@ -1023,6 +1013,12 @@ class HLCVManager:
                         "valid": np.isin(filled_ts, real_ts),
                     }
                 )
+                df.attrs["external_source_window"] = {
+                    "requested_start_ms": requested_start_ts,
+                    "requested_end_ms": end_ts,
+                    "actual_start_ms": first_row_ts,
+                    "actual_end_ms": last_row_ts,
+                }
                 logging.info(
                     "[%s] get_ohlcvs: using source dir for %s",
                     self.exchange,
@@ -1247,12 +1243,47 @@ class HLCVManager:
         ).reset_index(drop=True)
 
 
-async def _try_direct_btc_candidate(om):
+def _btc_candidate_covers_range(frame, exchange, start_ts, end_ts):
+    if frame.empty:
+        return False
+    timestamps = frame["timestamp"].to_numpy(copy=False)
+    if "valid" in frame:
+        observed = frame["valid"].eq(True).to_numpy(dtype=bool, copy=False)
+        if observed.any():
+            first_ts = timestamps[int(observed.argmax())]
+            last_ts = timestamps[-1 - int(observed[::-1].argmax())]
+        else:
+            first_ts, last_ts = None, None
+    else:
+        first_ts, last_ts = timestamps[0], timestamps[-1]
+    if first_ts is not None and first_ts <= start_ts and last_ts >= end_ts:
+        return True
+    logging.warning(
+        "BTC/USD candidate %s does not cover requested range %s to %s; trying next source",
+        exchange, ts_to_date(start_ts), ts_to_date(end_ts),
+    )
+    return False
+
+
+async def _try_direct_btc_candidate(om, start_ts, end_ts):
+    om.update_timestamp_range(start_ts, end_ts)
     try:
-        return await om.get_ohlcvs("BTC")
+        frame = await om.get_ohlcvs("BTC")
     except OfflineDataError as exc:
         logging.info("[offline] BTC candidate unavailable on %s: %s", om.exchange, exc)
         return pd.DataFrame()
+    return frame if _btc_candidate_covers_range(frame, om.exchange, start_ts, end_ts) else pd.DataFrame()
+
+
+def _align_btc_prices(frame, timestamps):
+    prices = (
+        frame.set_index("timestamp")["close"]
+        .reindex(timestamps, method="ffill")
+        .to_numpy(dtype=np.float64)
+    )
+    if not np.isfinite(prices).all() or np.any(prices <= 0.0):
+        raise HlcvsDataIntegrityError("Invalid BTC/USD prices within the prepared range")
+    return prices
 
 
 @simulation_data_scope
@@ -1323,13 +1354,13 @@ async def prepare_hlcvs(
             om,
         )
 
-        om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
-        btc_df = await _try_direct_btc_candidate(om)
+        btc_start_ts, btc_end_ts = int(timestamps[0]), int(timestamps[-1])
+        btc_df = await _try_direct_btc_candidate(om, btc_start_ts, btc_end_ts)
         btc_source_exchange = exchange
 
         if btc_df.empty and exchange != "binanceusdm":
             logging.warning(
-                "BTC/USD fetch returned empty on %s, retrying with binanceusdm",
+                "BTC/USD coverage unavailable on %s, retrying with binanceusdm",
                 exchange,
             )
             btc_fallback_om = HLCVManager(
@@ -1343,8 +1374,7 @@ async def prepare_hlcvs(
             if is_offline():
                 btc_fallback_om.ohlcv_source_dir = config.get("backtest", {}).get("ohlcv_source_dir")
             try:
-                btc_fallback_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
-                btc_df = await _try_direct_btc_candidate(btc_fallback_om)
+                btc_df = await _try_direct_btc_candidate(btc_fallback_om, btc_start_ts, btc_end_ts)
                 if not btc_df.empty:
                     btc_source_exchange = "binanceusdm"
             finally:
@@ -1363,14 +1393,7 @@ async def prepare_hlcvs(
 
         logging.info("using BTC/USD benchmark source: %s", btc_source_exchange)
 
-        btc_df = (
-            btc_df.set_index("timestamp")
-            .reindex(timestamps, method="ffill")
-            .ffill()
-            .bfill()
-            .reset_index()
-        )
-        btc_usd_prices = btc_df["close"].values
+        btc_usd_prices = _align_btc_prices(btc_df, timestamps)
 
         warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
         candidate_report = mss.pop("__candidate_report__", [])
@@ -4400,6 +4423,7 @@ async def prepare_hlcvs_internal(
     default_warm = int(per_coin_warmups.get("__default__", 0))
 
     valid_coin_data = {}
+    external_source_windows = {}
     global_start_time = float("inf")
     global_end_time = float("-inf")
     await om.load_markets()
@@ -4412,7 +4436,7 @@ async def prepare_hlcvs_internal(
 
     # Async helper to fetch a single coin's data with all validation
     async def fetch_coin_data(coin: str, sem: asyncio.Semaphore):
-        """Fetch and validate data for a single coin. Returns (coin, data, data_bounds) or None."""
+        """Fetch validated rows, time bounds and optional external provenance for a coin."""
         async with sem:  # Rate limiting
             fetch_stage = "validation"
             try:
@@ -4462,7 +4486,7 @@ async def prepare_hlcvs_internal(
                 data[~valid_mask, 1:] = np.nan
                 data_bounds = (data[0, 0], data[-1, 0])
 
-                return (coin, data, data_bounds)
+                return coin, data, data_bounds, df.attrs.get("external_source_window")
 
             except HlcvsDataIntegrityError:
                 raise
@@ -4490,7 +4514,9 @@ async def prepare_hlcvs_internal(
             progress.update()
             continue
 
-        coin, data, data_bounds = result
+        coin, data, data_bounds, external_window = result
+        if external_window is not None:
+            external_source_windows[coin] = external_window
         valid_coin_data[coin] = data
         global_start_time = min(global_start_time, data_bounds[0])
         global_end_time = max(global_end_time, data_bounds[1])
@@ -4543,6 +4569,8 @@ async def prepare_hlcvs_internal(
         )
         meta["first_valid_index"] = first_idx
         meta["last_valid_index"] = last_idx
+        if coin in external_source_windows:
+            meta["external_source_window"] = external_source_windows[coin]
         warm_minutes = int(per_coin_warmups.get(coin, default_warm))
         meta["warmup_minutes"] = warm_minutes
         meta["warmup_minutes_source"] = "history"
@@ -4704,14 +4732,7 @@ async def prepare_hlcvs_combined(
 
         logging.info("using BTC/USD benchmark source: %s", btc_source_exchange)
 
-        btc_df = (
-            btc_df.set_index("timestamp")
-            .reindex(timestamps, method="ffill")
-            .ffill()
-            .bfill()
-            .reset_index()
-        )
-        btc_usd_prices = btc_df["close"].values
+        btc_usd_prices = _align_btc_prices(btc_df, timestamps)
 
         warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
         candidate_report = mss.pop("__candidate_report__", [])
@@ -4848,6 +4869,9 @@ async def _prepare_hlcvs_combined_impl(
 
         chosen_data_per_coin[result.coin] = result.best_df
         chosen_mss_per_coin[result.coin] = result.market_settings
+        external_window = result.best_df.attrs.get("external_source_window")
+        if external_window is not None:
+            chosen_mss_per_coin[result.coin]["external_source_window"] = external_window
         chosen_candidates_per_coin[result.coin] = result.candidates
         selected_candidate = next(
             candidate
@@ -5076,34 +5100,32 @@ async def _prepare_hlcvs_combined_impl(
     return chosen_mss_per_coin, timestamps, aligned_values_by_coin
 
 
+def _forced_hyperliquid_stock_perp_alias(coin: str, forced_sources: Dict[str, str]) -> str | None:
+    """Return the possible reader alias for a bare coin forced to Hyperliquid."""
+    if coin.startswith("xyz:"):
+        return None
+    alias = f"xyz:{coin}"
+    forced_exchange = forced_sources.get(coin)
+    if forced_exchange is None:
+        forced_exchange = forced_sources.get(alias)
+    return alias if to_standard_exchange_name(forced_exchange) == "hyperliquid" else None
+
+
 def _normalize_combined_coins(
     coins: Sequence[str],
     forced_sources: Dict[str, str],
     om_dict: Dict[str, HLCVManager],
 ) -> list[str]:
-    def normalize_stock_perp_coin(coin: str, forced_exchange: Optional[str]) -> str:
-        if forced_exchange != "hyperliquid":
-            return coin
-        if coin.startswith("xyz:"):
-            return coin
-        hl_om = om_dict.get("hyperliquid")
-        if hl_om and hl_om.markets:
-            xyz_coin = f"xyz:{coin}"
-            xyz_symbol = coin_to_symbol(xyz_coin, "hyperliquid")
-            if xyz_symbol and xyz_symbol in hl_om.markets:
-                logging.info(f"Normalizing stock perp coin: {coin} -> {xyz_coin}")
-                return xyz_coin
-        return coin
-
+    hl_om = om_dict.get("hyperliquid")
     normalized_coins = []
     for coin in coins:
-        forced_ex = forced_sources.get(coin)
-        if forced_ex is None and coin.startswith("xyz:"):
-            forced_ex = forced_sources.get(coin[4:])
-        elif forced_ex is None and not coin.startswith("xyz:"):
-            forced_ex = forced_sources.get(f"xyz:{coin}")
-        normalized_coin = normalize_stock_perp_coin(coin, forced_ex)
-        normalized_coins.append(normalized_coin)
+        alias = _forced_hyperliquid_stock_perp_alias(coin, forced_sources)
+        if alias and hl_om and hl_om.markets:
+            symbol = coin_to_symbol(alias, "hyperliquid")
+            if symbol and symbol in hl_om.markets:
+                logging.info("Normalizing stock perp coin: %s -> %s", coin, alias)
+                coin = alias
+        normalized_coins.append(coin)
     return sorted(set(normalized_coins))
 
 
@@ -5609,7 +5631,7 @@ async def _load_combined_btc_prices(
             ohlcv_source_dir=ohlcv_source_dir if not use_v2_local else None,
         )
         try:
-            btc_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
+            btc_om.update_timestamp_range(int(timestamps[0]), int(timestamps[-1]))
             logging.info(
                 "loading BTC/USD prices from %s for range %s to %s",
                 btc_exchange,
@@ -5649,17 +5671,9 @@ async def _load_combined_btc_prices(
                     else pd.DataFrame()
                 )
             if not btc_df.empty:
-                if (
-                    int(btc_df["timestamp"].iloc[0]) > int(timestamps[0])
-                    or int(btc_df["timestamp"].iloc[-1]) < int(timestamps[-1])
+                if not _btc_candidate_covers_range(
+                    btc_df, btc_exchange, int(timestamps[0]), int(timestamps[-1])
                 ):
-                    logging.warning(
-                        "BTC/USD candidate %s does not cover requested range %s to %s; "
-                        "trying next source",
-                        btc_exchange,
-                        ts_to_date(int(timestamps[0])),
-                        ts_to_date(int(timestamps[-1])),
-                    )
                     continue
                 btc_source_exchange = btc_exchange
                 return btc_df.loc[:, ["timestamp", "close"]], btc_source_exchange

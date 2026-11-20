@@ -634,7 +634,8 @@ class TestPrepareHLCVSBtcFallback:
     """Regression tests for BTC benchmark fallback behavior."""
 
     @pytest.mark.asyncio
-    async def test_prepare_hlcvs_uses_binance_fallback_for_btc(self, sample_config):
+    @pytest.mark.parametrize("native_partial", [False, True])
+    async def test_prepare_hlcvs_uses_binance_fallback_for_btc(self, sample_config, native_partial):
         timestamps = np.array([1704067200000, 1704067260000], dtype=np.int64)
         hlcvs = np.zeros((2, 1, 6), dtype=np.float32)
         calls = []
@@ -647,6 +648,11 @@ class TestPrepareHLCVSBtcFallback:
                 return pd.DataFrame(columns=["timestamp", "close"])
             calls.append(self.exchange)
             if self.exchange == "hyperliquid":
+                if native_partial:
+                    return pd.DataFrame({
+                        "timestamp": timestamps, "close": [60000.0, 60000.0],
+                        "valid": [True, False],
+                    })
                 return pd.DataFrame(columns=["timestamp", "close"])
             return pd.DataFrame(
                 {
@@ -1536,8 +1542,8 @@ class TestOHLCVSourceDir:
             assert len(df) == 1441  # standardized to full inclusive window
 
     @pytest.mark.asyncio
-    async def test_source_dir_corrupt_npz_fallback(self, tmp_path, mock_exchange):
-        """Test fallback when .npz file is corrupt/malformed."""
+    async def test_source_dir_corrupt_npz_is_integrity_error(self, tmp_path, mock_exchange):
+        """Known corruption must not silently switch the requested external data source."""
         from utils import date_to_ts
 
         # Setup source dir with malformed .npz
@@ -1573,19 +1579,15 @@ class TestOHLCVSourceDir:
             }
         }
 
-        # Mock CandlestickManager fallback
-        with patch.object(CandlestickManager, "get_candles") as mock_get_candles:
-            timestamps = np.arange(day_ts, day_ts + 24 * 60 * 60 * 1000, 60_000, dtype=np.int64)
-            mock_candles = np.zeros(len(timestamps), dtype=CANDLE_DTYPE)
-            mock_candles["ts"] = timestamps
-            mock_candles["c"] = 50000.0
-            mock_get_candles.return_value = mock_candles
+        from hlcv_preparation import HlcvsDataIntegrityError
 
-            df = await om.get_ohlcvs("BTC")
-
-            # Verify fallback was triggered
-            mock_get_candles.assert_called_once()
-            assert not df.empty
+        try:
+            with patch.object(CandlestickManager, "get_candles") as mock_get_candles:
+                with pytest.raises(HlcvsDataIntegrityError, match="Invalid external OHLCV day"):
+                    await om.get_ohlcvs("BTC")
+                mock_get_candles.assert_not_called()
+        finally:
+            await om.aclose()
 
 
 # ============================================================================
@@ -1690,7 +1692,7 @@ class TestPrepareHLCVSCombined:
             def get_symbol(self, coin):
                 return f"{coin}/USDT:USDT"
 
-            def update_date_range(self, start_ts, end_ts):
+            def update_timestamp_range(self, start_ts, end_ts):
                 self.start_ts = start_ts
                 self.end_ts = end_ts
 
@@ -1784,7 +1786,7 @@ class TestPrepareHLCVSCombined:
             def get_symbol(self, coin):
                 return f"{coin}/USDT:USDT"
 
-            def update_date_range(self, start_ts, end_ts):
+            def update_timestamp_range(self, start_ts, end_ts):
                 self.start_ts = start_ts
                 self.end_ts = end_ts
 
@@ -1874,7 +1876,7 @@ class TestPrepareHLCVSCombined:
             def get_symbol(self, coin):
                 return f"{coin}/USDT:USDT"
 
-            def update_date_range(self, start_ts, end_ts):
+            def update_timestamp_range(self, start_ts, end_ts):
                 self.start_ts = int(start_ts)
                 self.end_ts = int(end_ts)
 
@@ -3113,7 +3115,7 @@ async def test_combined_force_refetch_btc_prices_rejects_truncated_v2_range(monk
             self.force_refetch_gaps = bool(kwargs.get("force_refetch_gaps", False))
             self.cc = None
 
-        def update_date_range(self, start_ts, end_ts):
+        def update_timestamp_range(self, start_ts, end_ts):
             self.start_ts = int(start_ts)
             self.end_ts = int(end_ts)
 
@@ -3172,7 +3174,7 @@ async def test_combined_btc_source_dir_uses_source_dir_only(monkeypatch, tmp_pat
             self.exchange = exchange
             self.cc = None
 
-        def update_date_range(self, start_ts, end_ts):
+        def update_timestamp_range(self, start_ts, end_ts):
             self.start_ts = int(start_ts)
             self.end_ts = int(end_ts)
 
