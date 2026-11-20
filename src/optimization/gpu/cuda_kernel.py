@@ -189,6 +189,13 @@ def cuda_source(
         "TYPE& NAME = NAME##_storage.get()\n"
         if shared else ""
     )
+    if shared:
+        # The second directional slot stays thread-private: a shared
+        # short side corrupts the block core metrics on gfx1030.
+        source = source.replace(
+            "PASSIVBOT_GPU_SIDE_STATE(EmaMulticoinSideState, short_side, 1);",
+            "EmaMulticoinSideState short_side;",
+        )
     return _CUDA_PREAMBLE + storage + source
 
 
