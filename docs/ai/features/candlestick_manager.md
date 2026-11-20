@@ -68,6 +68,7 @@
    benchmark candidates must cover the prepared timestamp range before alignment.
    Retain internal-gap and offline-tail checks. An existing empty/unreadable daily file
    is an integrity error unless a healthy same-day variant can be loaded.
+   Deduplicate external candle rows in memory without rewriting the source files.
    Automatic external-source cache keys include daily file metadata revisions for
    selected coin and eligible BTC directories. Reject source changes across raw
    preparation, cache publication, and cache loading. These revisions use device,

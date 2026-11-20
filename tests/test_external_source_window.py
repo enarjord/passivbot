@@ -130,3 +130,27 @@ async def test_healthy_same_day_alternative_is_still_usable(tmp_path):
             result=await instance.get_ohlcvs('ALPHA',source_dir_only=True)
             assert len(result)==len(rows)
     finally:await instance.aclose()
+
+
+
+@pytest.mark.asyncio
+async def test_duplicate_external_npy_rows_are_deduplicated_without_rewriting(tmp_path):
+    from utils import ts_to_date
+
+    root = tmp_path / "source"
+    folder = root / "bybit" / "1m" / "ALPHA"
+    folder.mkdir(parents=True)
+    path = folder / f"{ts_to_date(START)[:10]}.npy"
+    timestamps = np.r_[START, np.arange(START, END + 60_000, 60_000)]
+    rows = np.column_stack((timestamps, np.tile([100, 101, 99, 100, 3], (len(timestamps), 1))))
+    np.save(path, rows)
+    original = path.read_bytes()
+
+    instance = manager(root, tmp_path, "bybit", ["ALPHA"], START)
+    try:
+        with simulation_data_policy({"backtest": {"offline": True}}):
+            result = await instance.get_ohlcvs("ALPHA", source_dir_only=True)
+        np.testing.assert_array_equal(result.timestamp, timestamps[1:])
+        assert path.read_bytes() == original
+    finally:
+        await instance.aclose()

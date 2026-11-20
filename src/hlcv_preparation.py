@@ -873,7 +873,7 @@ class HLCVManager:
                         continue
                     present = True
                     try:
-                        df = load_ohlcv_data(str(filepath))
+                        df = load_ohlcv_data(str(filepath), repair_duplicates_on_disk=False)
                     except Exception as exc:
                         logging.warning(
                             "[%s] source dir load failed for %s %s: %s",
@@ -1246,10 +1246,17 @@ class HLCVManager:
 def _btc_candidate_covers_range(frame, exchange, start_ts, end_ts):
     if frame.empty:
         return False
-    window = frame.attrs.get("external_source_window")
-    first_ts = window["actual_start_ms"] if window else frame.timestamp.iloc[0]
-    last_ts = window["actual_end_ms"] if window else frame.timestamp.iloc[-1]
-    if first_ts <= start_ts and last_ts >= end_ts:
+    timestamps = frame["timestamp"].to_numpy(copy=False)
+    if "valid" in frame:
+        observed = frame["valid"].eq(True).to_numpy(dtype=bool, copy=False)
+        if observed.any():
+            first_ts = timestamps[int(observed.argmax())]
+            last_ts = timestamps[-1 - int(observed[::-1].argmax())]
+        else:
+            first_ts, last_ts = None, None
+    else:
+        first_ts, last_ts = timestamps[0], timestamps[-1]
+    if first_ts is not None and first_ts <= start_ts and last_ts >= end_ts:
         return True
     logging.warning(
         "BTC/USD candidate %s does not cover requested range %s to %s; trying next source",
@@ -1266,6 +1273,17 @@ async def _try_direct_btc_candidate(om, start_ts, end_ts):
         logging.info("[offline] BTC candidate unavailable on %s: %s", om.exchange, exc)
         return pd.DataFrame()
     return frame if _btc_candidate_covers_range(frame, om.exchange, start_ts, end_ts) else pd.DataFrame()
+
+
+def _align_btc_prices(frame, timestamps):
+    prices = (
+        frame.set_index("timestamp")["close"]
+        .reindex(timestamps, method="ffill")
+        .to_numpy(dtype=np.float64)
+    )
+    if not np.isfinite(prices).all() or np.any(prices <= 0.0):
+        raise HlcvsDataIntegrityError("Invalid BTC/USD prices within the prepared range")
+    return prices
 
 
 @simulation_data_scope
@@ -1375,15 +1393,7 @@ async def prepare_hlcvs(
 
         logging.info("using BTC/USD benchmark source: %s", btc_source_exchange)
 
-        btc_df = (
-            btc_df.set_index("timestamp")
-            .reindex(timestamps, method="ffill")
-            .ffill()
-            .reset_index()
-        )
-        btc_usd_prices = btc_df["close"].to_numpy(dtype=np.float64)
-        if not np.isfinite(btc_usd_prices).all() or np.any(btc_usd_prices <= 0.0):
-            raise HlcvsDataIntegrityError("Invalid BTC/USD prices within the prepared range")
+        btc_usd_prices = _align_btc_prices(btc_df, timestamps)
 
         warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
         candidate_report = mss.pop("__candidate_report__", [])
@@ -4722,14 +4732,7 @@ async def prepare_hlcvs_combined(
 
         logging.info("using BTC/USD benchmark source: %s", btc_source_exchange)
 
-        btc_df = (
-            btc_df.set_index("timestamp")
-            .reindex(timestamps, method="ffill")
-            .ffill()
-            .bfill()
-            .reset_index()
-        )
-        btc_usd_prices = btc_df["close"].values
+        btc_usd_prices = _align_btc_prices(btc_df, timestamps)
 
         warmup_provided = max(0, int(max(0, requested_start_ts - int(timestamps[0])) // minute_ms))
         candidate_report = mss.pop("__candidate_report__", [])

@@ -143,7 +143,8 @@ def dump_daily_ohlcv_data(data, filepath: str, start_ts: int, interval_ms: int =
     dump_ohlcv_data(canonical, str(filepath))
 
 
-def load_ohlcv_data(filepath: str) -> pd.DataFrame:
+def load_ohlcv_data(filepath: str, *, repair_duplicates_on_disk: bool = True) -> pd.DataFrame:
+    """Read candle rows, optionally repairing duplicate rows in a writable legacy cache."""
     path = str(filepath)
     if path.lower().endswith(".npz"):
         with np.load(path) as data:
@@ -172,7 +173,7 @@ def load_ohlcv_data(filepath: str) -> pd.DataFrame:
     arr = np.load(filepath, allow_pickle=False)
     columns = ["timestamp", "open", "high", "low", "close", "volume"]
     arr_deduplicated = deduplicate_rows(arr)
-    if len(arr) != len(arr_deduplicated):
+    if repair_duplicates_on_disk and len(arr) != len(arr_deduplicated):
         dump_ohlcv_data(arr_deduplicated, filepath)
         print(
             f"Caught .npy file with duplicate rows: {filepath} Overwrote with deduplicated version."

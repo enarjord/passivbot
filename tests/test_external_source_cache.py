@@ -1,4 +1,5 @@
 """External source revisions invalidate prepared datasets without reading raw arrays."""
+import json
 import logging
 import os
 from pathlib import Path
@@ -75,6 +76,34 @@ def test_source_revision_ignores_unrelated_coins_and_includes_btc_fallback(cache
     assert bt.get_cache_hash(config,'bybit')==initial
     source_day(root,venue='binance',coin='BTC')
     assert bt.get_cache_hash(config,'bybit')!=initial
+
+
+@pytest.mark.asyncio
+async def test_external_revision_uses_cached_markets_before_symbol_map_exists(cache_source, monkeypatch):
+    """Copying markets.json alone must not look like an external candle edit on first use."""
+    from utils import coin_to_symbol, load_markets
+
+    config, root, _ = cache_source
+    monkeypatch.setattr(bt, "coin_to_symbol", coin_to_symbol)
+    config["bot"]["long"]["universe"]["approved_coins"] = ["PEPE"]
+    candle = source_day(root, coin="1000PEPE")
+    cache = Path("caches/bybit")
+    cache.mkdir(parents=True)
+    symbol = "1000PEPE/USDT:USDT"
+    (cache / "markets.json").write_text(json.dumps({symbol: {
+        "symbol": symbol, "id": "1000PEPEUSDT", "base": "1000PEPE", "quote": "USDT",
+        "settle": "USDT", "type": "swap", "swap": True, "active": True, "linear": True,
+    }}))
+    assert not (cache / "coin_to_symbol_map.json").exists()
+    assert not Path("caches/binance").exists()  # A fallback may never be used.
+
+    revision = bt._external_source_revision(config, "bybit")
+    cache_hash = bt.get_cache_hash(config, "bybit")
+    await load_markets("bybit", offline=True, verbose=False)
+    assert bt._external_source_revision(config, "bybit") == revision
+    assert bt.get_cache_hash(config, "bybit") == cache_hash
+    candle.unlink()
+    assert bt._external_source_revision(config, "bybit") != revision
 
 
 def test_native_store_identity_never_scans_external_directories(cache_source,monkeypatch):

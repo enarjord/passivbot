@@ -111,6 +111,7 @@ from utils import (
     MarketIdentifierExchangeMismatch,
     UnknownMarketIdentifier,
     coin_to_symbol,
+    create_coin_symbol_map_cache,
     heuristic_symbol_to_coin,
     looks_like_exact_market_identifier,
     utc_ms,
@@ -1529,6 +1530,27 @@ def check_keys(dict0, dict1):
     return check_nested(dict0, dict1)
 
 
+def _prime_external_source_symbol_maps(venues):
+    """Derive missing symbol maps from local metadata before fingerprinting candles."""
+    for venue in sorted(venues):
+        cache_dir = Path("caches") / venue
+        if (cache_dir / "coin_to_symbol_map.json").is_file():
+            continue
+        markets_path = cache_dir / "markets.json"
+        try:
+            with markets_path.open(encoding="utf-8") as stream:
+                markets = json.load(stream)
+        except FileNotFoundError:
+            continue  # In particular, an unused Binance fallback need not have metadata.
+        except (OSError, ValueError) as exc:
+            logging.debug("Cannot initialize external source symbol map for %s: %s", venue, type(exc).__name__)
+            continue  # The normal loader owns validation when the venue is actually needed.
+        if isinstance(markets, dict) and markets and all(
+            isinstance(market, dict) and market.get("symbol") for market in markets.values()
+        ):
+            create_coin_symbol_map_cache(venue, markets, verbose=False)
+
+
 def _cache_market_identities(config, exchange, coins=None):
     """Resolve the same source identities for cache keys and source revision checks."""
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
@@ -1551,6 +1573,8 @@ def _cache_market_identities(config, exchange, coins=None):
             if str(venue).strip()
         }
     )
+    if config.get("backtest", {}).get("ohlcv_source_dir"):
+        _prime_external_source_symbol_maps(set(identity_exchanges) | {"binance"})
     resolved_market_identities = []
     for venue in identity_exchanges:
         for coin in data_coins:

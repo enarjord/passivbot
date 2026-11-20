@@ -634,7 +634,8 @@ class TestPrepareHLCVSBtcFallback:
     """Regression tests for BTC benchmark fallback behavior."""
 
     @pytest.mark.asyncio
-    async def test_prepare_hlcvs_uses_binance_fallback_for_btc(self, sample_config):
+    @pytest.mark.parametrize("native_partial", [False, True])
+    async def test_prepare_hlcvs_uses_binance_fallback_for_btc(self, sample_config, native_partial):
         timestamps = np.array([1704067200000, 1704067260000], dtype=np.int64)
         hlcvs = np.zeros((2, 1, 6), dtype=np.float32)
         calls = []
@@ -647,6 +648,11 @@ class TestPrepareHLCVSBtcFallback:
                 return pd.DataFrame(columns=["timestamp", "close"])
             calls.append(self.exchange)
             if self.exchange == "hyperliquid":
+                if native_partial:
+                    return pd.DataFrame({
+                        "timestamp": timestamps, "close": [60000.0, 60000.0],
+                        "valid": [True, False],
+                    })
                 return pd.DataFrame(columns=["timestamp", "close"])
             return pd.DataFrame(
                 {
