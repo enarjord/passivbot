@@ -65,8 +65,8 @@ def test_buffer_changes_gpu_checkpoint_identity():
 
 
 def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
-    from config.schema import get_template_config
-    cfg = get_template_config()
+    from config.schema import get_expanded_config_prototype
+    cfg = get_expanded_config_prototype()
     cfg['bot']["portfolio"]['strategy_kind'] = strategy_kind
     cfg['bot']["portfolio"]['warmup']['max_minutes'] = 1
     cfg['bot']["portfolio"]['execution']['market_orders_allowed'] = market_orders
@@ -76,7 +76,11 @@ def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
     cfg['backtest'].update(coins={'bybit': coins}, exchanges=['bybit'],
                           starting_balance=1000.0, limit_order_fill_buffer_fraction=buffer)
     for s in ['long', 'short']:
-        cfg['bot'][s]['risk'].update({'total_wallet_exposure_limit_ratio': 1.0 if s == side else 0.0, 'max_positions': coin_count if s == side else 0, 'entry_cooldown_minutes': 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**cfg['bot'][s]['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**cfg['bot'][s]['risk']['total_exposure_enforcer'], 'enabled': False}})
+        cfg['bot'][s]['enabled'] = s == side
+        cfg['bot'][s]['universe']['minimum_coin_age_days'] = 0.0
+        cfg['bot'][s]['risk'].update({'total_wallet_exposure_limit_ratio': 1.0 if s == side else 0.0, 'max_positions': coin_count if s == side else 0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**cfg['bot'][s]['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**cfg['bot'][s]['risk']['total_exposure_enforcer'], 'enabled': False}})
+        cfg['bot'][s]['entry_cooldown'].update(base_duration_minutes=0.0, min_duration_minutes=0.0,
+                                             max_duration_minutes=0.0)
         cfg['bot'][s]['hsl']['enabled'] = False
         cfg['bot'][s]['unstuck']['enabled'] = False
         if strategy_kind == 'trailing_martingale':

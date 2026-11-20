@@ -341,20 +341,18 @@ def test_passive_recursive_ladders_do_not_require_market_permission(
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("entry_gate", [False, True])
 @pytest.mark.parametrize("hysteresis", [0.0, 0.02])
-def test_unfilled_forager_incumbent_survives_entry_gate(side, entry_gate, hysteresis):
+def test_unfilled_forager_incumbent_survives_entry_gate(side, hysteresis):
     config, candles, markets, _, timestamps = _fixture(side, 2, "initial")
     config['bot']["portfolio"]['execution']['market_orders_allowed'] = False
-    config['bot']['global']['forager']["score_hysteresis_margin"] = hysteresis
+    config['bot'][side]['forager']["score_hysteresis_margin"] = hysteresis
     config["backtest"].update(starting_balance=1000.0, maker_fee_override_fraction=0.0,
                              taker_fee_override_fraction=0.0, market_order_slippage_fraction=0.0)
     bot = config["bot"][side]
-    bot["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0,
-                       total_exposure_entry_gate_enabled=entry_gate)
-    bot["forager"].update(score_weights={"volume": 0.01, "log_range": 0.99, "ema_readiness": 0.0},
-                          volume_ema_span_1m=1.0, log_range_ema_span_minutes=1.0,
-                          volume_drop_pct=0.0)
+    bot["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
+    bot["forager"].update(score_weights={"volume": 0.01, "log_range": 0.99, "ema_readiness": 0.0,
+                                        "rms_directionality": 0.0},
+                          volume_ema_span_minutes=1.0, log_range_ema_span_minutes=1.0)
     bot["strategy"]["trailing_martingale"]["entry"].update(
         initial_qty_fraction=0.1, initial_ema_distance_fraction=0.25, ema_gate_mode="initial",
         threshold_base_fraction=0.5, retracement_base_fraction=0.0,
@@ -498,7 +496,7 @@ def _compound_boundary_inputs(side, coin_count, kind, offset, coin_pin):
     else:
         target["qty_fraction"] = 1.
     if coin_pin != "none":
-        fields = ("threshold_base_fraction", "retracement_base_fraction") if coin_pin == "both" else (coin_pin + "_base_pct",)
+        fields = ("threshold_base_fraction", "retracement_base_fraction") if coin_pin == "both" else (coin_pin + "_base_fraction",)
         patch = {key: values[key] for key in fields}
         for key in fields:
             target[key] = .2 if key == "threshold_base_fraction" else .01

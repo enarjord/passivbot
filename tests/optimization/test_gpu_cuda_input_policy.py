@@ -12,6 +12,12 @@ from optimization.gpu import model, residency, runtime
 from optimize import _gpu_cached_input_preflight
 
 
+def test_rocm_max_is_rejected_before_memory_preparation():
+    torch = SimpleNamespace(version=SimpleNamespace(hip="7.0"))
+    with pytest.raises(ValueError, match="max.*unavailable on AMD ROCm"):
+        residency.capture_cuda_input_memory_budget(torch, max_throughput=True)
+
+
 def _cuda(monkeypatch, *, free=8 * 2**30, available=8 * 2**30):
     observations = dict(free=free, available=available, device_calls=0, host_calls=0)
 

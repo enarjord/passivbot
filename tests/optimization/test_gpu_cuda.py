@@ -30,6 +30,87 @@ def test_runtime_selects_cuda_without_mps():
 
 
 @pytest.mark.parametrize(
+    "cupy_is_hip,torch_hip,expected",
+    [(False, "7.0", "cuda"), (True, None, "hip"), (None, "7.0", "hip"), (None, None, "cuda")],
+)
+def test_shader_vendor_prefers_cupy(monkeypatch, cupy_is_hip, torch_hip, expected):
+    from optimization.gpu.cuda_kernel import shader_vendor
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(version=SimpleNamespace(hip=torch_hip)))
+    runtime = SimpleNamespace() if cupy_is_hip is None else SimpleNamespace(is_hip=cupy_is_hip)
+    assert shader_vendor(SimpleNamespace(cuda=SimpleNamespace(runtime=runtime))) == expected
+
+
+@pytest.mark.parametrize(
+    "mps,cuda,hip,vendor,device",
+    [
+        (True, False, None, "apple", "mps"),
+        (None, True, None, "nvidia", "cuda"),
+        (None, True, "7.0", "amd", "cuda"),
+        (None, False, "7.0", "none", None),
+        (None, False, None, "none", None),
+    ],
+)
+def test_gpu_vendor_requires_an_available_device(mps, cuda, hip, vendor, device):
+    from optimization.gpu.runtime import gpu_vendor
+
+    backends = SimpleNamespace() if mps is None else SimpleNamespace(
+        mps=SimpleNamespace(is_available=lambda: mps)
+    )
+    torch = SimpleNamespace(
+        backends=backends,
+        cuda=SimpleNamespace(is_available=lambda: cuda),
+        version=SimpleNamespace(hip=hip),
+    )
+    assert gpu_vendor(torch) == vendor
+    if device is not None:
+        assert gpu_device(torch) == device
+    else:
+        message = "ROCm but reports no available GPU" if hip else "GPU optimization requires"
+        with pytest.raises(RuntimeError, match=message):
+            gpu_device(torch)
+
+
+@pytest.mark.parametrize("is_hip", [False, True])
+def test_shader_library_uses_vendor_source_and_compiler_flags(monkeypatch, is_hip):
+    from optimization.gpu.cuda_kernel import CudaShaderLibrary
+
+    captured = {}
+
+    class RawModule:
+        def __init__(self, *, code, options):
+            captured.update(code=code, options=options)
+
+        def compile(self):
+            captured["compiled"] = True
+
+    monkeypatch.setitem(sys.modules, "cupy", SimpleNamespace(
+        cuda=SimpleNamespace(runtime=SimpleNamespace(is_hip=is_hip)),
+        RawModule=RawModule,
+    ))
+    source = """#define PASSIVBOT_HSL_LOOKBACK 1440
+        kernel void test(device ulong* out, uint i [[thread_position_in_grid]]) {
+            ulong my_ulong = i;
+            out[i] = my_ulong;
+        }
+    """
+    CudaShaderLibrary(source)
+    assert captured["compiled"] is True
+    if is_hip:
+        code = captured["code"]
+        assert "#include <hip/hip_runtime.h>" in code
+        assert "#include <cuda_runtime.h>" not in code
+        assert "using ulong =" not in code
+        assert code.count("using pb_ulong = unsigned long long;") == 1
+        assert "pb_ulong my_ulong = i;" in code
+        assert code.count("#define PASSIVBOT_HSL_LOOKBACK 1440") == 1
+        assert captured["options"] == ("--std=c++17", "-ffp-contract=off", "-fno-unroll-loops")
+    else:
+        assert captured["code"] == cuda_source(source)
+        assert captured["options"] == ("--std=c++17", "--fmad=false")
+
+
+@pytest.mark.parametrize(
     "source", ["kernel void missing_index() {}", "kernel void k(uint i [[other]]) {}"]
 )
 def test_unknown_shader_dialect_is_rejected(source):
@@ -400,10 +481,10 @@ def test_cuda_shared_account_one_coin_reuses_isolated_candidate_state(
         for runner in runners:
             runner.max_dispatch_candidate_bars = 2 * 31
     candidates = [{}, {f"{side}_total_wallet_exposure_limit_ratio": 0.5 for side in replay.sides}, {}]
-    expected = [replay.evaluate([candidate])[0] for candidate in candidates]
+    expected = [replay.evaluate_results([candidate])[0].metrics for candidate in candidates]
     assert expected[0]["gross_turnover_ratio_per_day"] > 0
     with GpuBacktestService(batch_size=2, max_pending=3) as service:
-        service.register_dataset("one-coin", replay)
+        service.register_dataset("one-coin", SimpleNamespace(evaluate=replay.evaluate_results))
         for repeat in range(2):
             futures = [service.submit(BacktestRequest(f"{repeat}:{i}", "one-coin", candidate))
                        for i, candidate in enumerate(candidates)]
@@ -437,7 +518,7 @@ def test_cuda_async_service_reuses_replay_and_preserves_metrics(cuda, case):
         seed=11,
     )
     with GpuBacktestService(batch_size=2, max_batch_delay=0.001) as service:
-        service.register_dataset("fixture", proxy)
+        service.register_dataset("fixture", SimpleNamespace(evaluate=proxy.evaluate_results))
         observations = []
         for repeat in range(2):
             futures = [
@@ -453,7 +534,7 @@ def test_cuda_async_service_reuses_replay_and_preserves_metrics(cuda, case):
             observations.append([rows[f"{repeat}:{i}"] for i in range(len(candidates))])
 
     # Different batch shapes and a different calling thread cannot change simulation.
-    expected = proxy.evaluate(candidates)
+    expected = [row.metrics for row in proxy.evaluate_results(candidates)]
     for actual in observations:
         for row, baseline in zip(actual, expected):
             assert row.keys() == baseline.keys()
@@ -477,6 +558,7 @@ def test_cuda_disabled_hsl_specialization_matches_full_hsl_state(cuda):
             multicoin_bars=128,
             coins=5,
             seed=11,
+            portfolio_hsl_disabled=True,
         )
         runner = proxy.runners["long"]
         if not compact_hsl:
@@ -527,7 +609,7 @@ def test_cuda_factory_owns_replay_lifetime_and_matches_direct_metrics(cuda, monk
         replay = construct()
         references.append(weakref.ref(replay))
         try:
-            yield replay
+            yield SimpleNamespace(evaluate=replay.evaluate_results)
         finally:
             events.append(("exit", get_ident()))
 
@@ -543,7 +625,7 @@ def test_cuda_factory_owns_replay_lifetime_and_matches_direct_metrics(cuda, monk
     assert events == [("enter", service._thread.ident), ("exit", service._thread.ident)]
     assert service._thread.ident != main_thread
     assert references[0]() is None
-    expected = construct().evaluate([{}])[0]
+    expected = construct().evaluate_results([{}])[0].metrics
     for row in metrics:
         for name, value in expected.items():
             np.testing.assert_allclose(row[name], value, rtol=1e-6, atol=1e-7, err_msg=name)
@@ -636,7 +718,7 @@ def test_cuda_prepared_service_reuses_packing_and_bounds_resident_scenarios(cuda
             expected = original_class(
                 config=candidate_config, hlcvs=values, mss=markets, btc=btc, timestamps=timestamps,
                 exchange="binance", batch_size=2, needed_metrics=DEFAULT_METRICS,
-            ).evaluate([{}])[0]
+            ).evaluate_results([{}])[0].metrics
             assert rows[name].keys() == expected.keys()
             for metric in expected:
                 np.testing.assert_array_equal(rows[name][metric], expected[metric], err_msg=metric)
@@ -792,7 +874,7 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
     from optimization.gpu.native import CudaBacktestService
     from optimization.gpu.executor import BacktestRequest
     from optimization.native_results import CandidateEvaluation, CanonicalResultScorer, ResultSlot
-    from optimize import Evaluator, SuiteEvaluator
+    from optimize import Evaluator, SuiteEvaluator, _requested_metric_reducers
     from metrics_schema import build_scenario_metrics
     from suite_runner import ScenarioResult, SuiteScenario
     from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
@@ -802,11 +884,13 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "512",
     ]))
-    config["optimize"]["bounds"] = {"long_entry_initial_qty_fraction": [0.01, 0.03]}
-    for side in ("long", "short"):
-        for key in ("n_positions", "total_wallet_exposure_limit_ratio"):
-            value = config["bot"][side]["risk"][key]
-            config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
+    # v9 bounds are nested per side/strategy; risk sizing is a fixed config value.
+    config["optimize"]["bounds"] = {
+        side: {"strategy": {"trailing_martingale": {
+            "entry": {"initial_qty_fraction": [0.01, 0.03]},
+        }}}
+        for side in ("long", "short")
+    }
     config["optimize"]["scoring"] = [
         {"metric": "cagr_fraction_strategy_equity", "goal": "max", "scenario": "base"},
         {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min", "scenario": None, "aggregate": "max"},
@@ -814,7 +898,8 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
     config["optimize"]["limits"] = [
         {"metric": "backtest_completion_fraction", "penalize_if": "less_than", "value": 0.99},
     ]
-    requested_metrics = (*DEFAULT_METRICS, "backtest_completion_fraction")
+    requested_metrics = (*DEFAULT_METRICS, "backtest_completion_fraction",
+                         "ulcer_index_fraction_strategy_equity")
     manager = SharedArrayManager()
     try:
         specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
@@ -864,9 +949,17 @@ def test_cuda_async_completions_drive_canonical_suite_scoring_without_cpu_backte
             rows = []
             for label in scenario_configs:
                 result = received[f"{candidate_id}:{label}"]
-                per_exchange = {"binance": dict(result.metrics, liquidated=result.liquidated)}
-                rows.append(ScenarioResult(SuiteScenario(label, None, None, None, None), per_exchange,
-                                           build_scenario_metrics(per_exchange), 0.0, None))
+                per_exchange = {"binance": dict(
+                    result.metrics, liquidated=result.liquidated, **(result.metadata or {})
+                )}
+                rows.append(ScenarioResult(
+                    SuiteScenario(label, None, None, None, None), per_exchange,
+                    build_scenario_metrics(
+                        per_exchange,
+                        required_metrics=scorer.required_metrics(label),
+                        reducers=_requested_metric_reducers(
+                            base.scoring_specs, base.limit_checks, suite=True),
+                    ), 0.0, None))
             expected = suite.score_scenario_results(rows)
             assert payload["fitness"] == expected["objectives"]
             assert payload["metrics"]["suite_metrics"] == expected["suite_metrics"]
@@ -882,20 +975,26 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
     from optimization.gpu.native import CudaBacktestService
     from optimization.gpu.service import SharedAccountReplay
     from optimization.native_planning import NativeCandidatePlanner, ScenarioBinding
+    from config.inherited_bounds import prepare_bound_plan
     from optimization.native_session import NativeEvaluationSession
-    from optimize import Evaluator, SuiteEvaluator, config_to_individual
+    from optimize import (
+        Evaluator, SuiteEvaluator, _canonicalize_optimizer_individual, config_to_individual,
+    )
     from shared_arrays import SharedArrayManager
     from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
 
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "both", "--coins", "3", "--bars", "512",
     ]))
-    config["optimize"]["bounds"] = {}
-    for side in ("long", "short"):
-        for key in ("n_positions", "total_wallet_exposure_limit_ratio"):
-            value = config["bot"][side]["risk"][key]
-            config["optimize"]["bounds"][f"{side}_{key}"] = [value, value]
-        config["optimize"]["bounds"][f"{side}_entry_initial_qty_fraction"] = [0.01, 0.05]
+    # v9 bounds are nested per side/strategy; risk sizing is a fixed config value.
+    config["optimize"]["bounds"] = {
+        side: {"strategy": {"trailing_martingale": {
+            "entry": {"initial_qty_fraction": [0.01, 0.05]},
+        }}}
+        for side in ("long", "short")
+    }
+    metrics = (*DEFAULT_METRICS, "ulcer_index_fraction_strategy_equity")
+    prepare_bound_plan(config)
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.025,
     }
@@ -905,21 +1004,11 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
         {"metric": "ulcer_index_fraction_strategy_equity", "goal": "min"},
     ]
     config["optimize"]["limits"] = []
-    scenario_configs = {label: deepcopy(config) for label in ("base", "stress")}
-    for label, value in scenario_configs.items():
-        value["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.025
-        value["bot"]["short"] = deepcopy(value["bot"]["long"])
-        if label == "stress":
-            value["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = 0.03
 
     def forbidden(*_args, **_kwargs):
         pytest.fail("CPU orchestration must never run a CPU simulation")
     monkeypatch.setattr(backtest, "execute_backtest", forbidden)
     monkeypatch.setattr(backtest, "run_backtest", forbidden)
-    reference = {label: SharedAccountReplay(
-        config=value, mss=markets, exchange="binance", hlcvs=candles, btc=btc,
-        timestamps=timestamps, needed_metrics=DEFAULT_METRICS, batch_size=1,
-    ).evaluate_results([{}])[0] for label, value in scenario_configs.items()}
     manager = SharedArrayManager()
     try:
         specs = [manager.create_from(array)[0] for array in (candles, btc, timestamps)]
@@ -928,13 +1017,26 @@ def test_cuda_cpu_session_prepares_effective_suite_requests_and_reuses_duplicate
             label=label, exchanges=["binance"], config=deepcopy(config), msss={"binance": markets},
             overrides={"bot.long.strategy.trailing_martingale.entry.initial_qty_fraction": 0.03}
             if label == "stress" else {},
-        ) for label in scenario_configs]
+        ) for label in ("base", "stress")]
+        base_vector = config_to_individual(
+            config, base.bounds, optimization_shape=base.optimization_shape)
+        base_config = _canonicalize_optimizer_individual(
+            [float(value) for value in base_vector], base.config, base.bounds,
+            base.sig_digits, base.key_paths, tuple(config["optimize"]["enable_overrides"]))
         suite = SuiteEvaluator(base, contexts, {"default": "mean"})
+        scenario_configs = {
+            ctx.label: suite.build_scenario_candidate_config(base_config, ctx)
+            for ctx in contexts
+        }
+        reference = {label: SharedAccountReplay(
+            config=value, mss=markets, exchange="binance", hlcvs=candles, btc=btc,
+            timestamps=timestamps, needed_metrics=metrics, batch_size=1,
+        ).evaluate_results([{}])[0] for label, value in scenario_configs.items()}
         monkeypatch.setattr(base, "evaluate", forbidden)
         monkeypatch.setattr(suite, "evaluate", forbidden)
         bindings = [ScenarioBinding(label, label, PreparedGpuDataset(
             config=value, markets=markets, exchange="binance", hlcvs=specs[0], btc=specs[1],
-            timestamps=specs[2], candle_coins=config["backtest"]["coins"]["binance"], metrics=DEFAULT_METRICS,
+            timestamps=specs[2], candle_coins=config["backtest"]["coins"]["binance"], metrics=metrics,
         )) for label, value in scenario_configs.items()]
         planner = NativeCandidatePlanner(suite, bindings)
         vector = config_to_individual(config, base.bounds, optimization_shape=base.optimization_shape)

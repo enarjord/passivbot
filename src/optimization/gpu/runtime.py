@@ -6,17 +6,37 @@ import re
 import time
 
 
+def gpu_vendor(torch_module=None) -> str:
+    """Return the runtime accelerator vendor: 'apple', 'amd', 'nvidia' or 'none'."""
+
+    if torch_module is None:
+        import torch as torch_module
+    mps = getattr(getattr(torch_module, "backends", None), "mps", None)
+    if mps is not None and mps.is_available():
+        return "apple"
+    cuda = getattr(torch_module, "cuda", None)
+    if cuda is None or not cuda.is_available():
+        return "none"
+    return "amd" if getattr(getattr(torch_module, "version", None), "hip", None) else "nvidia"
+
+
 def gpu_device(torch_module=None) -> str:
     if torch_module is None:
         import torch as torch_module
-    if torch_module.backends.mps.is_available():
+    vendor = gpu_vendor(torch_module)
+    if vendor == "apple":
         return "mps"
-    cuda = getattr(torch_module, "cuda", None)
-    if cuda is not None and cuda.is_available():
+    if vendor in {"amd", "nvidia"}:
         return "cuda"
+    rocm_detail = (
+        " PyTorch was built for ROCm but reports no available GPU."
+        if getattr(getattr(torch_module, "version", None), "hip", None)
+        else ""
+    )
     raise RuntimeError(
-        "GPU optimization requires available Apple MPS or NVIDIA CUDA; "
-        "use optimize.backend='pymoo' for CPU optimization"
+        f"GPU optimization requires an available accelerator (Apple MPS, "
+        f"NVIDIA CUDA or AMD ROCm).{rocm_detail} "
+        "Use optimize.backend='pymoo' for CPU optimization"
     )
 
 

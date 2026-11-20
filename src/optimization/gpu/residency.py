@@ -360,6 +360,12 @@ class CudaInputMemoryBudget:
 
 def capture_cuda_input_memory_budget(torch, *, max_throughput=False):
     """Capture CUDA and host headroom before history preparation touches pages."""
+    if max_throughput and getattr(getattr(torch, "version", None), "hip", None):
+        raise ValueError(
+            "optimize.gpu.tuning_mode='max' is unavailable on AMD ROCm. "
+            "Use optimize.gpu.tuning_mode='conservative'."
+        )
+
     import psutil
 
     free, total = map(int, torch.cuda.mem_get_info())

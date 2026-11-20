@@ -88,8 +88,10 @@ route used by GPU optimization on supported Metal or CUDA devices. Explicit
 and replay family; the comparator does not alter metric tolerances.
 
 The fixture's requested dates and ordered market metadata match its candle arrays.
-The tool strips optimizer gene bounds when preparing standalone comparisons; it
-does not generate candidates or apply a search policy.
+The tool strips optimizer gene bounds when preparing standalone comparisons.
+Those bounds can affect the backtest warmup window and the first eligible trading
+bar. Compare with a standalone CLI backtest using the same effective bounds if
+you need matching absolute metrics.
 
 ## Prepared inputs
 

@@ -10,7 +10,6 @@ import msgpack
 import pytest
 from opt_utils import load_results
 
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("suite", [False, True])
 @pytest.mark.parametrize("interrupted", [False, True])
@@ -22,7 +21,9 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
 
     torch = pytest.importorskip("torch")
     if device == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA device required")
+        pytest.skip("CUDA or ROCm device required")
+    if device == "cuda" and tuning_mode == "max" and torch.version.hip:
+        pytest.skip("GPU max uses NVIDIA CUDA device attributes")
     if device == "mps" and not torch.backends.mps.is_available():
         pytest.skip("Apple Metal device required")
     engine = "metal_native" if device == "mps" else "cuda_native"

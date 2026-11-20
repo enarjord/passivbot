@@ -105,7 +105,8 @@ def test_cuda_independent_blocks_preserve_every_output(monkeypatch, strategy, mo
         if name != runner.replay_kernel_name:
             return launch
         def packed(*args, **kwargs):
-            kwargs["group_size"] = (min(len(candidates), 32), 1, 1)
+            # v9 shared replay state requires exactly one candidate per block.
+            kwargs["group_size"] = (1, 1, 1)
             return launch(*args, **kwargs)
         return packed
     monkeypatch.setattr(CudaShaderLibrary, "__getattr__", prior_geometry)

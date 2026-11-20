@@ -192,11 +192,45 @@ def cuda_source(
     return _CUDA_PREAMBLE + storage + source
 
 
+def _hipify(code: str) -> str:
+    """Rewrite CUDA-only constructs so hipRTC can compile them (AMD ROCm)."""
+    code = code.replace("#include <cuda_runtime.h>", "#include <hip/hip_runtime.h>")
+    code = code.replace("#include <cuda.h>", "#include <hip/hip_runtime.h>")
+    # hipRTC already defines ulong (unsigned long); avoid the clash and keep
+    # CUDA's 64-bit semantics under a distinct name.
+    code = re.sub(r"^\s*using\s+ulong\s*=\s*unsigned\s+long\s+long\s*;\s*$", "", code, flags=re.M)
+    code = re.sub(r"\bulong\b", "pb_ulong", code)
+    return "using pb_ulong = unsigned long long;\n" + code
+
+
+def shader_vendor(cupy_module=None) -> str:
+    """Detect the active GPU toolchain: 'hip' for AMD ROCm, 'cuda' for NVIDIA.
+
+    Kept in one place so shader compilation, include rewriting and compiler
+    flags never fork on vendor guesses scattered through the module.
+    """
+
+    runtime = getattr(getattr(cupy_module, "cuda", None), "runtime", None)
+    is_hip = getattr(runtime, "is_hip", None)
+    if is_hip is not None:
+        return "hip" if is_hip else "cuda"
+    try:
+        import torch
+    except ModuleNotFoundError as error:
+        if error.name != "torch":
+            raise
+        return "cuda"
+    if getattr(getattr(torch, "version", None), "hip", None):
+        return "hip"
+    return "cuda"
+
+
 class CudaShaderLibrary:
     def __init__(self, source: str, *, coin_capacity: int | None = None):
         import cupy
 
         self._cupy = cupy
+        self._vendor = shader_vendor(cupy)
         self._shared_side_replay = _shared_side_replay(source)
         self._scalar_parameters = {}
         self._byte_parameters = {}
@@ -210,9 +244,18 @@ class CudaShaderLibrary:
                 for index, argument in enumerate(signature.split(","))
                 if (match := re.search(r"\bconstant\s+(\w+)\s*&", argument))
             }
+        code = cuda_source(source, coin_capacity=coin_capacity)
         self._module = cupy.RawModule(
-            code=cuda_source(source, coin_capacity=coin_capacity),
-            options=("--std=c++17", "--fmad=false"),
+            code=_hipify(code) if self._vendor == "hip" else code,
+            options=(
+                # hipRTC rejects NVRTC's --fmad=false; clang's FP contraction
+                # default would still change rounding, so pin it explicitly.
+                # AMD's loop unroller miscompiles the fused replay kernel at
+                # -O2/-O3 (null-pointer GPU fault), so keep unrolling off.
+                ("--std=c++17", "-ffp-contract=off", "-fno-unroll-loops")
+                if self._vendor == "hip"
+                else ("--std=c++17", "--fmad=false")
+            ),
         )
         self._module.compile()
 

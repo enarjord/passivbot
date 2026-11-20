@@ -77,7 +77,7 @@ def _base_parameter_values() -> dict[str, float]:
 
 
 def _build_case(name, *, candidates, dispatch_batch_size, single_bars,
-                multicoin_bars, coins, seed):
+                multicoin_bars, coins, seed, portfolio_hsl_disabled=False):
     """A current native shared-account fixture; no retired directional engine."""
     from tools.gpu_parity import build_parser, fixture_inputs, _identity
     from optimization.gpu.service import SharedAccountReplay
@@ -88,6 +88,18 @@ def _build_case(name, *, candidates, dispatch_batch_size, single_bars,
         "--fixture", strategy, "--sides", "long", "--coins", str(coins),
         "--bars", str(multicoin_bars), "--seed", str(seed)]))
     config, candles, markets, btc, timestamps = inputs
+    if portfolio_hsl_disabled:
+        # Coin-scope fixtures cannot reach the disabled-HSL specialization;
+        # portfolio scope with HSL off is the layout it actually compacts.
+        from config.hsl import generated_template
+        from config.schema import get_expanded_config_prototype
+
+        template = generated_template(get_expanded_config_prototype(), "portfolio")
+        config["bot"]["long"].pop("hsl", None)
+        config["bot"]["short"].pop("hsl", None)
+        config["bot"]["portfolio"]["hsl"] = dict(template["bot"]["portfolio"]["hsl"])
+        config["bot"]["portfolio"]["hsl"]["enabled"] = False
+        config["optimize"]["bounds"] = {}
     metrics = {"cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day"}
     replay = SharedAccountReplay(config=config, hlcvs=candles, mss=markets,
         btc=btc, timestamps=timestamps, exchange="binance", batch_size=dispatch_batch_size,

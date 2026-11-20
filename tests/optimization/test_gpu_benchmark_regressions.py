@@ -10,6 +10,22 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+# The GPU reduces a float32 observation packet while the CPU reference is
+# float64, so continuous metrics cannot be equal bit-for-bit. Measured on
+# gfx1030 / ROCm 7.0 with this recipe (256 bars, seed 7, two candidates): the
+# largest deviation was rel 5.2e-7 (drawdown, abs 8.1e-8) and abs 3.4e-6
+# (turnover, magnitude ~118, rel 2.9e-8); ulcer was rel 3.6e-7. One float32
+# accumulation budget (rel 2e-6, abs 1e-9) covers those with margin. Metrics
+# derived from fills/HSL chronology stay exact.
+CONTINUOUS_RELATIVE_TOLERANCE = 2e-6
+CONTINUOUS_ABSOLUTE_TOLERANCE = 1e-9
+DISCRETE_METRICS = frozenset({
+    "backtest_completion_fraction",
+    "hsl_triggers_per_year",
+    "hsl_red_time_fraction",
+})
+
+
 def test_native_coin_hsl_forager_preserves_unfilled_incumbents(tmp_path):
     from tools.optimizer_benchmark.workloads import freeze
     from tools.optimizer_benchmark.worker import cpu_candidate, gpu_runs
@@ -28,10 +44,13 @@ def test_native_coin_hsl_forager_preserves_unfilled_incumbents(tmp_path):
         assert expected["metrics"]["hsl_triggers_per_year"] > 0
         assert actual["liquidated"] == expected["liquidated"]
         for metric in entry["metrics"]:
-            # Drawdown needs float32 slack; discrete HSL/fill chronology does not.
-            tolerance = 2e-6 if metric == "drawdown_max_fraction_strategy_equity" else 1e-9
+            # Counts and bar fractions follow integer chronology; they stay exact.
+            if metric in DISCRETE_METRICS:
+                assert actual["metrics"][metric] == expected["metrics"][metric], metric
+                continue
             assert actual["metrics"][metric] == pytest.approx(
-                expected["metrics"][metric], abs=tolerance, rel=0), metric
+                expected["metrics"][metric], rel=CONTINUOUS_RELATIVE_TOLERANCE,
+                abs=CONTINUOUS_ABSOLUTE_TOLERANCE), metric
 
 
 @pytest.mark.parametrize("strategy,temporal", [
