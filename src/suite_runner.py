@@ -2125,6 +2125,28 @@ def _compute_slice_indices(
     return start_idx, end_idx, coin_indices
 
 
+def _scenario_window_metadata(master_meta, start_ts, end_ts, timestamps, warmup_minutes):
+    """Scope the master dataset metadata to the scenario's own boundaries."""
+    meta = deepcopy(master_meta)
+    # This override belongs to the master window. The payload prefers it to requested_start_ts.
+    meta.pop("effective_requested_start_ts", None)
+    meta["requested_start_ts"] = int(start_ts)
+    meta["requested_start_date"] = ts_to_date(int(start_ts))
+    meta["requested_end_ts"] = int(end_ts)
+    meta["requested_end_date"] = ts_to_date(int(end_ts))
+    if timestamps is not None and len(timestamps):
+        meta["effective_start_ts"] = int(timestamps[0])
+        meta["effective_start_date"] = ts_to_date(int(timestamps[0]))
+        meta["effective_end_ts"] = int(timestamps[-1])
+        meta["effective_end_date"] = ts_to_date(int(timestamps[-1]))
+        warmup_provided = max(0, int(max(0, start_ts - int(timestamps[0])) // 60_000))
+    else:
+        warmup_provided = warmup_minutes
+    meta["warmup_minutes_requested"] = warmup_minutes
+    meta["warmup_minutes_provided"] = warmup_provided
+    return meta
+
+
 def _prepare_dataset_subset(
     dataset: ExchangeDataset,
     scenario_config: Dict[str, Any],
@@ -2175,22 +2197,9 @@ def _prepare_dataset_subset(
     mss_slice: Dict[str, Any] = {
         coin: deepcopy(dataset.mss.get(coin, {})) for coin in selected_coins
     }
-    meta = deepcopy(dataset.mss.get("__meta__", {}))
-    minute_ms = 60_000
-    meta["requested_start_ts"] = int(start_ts)
-    meta["requested_start_date"] = ts_to_date(int(start_ts))
-    meta["requested_end_ts"] = int(end_ts)
-    meta["requested_end_date"] = ts_to_date(int(end_ts))
-    if ts_window is not None and len(ts_window):
-        meta["effective_start_ts"] = int(ts_window[0])
-        meta["effective_start_date"] = ts_to_date(int(ts_window[0]))
-        meta["effective_end_ts"] = int(ts_window[-1])
-        meta["effective_end_date"] = ts_to_date(int(ts_window[-1]))
-        warmup_provided = max(0, int(max(0, start_ts - int(ts_window[0])) // minute_ms))
-    else:
-        warmup_provided = warmup_minutes
-    meta["warmup_minutes_requested"] = warmup_minutes
-    meta["warmup_minutes_provided"] = warmup_provided
+    meta = _scenario_window_metadata(
+        dataset.mss.get("__meta__", {}), start_ts, end_ts, ts_window, warmup_minutes
+    )
     mss_slice["__meta__"] = meta
 
     interval = int(meta.get("data_interval_minutes", 1) or 1)
