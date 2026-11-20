@@ -5,6 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Use each suite scenario’s start for trading and scoring when reusing a
+  prepared OHLCV dataset.
+
 - Keep live forager RMS ranking available from complete local candles or a
   recent valid score when remote candle work times out. Repair missing RMS
   candle history in the background even when the latest candle is fresh.
