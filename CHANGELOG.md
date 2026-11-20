@@ -85,6 +85,10 @@ its own version heading. See [release status](docs/releases.md).
 - Record ordinary close replacement timing in structured live events, from cancel
   acknowledgment through account confirmation, replanning, and create submission.
 
+- Distinguish confirmed full close coverage from partial and unconfirmed
+  coverage in close replacement diagnostics. Keep recording account
+  observations after a replacement is submitted.
+
 - Recover Binance USDⓈ-M trailing resets from a complete trade query at the exact
   position update millisecond when cached replay retains stale position residue.
   Keep trailing confirmation pending when the boundary has multiple fills or
