@@ -26,7 +26,8 @@ its own version heading. See [release status](docs/releases.md).
   initial data is being sent reach the connected client.
 
 - Retry unfinished monitor event and history rows after an append completes,
-  preserving split UTF-8 characters and live relay offsets.
+  preserving split UTF-8 characters and live relay offsets. Preserve row boundaries
+  during relay startup and reset the read offset when current files rotate.
 
 - Select backtest plots with `--plots` and cap the optimizer seed shortlist with
   `--compress-starting-configs`. Remove the duplicate flags.

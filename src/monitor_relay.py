@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, BinaryIO, Optional
 from urllib.parse import urlsplit
 
 from aiohttp import web
@@ -15,6 +16,7 @@ from aiohttp import web
 
 MonitorKey = tuple[str, str]
 DASHBOARD_STATIC_DIR = Path(__file__).resolve().parent / "monitor_dashboard_static"
+_PRIME_SCAN_BYTES = 64 * 1024
 _DASHBOARD_ASSETS = {
     "dashboard.css": ("dashboard.css", "text/css"),
     "dashboard.js": ("dashboard.js", "application/javascript"),
@@ -403,20 +405,44 @@ class MonitorRelay:
             pass
         self._poll_task = None
 
+    @staticmethod
+    def _prime_offset(file: BinaryIO, size: int) -> int:
+        if size == 0:
+            return 0
+        file.seek(size - 1)
+        if file.read(1) == b"\n":
+            return size
+
+        # Find the start of the last row without reading the previous rows.
+        scan_start = size
+        while scan_start > 0:
+            scan_end = scan_start
+            scan_start = max(0, scan_end - _PRIME_SCAN_BYTES)
+            file.seek(scan_start)
+            newline = file.read(scan_end - scan_start).rfind(b"\n")
+            if newline >= 0:
+                scan_start += newline + 1
+                break
+
+        file.seek(scan_start)
+        last_row = file.read(size - scan_start).strip()
+        if last_row:
+            try:
+                json.loads(last_row)
+            except ValueError:
+                return scan_start
+        return size
+
     def _prime_offsets(self) -> None:
         for key in self.discover_keys():
             for path in self._current_paths_for_key(key):
-                if not path.exists():
-                    continue
                 try:
-                    stat = path.stat()
+                    with open(path, "rb") as file:
+                        stat = os.fstat(file.fileno())
+                        offset = self._prime_offset(file, stat.st_size)
                 except FileNotFoundError:
                     continue
-                self._path_states[path] = _PathState(
-                    dev=int(stat.st_dev),
-                    ino=int(stat.st_ino),
-                    offset=int(stat.st_size),
-                )
+                self._path_states[path] = _PathState(stat.st_dev, stat.st_ino, offset)
 
     async def _run_poll_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -452,31 +478,29 @@ class MonitorRelay:
             entry.last_history_ts_ms = max(entry.last_history_ts_ms, message_ts_ms, now_ms)
 
     def _read_updates(self, path: Path) -> list[dict]:
-        if not path.exists():
-            return []
+        state = self._path_states.get(path)
         try:
             stat = path.stat()
-        except FileNotFoundError:
-            return []
-        file_id = (int(stat.st_dev), int(stat.st_ino))
-        size = int(stat.st_size)
-        state = self._path_states.get(path)
-        if state is None:
-            if not self._initial_prime_completed:
-                self._path_states[path] = _PathState(file_id[0], file_id[1], size)
+            if state is not None and state == _PathState(stat.st_dev, stat.st_ino, stat.st_size):
                 return []
-            read_from = 0
-        else:
-            reset = size < state.offset or (state.dev, state.ino) != file_id
-            read_from = 0 if reset else state.offset
-        if size == read_from:
-            self._path_states[path] = _PathState(file_id[0], file_id[1], size)
-            return []
-        try:
-            with open(path, "rb") as f:
-                f.seek(read_from)
-                lines = f.readlines()
-                new_offset = int(f.tell())
+            with open(path, "rb") as file:
+                # The pathname may have rotated since the stat above. Use the
+                # identity of the opened file for both the seek and the cursor.
+                stat = os.fstat(file.fileno())
+                if state is None and not self._initial_prime_completed:
+                    offset = self._prime_offset(file, stat.st_size)
+                    self._path_states[path] = _PathState(stat.st_dev, stat.st_ino, offset)
+                    return []
+                read_from = 0
+                if (
+                    state is not None
+                    and (state.dev, state.ino) == (stat.st_dev, stat.st_ino)
+                    and state.offset <= stat.st_size
+                ):
+                    read_from = state.offset
+                file.seek(read_from)
+                lines = file.readlines()
+                new_offset = file.tell()
                 if lines and not lines[-1].endswith(b"\n"):
                     try:
                         json.loads(lines[-1])
@@ -485,7 +509,7 @@ class MonitorRelay:
                         new_offset -= len(lines.pop())
         except FileNotFoundError:
             return []
-        self._path_states[path] = _PathState(file_id[0], file_id[1], new_offset)
+        self._path_states[path] = _PathState(stat.st_dev, stat.st_ino, new_offset)
         messages: list[dict] = []
         for raw_line in lines:
             line = raw_line.strip()

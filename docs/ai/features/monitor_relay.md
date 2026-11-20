@@ -13,9 +13,11 @@ checks, which are separate from authentication.
 
 ## Delivery
 
-Send the available snapshot envelopes first, then replay, then live event and history messages. Prime existing current
-files to EOF at startup. Read the connection replay tail directly from current files, independently
-of live poll offsets. Tail newly discovered current files from the beginning.
+Send the available snapshot envelopes first, then replay, then live event and history messages.
+Prime existing current files through the last complete row at startup. Read the connection replay
+tail directly from current files, independently of live poll offsets. Tail newly discovered and
+rotated current files from the beginning. Bind the live byte offset to the opened file identity,
+so a pathname replacement cannot reuse the preceding file's offset.
 
 Register the bounded live queue before sending snapshots and replay. Buffer new publications during
 those sends and release the subscription on every exit. Replay and queued live delivery may overlap.
