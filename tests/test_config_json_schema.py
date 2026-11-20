@@ -133,6 +133,110 @@ def test_editor_schema_rejects_unknown_fields_results_and_wrong_record_types(val
         validator.validate(payload)
 
 
+@pytest.mark.parametrize("invalid", ["false", "true", 0, 1, None, {}, []])
+def test_authored_monitor_flags_agree_with_editor_boolean_types(validator, invalid):
+    payload = source(monitor={"enabled": True, "include_raw_fill_payloads": invalid})
+    with pytest.raises(ValidationError):
+        validator.validate(payload)
+    with pytest.raises(TypeError, match=r"config\.monitor\.include_raw_fill_payloads must be a boolean"):
+        prepare_config(payload, verbose=False)
+
+
+@pytest.mark.parametrize(("payload", "match"), [
+    (source(backtest={"suite_enabled": "false"}), r"config\.backtest\.suite_enabled"),
+    (source(live={"startup": {"force_cold_startup": 1}}), r"config\.live\.startup\.force_cold_startup"),
+    (source(bot={"global": {"hsl": {"enabled": None}}}), r"config\.bot\.global\.hsl\.enabled"),
+    (
+        source(optimize={"limits": [{"enabled": "false", "metric": "loss_profit_ratio",
+                                     "penalize_if": "greater_than", "value": 0.5}]}),
+        r"config\.optimize\.limits\[0\]\.enabled",
+    ),
+    (
+        source(optimize={"prefilter": {"checks": [
+            {"enabled": "false", "metric": "grid_span_fraction"},
+        ]}}),
+        r"config\.optimize\.prefilter\.checks\[0\]\.enabled",
+    ),
+    (
+        source(backtest={"scenarios": [{"overrides": {"backtest": {"compress_cache": "false"}}}]}),
+        r"config\.backtest\.scenarios\[0\]\.overrides\.backtest\.compress_cache",
+    ),
+    (
+        source(backtest={"scenarios": [{"overrides": {"backtest": {"compress_cache": {}}}}]}),
+        r"config\.backtest\.scenarios\[0\]\.overrides\.backtest\.compress_cache",
+    ),
+    (
+        source(optimize={"fixed_runtime_overrides": {"backtest.compress_cache": "false"}}),
+        r"config\.optimize\.fixed_runtime_overrides\.backtest\.compress_cache",
+    ),
+    (
+        source(coin_overrides={"BTC": {"bot": {"long": {"unstuck": {"ema_gating_enabled": "false"}}}}}),
+        r"coin_overrides\.BTC\.bot\.long\.unstuck\.ema_gating_enabled",
+    ),
+    (
+        source(backtest={"scenarios": [{"overrides": {
+            "coin_overrides.BTC.bot.long.unstuck.ema_gating_enabled": "false",
+        }}]}),
+        r"coin_overrides\.BTC\.bot\.long\.unstuck\.ema_gating_enabled",
+    ),
+])
+def test_authored_layers_reject_non_boolean_values_before_normalization(validator, payload, match):
+    with pytest.raises(ValidationError):
+        validator.validate(payload)
+    with pytest.raises(TypeError, match=match + r" must be a boolean"):
+        prepare_config(payload, verbose=False)
+
+
+def test_real_and_nullable_booleans_and_disabled_cli_limit_keep_their_values(validator):
+    from config.limits import parse_limit_cli_entry
+    from limit_utils import expand_limit_checks
+
+    limit = parse_limit_cli_entry("loss_profit_ratio > 0.5 enabled=false")
+    payload = source(
+        backtest={"filter_by_min_effective_cost": None, "suite_enabled": False},
+        monitor={"enabled": True, "include_raw_fill_payloads": False},
+        optimize={"limits": [limit]},
+    )
+    validator.validate(payload)
+    prepared = prepare_config(payload, verbose=False)
+    assert prepared["backtest"]["filter_by_min_effective_cost"] is None
+    assert prepared["backtest"]["suite_enabled"] is False
+    assert prepared["monitor"]["enabled"] is True
+    assert prepared["monitor"]["include_raw_fill_payloads"] is False
+    assert prepared["optimize"]["limits"][0]["enabled"] is False
+    assert not expand_limit_checks(prepared["optimize"]["limits"], {}, penalty_weight=1.0)
+
+
+def test_structured_cli_limit_requires_a_boolean():
+    from config.limits import parse_limit_cli_entry
+
+    with pytest.raises(TypeError, match="Limit enabled flag .* must be a boolean"):
+        parse_limit_cli_entry(
+            '{"metric": "loss_profit_ratio", "penalize_if": "greater_than", "value": 0.5, "enabled": "false"}'
+        )
+
+
+def test_sidecars_reject_quoted_booleans_before_extracting_policy(tmp_path):
+    from suite_runner import load_suite_override_config
+
+    suite = tmp_path / "suite.json"
+    suite.write_text(json.dumps({"scenarios": [], "volume_normalization": "false"}))
+    with pytest.raises(TypeError, match=r"config\.backtest\.volume_normalization must be a boolean"):
+        load_suite_override_config(suite)
+
+    coin = tmp_path / "coin.json"
+    coin.write_text(json.dumps(source(
+        bot={"global": {"unstuck": {"ema_gating_enabled": "false"}}},
+    )))
+    with pytest.raises(
+        ValueError,
+        match=r"coin_overrides\.BTC\.override_config_path .*ema_gating_enabled must be a boolean",
+    ):
+        prepare_config(
+            source(coin_overrides={"BTC": {"override_config_path": str(coin)}}), verbose=False
+        )
+
+
 @pytest.mark.parametrize("value", [0.5, [0.5], [0.0, 1.0], [0.0, 1.0, None], [0.0, 1.0, 0.01]])
 def test_canonical_nested_bounds_support_documented_forms(validator, value):
     validator.validate(source(optimize={"bounds": {"long": {"forager": {"score_weights": {"volume": value}}}}}))

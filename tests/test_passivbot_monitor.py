@@ -4413,7 +4413,8 @@ def test_trailing_status_event_emits_structured_summary():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_unstuck_selection_event_emits_structured_summary():
+@pytest.mark.parametrize(("pside", "distance"), [("long", -0.02), ("short", 0.02)])
+def test_unstuck_selection_event_emits_structured_summary(pside, distance):
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -4437,9 +4438,9 @@ def test_unstuck_selection_event_emits_structured_summary():
 
     bot._emit_unstuck_selection_event(
         symbol="SUI/USDT:USDT",
-        pside="long",
-        entry_price=1.0,
-        current_price=1.1,
+        pside=pside,
+        entry_price=100.0,
+        current_price=98.0,
         allowance=-12.3,
         changed=True,
     )
@@ -4449,14 +4450,14 @@ def test_unstuck_selection_event_emits_structured_summary():
     assert event.event_type == EventTypes.UNSTUCK_SELECTION
     assert event.cycle_id == "cy_unstuck_selection"
     assert event.symbol == "SUI/USDT:USDT"
-    assert event.pside == "long"
+    assert event.pside == pside
     assert event.reason_code == "unstuck_selection"
     assert event.component == "risk.unstuck.selection"
     assert event.tags == ("risk", "unstuck", "selection")
     assert event.data["changed"] is True
-    assert event.data["entry_price"] == pytest.approx(1.0)
-    assert event.data["current_price"] == pytest.approx(1.1)
-    assert event.data["price_change_percent"] == pytest.approx(10.0)
+    assert event.data["entry_price"] == pytest.approx(100.0)
+    assert event.data["current_price"] == pytest.approx(98.0)
+    assert event.data["signed_entry_distance_fraction"] == pytest.approx(distance)
     assert event.data["allowance"] == pytest.approx(-12.3)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
@@ -6467,6 +6468,41 @@ def test_monitor_unstuck_section_derives_live_allowance_from_raw_diagnostic():
     assert section["sides"]["short"]["allowance_live"] == pytest.approx(0.0)
 
 
+@pytest.mark.parametrize(
+    ("pside", "size", "entry", "last", "expected"),
+    [
+        ("long", 1.0, 100.0, 98.0, -0.02),
+        ("short", -1.0, 50.0, 49.0, 0.02),
+        ("short", -1.0, 50.0, 50.0, 0.0),
+        ("short", 0.0, 50.0, 49.0, None),
+        ("short", -1.0, 0.0, 49.0, None),
+        ("short", -1.0, 50.0, None, None),
+        ("short", -1.0, 50.0, 0.0, None),
+    ],
+)
+def test_monitor_position_entry_distance(pside, size, entry, last, expected):
+    from passivbot_monitor import _build_monitor_position_side_payload
+
+    bot = SimpleNamespace(
+        c_mults={"BTC/USDT:USDT": 1.0},
+        bp=lambda *_args: 0.0,
+        bot_value=lambda *_args: 0.0,
+    )
+    payload = _build_monitor_position_side_payload(
+        bot,
+        "BTC/USDT:USDT",
+        pside,
+        {"size": size, "price": entry},
+        balance_raw=1000.0,
+        last_price=last,
+        total_we_by_pside={},
+    )
+    if expected is None:
+        assert "signed_entry_distance_fraction" not in payload
+    else:
+        assert payload["signed_entry_distance_fraction"] == pytest.approx(expected)
+
+
 @pytest.mark.asyncio
 async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent():
     import passivbot as pb_mod
@@ -6651,7 +6687,6 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
             )
             self.inverse = False
             self.c_mults = {"BTC/USDT:USDT": 1.0}
-            self.pside_int_map = {"long": 0, "short": 1}
             self._coin_bot_values = {
                 ("long", "forager_score_weights"): {
                     "volume": 1.0,
@@ -6914,8 +6949,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         "twel_ratio"
     ] == pytest.approx(0.1 / 0.24)
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"][
-        "price_action_distance"
-    ] == pytest.approx(-0.005)
+        "signed_entry_distance_fraction"
+    ] == pytest.approx(0.005)
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["upnl"] == pytest.approx(0.5)
     assert snapshot["market"]["BTC/USDT:USDT"]["last_price"] == pytest.approx(100500.0)
     assert snapshot["market"]["BTC/USDT:USDT"]["tradable"] is False
@@ -7738,8 +7773,7 @@ def test_unstuck_monitor_renderer_uses_independent_bounds(pside, strategy_availa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("volume_weight", [0.0, 0.2])
-@pytest.mark.parametrize("volatility_drop_pct", [0.0, 0.34])
-async def test_monitor_rms_directionality_total_uses_rust_ranking(side, volume_weight, volatility_drop_pct):
+async def test_monitor_rms_directionality_total_uses_rust_ranking(side, volume_weight):
     from types import SimpleNamespace
     import passivbot_rust as pbr
     import passivbot_monitor as monitor
@@ -7756,7 +7790,6 @@ async def test_monitor_rms_directionality_total_uses_rust_ranking(side, volume_w
         "n_positions": 1,
         "total_wallet_exposure_limit_ratio": 1.0,
         "forager_score_weights": weights,
-        "filter_volatility_drop_pct": volatility_drop_pct,
         "rms_directionality_ema_span_minutes": 60.0,
     }
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
@@ -7808,7 +7841,7 @@ async def test_monitor_rms_directionality_total_uses_rust_ranking(side, volume_w
         bot_value=lambda s, key: (
             weights
             if key == "forager_score_weights"
-            else (60.0 if key == "rms_directionality_ema_span_minutes" else volatility_drop_pct)
+            else (60.0 if key == "rms_directionality_ema_span_minutes" else 0.0)
         ),
         effective_min_cost_is_low_enough=lambda *args: True,
         build_forager_candidate_payload=legacy_payload,

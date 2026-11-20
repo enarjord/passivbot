@@ -213,55 +213,59 @@ struct StrategyParamsPair {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct OrchestratorM1LogRangeSlots {
-    forager_long: usize,
-    forager_short: usize,
-    offset_long: Option<usize>,
-    offset_short: Option<usize>,
+struct MaintainedEmas {
+    volume: [bool; 2],
+    forager_log_range: [bool; 2],
+    strategy_log_range_m1: [bool; 2],
+    strategy_log_range_h1: [bool; 2],
 }
 
 #[derive(Debug, Clone, Copy)]
 struct OrchestratorEmaSlots {
-    m1_volume_long: usize,
-    m1_volume_short: usize,
-    m1_log_range: OrchestratorM1LogRangeSlots,
+    volume: [Option<usize>; 2],
+    forager_log_range: [Option<usize>; 2],
+    strategy_log_range_m1: [Option<usize>; 2],
 }
 
 fn make_orchestrator_ema_slots(
-    strategy_params: &StrategyParamsPair,
-    bot_params_master: &BotParamsPair,
+    strategies: &StrategyParamsPair,
+    maintained: MaintainedEmas,
 ) -> OrchestratorEmaSlots {
-    let _ = bot_params_master;
-    let mut next_m1_log_range = 0usize;
-    let forager_long = next_m1_log_range;
-    next_m1_log_range += 1;
-    let forager_short = next_m1_log_range;
-    next_m1_log_range += 1;
-    let offset_long =
-        if strategy_log_range_ema_span_minutes(&strategy_params.long).unwrap_or(0.0) > 0.0 {
-            let idx = next_m1_log_range;
-            next_m1_log_range += 1;
-            Some(idx)
-        } else {
-            None
-        };
-    let offset_short =
-        if strategy_log_range_ema_span_minutes(&strategy_params.short).unwrap_or(0.0) > 0.0 {
-            let idx = next_m1_log_range;
-            Some(idx)
-        } else {
-            None
-        };
+    fn next_slot(next: &mut usize, maintained: bool) -> Option<usize> {
+        if !maintained {
+            return None;
+        }
+        let slot = *next;
+        *next += 1;
+        Some(slot)
+    }
 
+    // Span lookup returns the first match. An idle accumulator could shadow a
+    // maintained EMA after their initially equal bootstrap values diverge.
+    let mut next_volume = 0;
+    let mut next_log_range = 0;
     OrchestratorEmaSlots {
-        m1_volume_long: 0,
-        m1_volume_short: 1,
-        m1_log_range: OrchestratorM1LogRangeSlots {
-            forager_long,
-            forager_short,
-            offset_long,
-            offset_short,
-        },
+        volume: maintained
+            .volume
+            .map(|needed| next_slot(&mut next_volume, needed)),
+        forager_log_range: maintained
+            .forager_log_range
+            .map(|needed| next_slot(&mut next_log_range, needed)),
+        strategy_log_range_m1: [LONG, SHORT].map(|side| {
+            let strategy = [&strategies.long, &strategies.short][side];
+            let has_span =
+                strategy_log_range_ema_span_minutes(strategy).is_some_and(|span| span > 0.0);
+            next_slot(
+                &mut next_log_range,
+                maintained.strategy_log_range_m1[side] && has_span,
+            )
+        }),
+    }
+}
+
+fn update_ema_slot(values: &mut [(f64, f64)], slot: Option<usize>, value: f64) {
+    if let Some(slot) = slot {
+        values[slot].1 = value;
     }
 }
 
@@ -269,24 +273,28 @@ fn refresh_orchestrator_hourly_log_ranges(
     values: &mut Vec<(f64, f64)>,
     strategies: &StrategyParamsPair,
     emas: &EMAs,
+    maintained: [bool; 2],
 ) {
-    // Unknown hourly state has no observation basis. Omit it so only an
-    // actual consumer takes the orchestrator's existing missing-input path.
-    // Rebuild this small vector because either side can gain_multiplier a basis later;
-    // fixed slots would overwrite the other side when only one was present.
+    // An idle EMA or an EMA without an observed hour cannot satisfy a lookup.
+    // Rebuild the vector because either side can gain an observation later.
     values.clear();
-    for (strategy, value, denominator) in [
+    for (strategy, value, denominator, maintained) in [
         (
             &strategies.long,
             emas.log_range_ema_1h_long,
             emas.log_range_ema_1h_long_den,
+            maintained[LONG],
         ),
         (
             &strategies.short,
             emas.log_range_ema_1h_short,
             emas.log_range_ema_1h_short_den,
+            maintained[SHORT],
         ),
     ] {
+        if !maintained {
+            continue;
+        }
         if let Some(span) = strategy_log_range_ema_span_1h_candles(strategy) {
             if span > 0.0 && denominator > 0.0 && value.is_finite() {
                 values.push((span, value));
@@ -482,14 +490,7 @@ pub struct BacktestEngine<'a, const ORGANILLO: bool> {
     rms_directionality: Vec<Vec<(f64, crate::rms_directionality::RollingRms)>>,
     rms_directionality_step: Option<usize>,
     orchestrator_ema_slots: Vec<OrchestratorEmaSlots>,
-    needs_volume_ema_long: bool,
-    needs_volume_ema_short: bool,
-    needs_log_range_long: bool,
-    needs_log_range_short: bool,
-    needs_log_range_ema_1m_long: bool,
-    needs_log_range_ema_1m_short: bool,
-    needs_log_range_ema_1h_long: bool,
-    needs_log_range_ema_1h_short: bool,
+    maintained_emas: MaintainedEmas,
     coin_first_valid_idx: Vec<usize>,
     coin_last_valid_idx: Vec<usize>,
     coin_trade_start_idx: Vec<usize>,
@@ -1256,33 +1257,41 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 );
 
                 m1.signed_rms_directionality = self.rms_directionality_at(idx, k);
-                m1.volume.push((vol_span_long, self.emas[idx].vol_long));
-                m1.volume.push((vol_span_short, self.emas[idx].vol_short));
-                m1.log_range
-                    .push((lr_span_long, self.emas[idx].log_range_long));
-                m1.log_range
-                    .push((lr_span_short, self.emas[idx].log_range_short));
-                if let Some(span) =
-                    strategy_log_range_ema_span_minutes(&self.strategy_params[idx].long)
-                {
-                    if span > 0.0 {
-                        m1.log_range
-                            .push((span, self.emas[idx].log_range_ema_1m_long));
+                // Append in the same order as the slots used to refresh the cache.
+                let slots = self.orchestrator_ema_slots[idx];
+                let ema = &self.emas[idx];
+                for (slot, entry) in slots.volume.into_iter().zip([
+                    (vol_span_long, ema.vol_long),
+                    (vol_span_short, ema.vol_short),
+                ]) {
+                    if slot.is_some() {
+                        m1.volume.push(entry);
                     }
                 }
-                if let Some(span) =
-                    strategy_log_range_ema_span_minutes(&self.strategy_params[idx].short)
-                {
-                    if span > 0.0 {
-                        m1.log_range
-                            .push((span, self.emas[idx].log_range_ema_1m_short));
+                for (slot, entry) in slots.forager_log_range.into_iter().zip([
+                    (lr_span_long, ema.log_range_long),
+                    (lr_span_short, ema.log_range_short),
+                ]) {
+                    if slot.is_some() {
+                        m1.log_range.push(entry);
+                    }
+                }
+                for (slot, (strategy, value)) in slots.strategy_log_range_m1.into_iter().zip([
+                    (&self.strategy_params[idx].long, ema.log_range_ema_1m_long),
+                    (&self.strategy_params[idx].short, ema.log_range_ema_1m_short),
+                ]) {
+                    if slot.is_some() {
+                        let span = strategy_log_range_ema_span_minutes(strategy)
+                            .expect("published strategy log-range EMA has a span");
+                        m1.log_range.push((span, value));
                     }
                 }
 
                 refresh_orchestrator_hourly_log_ranges(
                     &mut h1.log_range,
                     &self.strategy_params[idx],
-                    &self.emas[idx],
+                    ema,
+                    self.maintained_emas.strategy_log_range_h1,
                 );
 
                 let emas = OrchestratorEmaBundle { m1, h1 };
@@ -1513,30 +1522,35 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 }
             }
             let slots = self.orchestrator_ema_slots[idx];
-            if sym.emas.m1.volume.len() > slots.m1_volume_short {
-                sym.emas.m1.volume[slots.m1_volume_long].1 = self.emas[idx].vol_long;
-                sym.emas.m1.volume[slots.m1_volume_short].1 = self.emas[idx].vol_short;
-            }
-            if sym.emas.m1.log_range.len() > slots.m1_log_range.forager_short {
-                sym.emas.m1.log_range[slots.m1_log_range.forager_long].1 =
-                    self.emas[idx].log_range_long;
-                sym.emas.m1.log_range[slots.m1_log_range.forager_short].1 =
-                    self.emas[idx].log_range_short;
-            }
-            if let Some(slot) = slots.m1_log_range.offset_long {
-                if sym.emas.m1.log_range.len() > slot {
-                    sym.emas.m1.log_range[slot].1 = self.emas[idx].log_range_ema_1m_long;
-                }
-            }
-            if let Some(slot) = slots.m1_log_range.offset_short {
-                if sym.emas.m1.log_range.len() > slot {
-                    sym.emas.m1.log_range[slot].1 = self.emas[idx].log_range_ema_1m_short;
-                }
-            }
+            let ema = &self.emas[idx];
+            let minute = &mut sym.emas.m1;
+            update_ema_slot(&mut minute.volume, slots.volume[LONG], ema.vol_long);
+            update_ema_slot(&mut minute.volume, slots.volume[SHORT], ema.vol_short);
+            update_ema_slot(
+                &mut minute.log_range,
+                slots.forager_log_range[LONG],
+                ema.log_range_long,
+            );
+            update_ema_slot(
+                &mut minute.log_range,
+                slots.forager_log_range[SHORT],
+                ema.log_range_short,
+            );
+            update_ema_slot(
+                &mut minute.log_range,
+                slots.strategy_log_range_m1[LONG],
+                ema.log_range_ema_1m_long,
+            );
+            update_ema_slot(
+                &mut minute.log_range,
+                slots.strategy_log_range_m1[SHORT],
+                ema.log_range_ema_1m_short,
+            );
             refresh_orchestrator_hourly_log_ranges(
                 &mut sym.emas.h1.log_range,
                 &self.strategy_params[idx],
-                &self.emas[idx],
+                ema,
+                self.maintained_emas.strategy_log_range_h1,
             );
         }
 
@@ -1825,11 +1839,6 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 short: make_runtime_budget_state(&bp.short, configured_n_positions.short),
             })
             .collect();
-        let orchestrator_ema_slots: Vec<OrchestratorEmaSlots> = strategy_params_parsed
-            .iter()
-            .map(|sp| make_orchestrator_ema_slots(sp, &bot_params_master))
-            .collect();
-
         // Calculate EMA alphas for each coin, adjusted for candle interval
         let interval = backtest_params.candle_interval_minutes;
         let ema_alphas: Vec<EmaAlphas> = bot_params
@@ -1853,30 +1862,47 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             .collect();
         let any_trailing_long = trailing_enabled.iter().any(|te| te.long);
         let any_trailing_short = trailing_enabled.iter().any(|te| te.short);
-        let needs_log_range_long = bot_params
-            .iter()
-            .any(|bp| bp.long.forager_score_weights.log_range != 0.0)
-            || strategy_params_parsed
+        let strategy_log_range_m1 = [
+            strategy_params_parsed
                 .iter()
-                .any(|sp| strategy_needs_log_range_1m(&sp.long));
-        let needs_log_range_short = bot_params
-            .iter()
-            .any(|bp| bp.short.forager_score_weights.log_range != 0.0)
-            || strategy_params_parsed
+                .any(|sp| strategy_needs_log_range_1m(&sp.long)),
+            strategy_params_parsed
                 .iter()
-                .any(|sp| strategy_needs_log_range_1m(&sp.short));
-        let needs_log_range_ema_1m_long = strategy_params_parsed
+                .any(|sp| strategy_needs_log_range_1m(&sp.short)),
+        ];
+        let maintained_emas = MaintainedEmas {
+            volume: [
+                bot_params
+                    .iter()
+                    .any(|bp| bp.long.forager_score_weights.volume != 0.0),
+                bot_params
+                    .iter()
+                    .any(|bp| bp.short.forager_score_weights.volume != 0.0),
+            ],
+            forager_log_range: [
+                strategy_log_range_m1[LONG]
+                    || bot_params
+                        .iter()
+                        .any(|bp| bp.long.forager_score_weights.log_range != 0.0),
+                strategy_log_range_m1[SHORT]
+                    || bot_params
+                        .iter()
+                        .any(|bp| bp.short.forager_score_weights.log_range != 0.0),
+            ],
+            strategy_log_range_m1,
+            strategy_log_range_h1: [
+                strategy_params_parsed
+                    .iter()
+                    .any(|sp| strategy_needs_log_range_1h(&sp.long)),
+                strategy_params_parsed
+                    .iter()
+                    .any(|sp| strategy_needs_log_range_1h(&sp.short)),
+            ],
+        };
+        let orchestrator_ema_slots = strategy_params_parsed
             .iter()
-            .any(|sp| strategy_needs_log_range_1m(&sp.long));
-        let needs_log_range_ema_1m_short = strategy_params_parsed
-            .iter()
-            .any(|sp| strategy_needs_log_range_1m(&sp.short));
-        let needs_log_range_ema_1h_long = strategy_params_parsed
-            .iter()
-            .any(|sp| strategy_needs_log_range_1h(&sp.long));
-        let needs_log_range_ema_1h_short = strategy_params_parsed
-            .iter()
-            .any(|sp| strategy_needs_log_range_1h(&sp.short));
+            .map(|sp| make_orchestrator_ema_slots(sp, maintained_emas))
+            .collect();
         let btc_collateral_initialized = !balance.use_btc_collateral;
 
         let rms_enabled = crate::rms_directionality::backtest_enabled_sides(
@@ -1931,18 +1957,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 .collect(),
             rms_directionality_step: None,
             orchestrator_ema_slots,
-            needs_volume_ema_long: bot_params
-                .iter()
-                .any(|bp| bp.long.forager_score_weights.volume != 0.0),
-            needs_volume_ema_short: bot_params
-                .iter()
-                .any(|bp| bp.short.forager_score_weights.volume != 0.0),
-            needs_log_range_long,
-            needs_log_range_short,
-            needs_log_range_ema_1m_long,
-            needs_log_range_ema_1m_short,
-            needs_log_range_ema_1h_long,
-            needs_log_range_ema_1h_short,
+            maintained_emas,
             coin_first_valid_idx: first_valid_idx,
             coin_last_valid_idx: last_valid_idx,
             coin_trade_start_idx: trade_start_idx,
@@ -4220,7 +4235,9 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             self.last_hour_boundary_ms = hour_boundary;
 
             // Update hourly log-range EMAs for entry volatility adjustments
-            if self.needs_log_range_ema_1h_long || self.needs_log_range_ema_1h_short {
+            if self.maintained_emas.strategy_log_range_h1[LONG]
+                || self.maintained_emas.strategy_log_range_h1[SHORT]
+            {
                 for i in 0..self.n_coins {
                     if self.coin_valid_range(i).is_none() {
                         continue;
@@ -4237,7 +4254,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                     let alpha_long = self.ema_alphas[i].log_range_ema_1h_alpha_long;
                     let alpha_short = self.ema_alphas[i].log_range_ema_1h_alpha_short;
                     let emas = &mut self.emas[i];
-                    if self.needs_log_range_ema_1h_long && alpha_long > 0.0 {
+                    if self.maintained_emas.strategy_log_range_h1[LONG] && alpha_long > 0.0 {
                         emas.log_range_ema_1h_long = update_adjusted_ema(
                             hour_log_range,
                             alpha_long,
@@ -4245,7 +4262,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                             &mut emas.log_range_ema_1h_long_den,
                         );
                     }
-                    if self.needs_log_range_ema_1h_short && alpha_short > 0.0 {
+                    if self.maintained_emas.strategy_log_range_h1[SHORT] && alpha_short > 0.0 {
                         emas.log_range_ema_1h_short = update_adjusted_ema(
                             hour_log_range,
                             alpha_short,
@@ -4314,8 +4331,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             }
 
             // volume EMAs (single value per pside)
-            if self.needs_volume_ema_long || self.needs_volume_ema_short {
-                if self.needs_volume_ema_long {
+            if self.maintained_emas.volume[LONG] || self.maintained_emas.volume[SHORT] {
+                if self.maintained_emas.volume[LONG] {
                     let vol_alpha_long = self.ema_alphas[i].vol_alpha_long;
                     emas.vol_long = update_adjusted_ema(
                         vol,
@@ -4324,7 +4341,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         &mut emas.vol_long_den,
                     );
                 }
-                if self.needs_volume_ema_short {
+                if self.maintained_emas.volume[SHORT] {
                     let vol_alpha_short = self.ema_alphas[i].vol_alpha_short;
                     emas.vol_short = update_adjusted_ema(
                         vol,
@@ -4336,17 +4353,17 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             }
 
             // log range metric: ln(high / low)
-            if self.needs_log_range_long
-                || self.needs_log_range_short
-                || self.needs_log_range_ema_1m_long
-                || self.needs_log_range_ema_1m_short
+            if self.maintained_emas.forager_log_range[LONG]
+                || self.maintained_emas.forager_log_range[SHORT]
+                || self.maintained_emas.strategy_log_range_m1[LONG]
+                || self.maintained_emas.strategy_log_range_m1[SHORT]
             {
                 let log_range = if high > 0.0 && low > 0.0 {
                     (high / low).ln()
                 } else {
                     0.0
                 };
-                if self.needs_log_range_long {
+                if self.maintained_emas.forager_log_range[LONG] {
                     emas.log_range_long = update_adjusted_ema(
                         log_range,
                         self.ema_alphas[i].log_range_alpha_long,
@@ -4354,7 +4371,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         &mut emas.log_range_long_den,
                     );
                 }
-                if self.needs_log_range_short {
+                if self.maintained_emas.forager_log_range[SHORT] {
                     emas.log_range_short = update_adjusted_ema(
                         log_range,
                         self.ema_alphas[i].log_range_alpha_short,
@@ -4362,7 +4379,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         &mut emas.log_range_short_den,
                     );
                 }
-                if self.needs_log_range_ema_1m_long {
+                if self.maintained_emas.strategy_log_range_m1[LONG] {
                     let alpha = self.ema_alphas[i].log_range_ema_1m_alpha_long;
                     if alpha > 0.0 {
                         emas.log_range_ema_1m_long = update_adjusted_ema(
@@ -4373,7 +4390,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         );
                     }
                 }
-                if self.needs_log_range_ema_1m_short {
+                if self.maintained_emas.strategy_log_range_m1[SHORT] {
                     let alpha = self.ema_alphas[i].log_range_ema_1m_alpha_short;
                     if alpha > 0.0 {
                         emas.log_range_ema_1m_short = update_adjusted_ema(
@@ -4891,6 +4908,76 @@ mod tests {
             repeat.symbols[0].emas.h1.log_range,
             fresh.symbols[0].emas.h1.log_range
         );
+    }
+
+    #[test]
+    fn orchestrator_uses_maintained_emas_when_spans_match_idle_accumulators() {
+        let n = 121;
+        let mut data = Array3::zeros((n, 1, 4));
+        for k in 0..n {
+            let spread = if k < 60 { 1.0 } else { 5.0 };
+            data[[k, 0, HIGH]] = 100.0 + spread;
+            data[[k, 0, LOW]] = 100.0 - spread;
+            data[[k, 0, CLOSE]] = 100.0;
+            data[[k, 0, VOLUME]] = 100.0 + k as f64;
+        }
+        let btc = Array1::from_elem(n, 20_000.0);
+        let params = ordinary_ema_fixture_params(n, 1);
+        let mut pair = hour_basis_fixture_pair();
+        pair.short = pair.long.clone();
+        pair.long.forager_volume_ema_span_minutes = 10.0;
+        pair.short.forager_volume_ema_span_minutes = 10.0;
+        pair.long.forager_score_weights.volume = 0.0;
+        pair.short.forager_score_weights.volume = 1.0;
+        pair.long.forager_score_weights.log_range = 0.0;
+        pair.short.forager_score_weights.log_range = 0.0;
+        pair.long.forager_log_range_ema_span_minutes = 20.0;
+        pair.short.forager_log_range_ema_span_minutes = 10.0;
+        pair.long.entry_log_range_ema_span_minutes = 10.0;
+        pair.long.entry_log_range_1m_coefficient = 1.0;
+        pair.long.entry_log_range_1h_coefficient = 0.0;
+
+        let mut bt = Backtest::new(
+            data.view(),
+            btc.view(),
+            vec![pair],
+            vec![ExchangeParams::default()],
+            &params,
+        );
+        // Bootstrap also seeds the idle accumulators. Only the maintained
+        // ones follow later candles, so the values diverge after this boundary.
+        bt.bootstrap_ordinary_emas(60);
+        bt.orchestrator_input_cache = Some(bt.build_orchestrator_input_iter(60, None, None, 0..1));
+        for k in 61..n {
+            bt.update_emas(k);
+        }
+
+        let fresh = bt.build_orchestrator_input_iter(120, None, None, 0..1);
+        let cached = bt.get_orchestrator_input_cached(120, None, None);
+        let ema = &bt.emas[0];
+        let first_by_span = |values: &[(f64, f64)], span: f64| {
+            values
+                .iter()
+                .find(|(key, _)| *key == span)
+                .map(|(_, value)| *value)
+        };
+        let hourly_span = bt.bot_params[0].short.entry_log_range_ema_span_1h_candles;
+        for input in [&fresh, &cached] {
+            let emas = &input.symbols[0].emas;
+            assert_eq!(
+                [
+                    first_by_span(&emas.m1.volume, 10.0),
+                    first_by_span(&emas.m1.log_range, 10.0),
+                    first_by_span(&emas.h1.log_range, hourly_span),
+                ],
+                [
+                    Some(ema.vol_short),
+                    Some(ema.log_range_ema_1m_long),
+                    Some(ema.log_range_ema_1h_short),
+                ],
+                "first volume, minute log-range, and hourly log-range values by span"
+            );
+        }
     }
 
     #[test]
@@ -7284,7 +7371,7 @@ mod tests {
     }
 
     #[test]
-    fn test_make_orchestrator_ema_slots_assigns_fixed_m1_positions() {
+    fn test_make_orchestrator_ema_slots_assigns_compact_m1_positions() {
         let strategy_pair = StrategyParamsPair {
             long: StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
                 offset_log_range_ema_span_minutes: 30.0,
@@ -7302,14 +7389,29 @@ mod tests {
             }),
         };
 
-        let slots = make_orchestrator_ema_slots(&strategy_pair, &BotParamsPair::default());
+        let maintained = MaintainedEmas {
+            volume: [true; 2],
+            forager_log_range: [true; 2],
+            strategy_log_range_m1: [true; 2],
+            strategy_log_range_h1: [true; 2],
+        };
+        let slots = make_orchestrator_ema_slots(&strategy_pair, maintained);
+        assert_eq!(slots.volume, [Some(0), Some(1)]);
+        assert_eq!(slots.forager_log_range, [Some(0), Some(1)]);
+        assert_eq!(slots.strategy_log_range_m1, [Some(2), Some(3)]);
 
-        assert_eq!(slots.m1_volume_long, 0);
-        assert_eq!(slots.m1_volume_short, 1);
-        assert_eq!(slots.m1_log_range.forager_long, 0);
-        assert_eq!(slots.m1_log_range.forager_short, 1);
-        assert_eq!(slots.m1_log_range.offset_long, Some(2));
-        assert_eq!(slots.m1_log_range.offset_short, Some(3));
+        let slots = make_orchestrator_ema_slots(
+            &strategy_pair,
+            MaintainedEmas {
+                volume: [false, true],
+                forager_log_range: [false, true],
+                strategy_log_range_m1: [true, false],
+                ..maintained
+            },
+        );
+        assert_eq!(slots.volume, [None, Some(0)]);
+        assert_eq!(slots.forager_log_range, [None, Some(0)]);
+        assert_eq!(slots.strategy_log_range_m1, [Some(1), None]);
     }
 
     #[test]

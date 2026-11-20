@@ -356,9 +356,9 @@ def migrate_v8_to_v9(
         coin_overrides = result.get("coin_overrides")
         live = result.get("live")
         if not coin_overrides and isinstance(live, dict) and live.get("coin_flags"):
-            from config.overrides import parse_old_coin_flags
+            from .released_v8_coin_flags import parse_released_v8_coin_flags
 
-            coin_overrides = parse_old_coin_flags(result)
+            coin_overrides = parse_released_v8_coin_flags(result)
         if isinstance(coin_overrides, dict):
             for coin, patch in coin_overrides.items():
                 _require_v8_0_inline_coin_override(patch, f"coin_overrides.{coin}")

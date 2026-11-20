@@ -23,6 +23,7 @@ import time
 
 from optimization.gpu.parity import MetricTolerance, compare_limits, compare_metrics
 from config.metrics import EXPOSURE_RMS_METRICS
+from config.result_records import RESULT_METADATA_KEYS, RESULT_VERSION_KEY, extract_result_config
 
 
 DEFAULT_METRICS = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day")
@@ -238,28 +239,32 @@ def _prepared_config_source(source):
     """Separate supported snapshot metadata from strict canonical policy."""
     if not isinstance(source, dict):
         raise TypeError("prepared config must be an object")
-    payload = source
-    if "bot" not in payload and "config" in payload:
-        payload = payload["config"]
-        if not isinstance(payload, dict):
-            raise TypeError("prepared config wrapper.config must be an object")
-    payload = deepcopy(payload)
-    # These exact fields decorate saved optimizer/backtest records. All other
-    # fields, including nested trading policy, still pass canonical validation.
-    for key in ("analysis", "metrics", "suite_metrics", "optimizer_anchor",
-                "optimizer_evaluation_contract"):
-        payload.pop(key, None)
-    backtest = payload.get("backtest")
-    declared_coins = backtest.pop("coins", {}) if isinstance(backtest, dict) else {}
+    if RESULT_VERSION_KEY in source:
+        payload = extract_result_config(source)
+        declared_coins = source["provenance"].get("backtest_coins", {})
+        declaration_path = "provenance.backtest_coins"
+    else:
+        payload = source
+        if "bot" not in payload and "config" in payload:
+            payload = payload["config"]
+            if not isinstance(payload, dict):
+                raise TypeError("prepared config wrapper.config must be an object")
+        payload = deepcopy(payload)
+        # Old prepared snapshots carry ordered membership alongside the input policy.
+        for key in RESULT_METADATA_KEYS:
+            payload.pop(key, None)
+        backtest = payload.get("backtest")
+        declared_coins = backtest.pop("coins", {}) if isinstance(backtest, dict) else {}
+        declaration_path = "config.backtest.coins"
     if not isinstance(declared_coins, dict):
-        raise TypeError("config.backtest.coins must be an exchange-to-coin-list mapping")
+        raise TypeError(f"{declaration_path} must be an exchange-to-coin-list mapping")
     for venue, coins in declared_coins.items():
         if (not isinstance(venue, str) or not isinstance(coins, list)
                 or not all(isinstance(coin, str) for coin in coins)):
-            raise TypeError("config.backtest.coins must map exchange names to string lists")
+            raise TypeError(f"{declaration_path} must map exchange names to string lists")
     # Search genes are not inputs to this standalone backtest comparison.
     payload.setdefault("optimize", {})["bounds"] = {}
-    return payload, declared_coins
+    return payload, declared_coins, declaration_path
 
 
 def prepared_inputs(args):
@@ -276,7 +281,7 @@ def prepared_inputs(args):
     if not args.dataset or not args.markets:
         raise ValueError("--config requires --dataset and --markets")
     source, base, _ = load_input_config(args.config, log_info=False)
-    source_payload, coin_declarations = _prepared_config_source(source)
+    source_payload, coin_declarations, declaration_path = _prepared_config_source(source)
     config = prepare_config(
         source_payload, base_config_path=base, raw_snapshot=deepcopy(source_payload),
         verbose=False,
@@ -311,13 +316,13 @@ def prepared_inputs(args):
     for venue, identities in coin_declarations.items():
         venue = to_standard_exchange_name(venue)
         if venue in declared_coins and declared_coins[venue] != identities:
-            raise ValueError("config.backtest.coins has conflicting coin lists for exchange aliases")
+            raise ValueError(f"{declaration_path} has conflicting coin lists for exchange aliases")
         declared_coins[venue] = identities
     if declared_coins and exchange not in declared_coins:
-        raise ValueError("prepared exchange must match config.backtest.coins")
+        raise ValueError(f"prepared exchange must match {declaration_path}")
     declared = declared_coins.get(exchange)
     if declared is not None and declared != ordered:
-        raise ValueError("dataset coin order must exactly match config.backtest.coins")
+        raise ValueError(f"dataset coin order must exactly match {declaration_path}")
     config["backtest"]["coins"] = {exchange: ordered}
     if hlcvs.ndim != 3 or hlcvs.shape[1:] != (len(ordered), 4):
         raise ValueError("dataset hlcvs must have shape (bars, coins, 4)")

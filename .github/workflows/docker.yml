@@ -40,12 +40,13 @@ jobs:
 
       - name: Verify private inputs are outside the Docker context
         run: |
-          mkdir -p configs/private logs monitor
+          mkdir -p configs/private logs monitor var/bitunix/ci
           private_paths=(
             api-keys.json
             configs/private/docker-smoke.json
             logs/docker-smoke.log
             monitor/docker-smoke.json
+            var/bitunix/ci/create_attempts.sqlite3
             src/docker-smoke.hjson
           )
           for path in "${private_paths[@]}"; do
@@ -72,7 +73,7 @@ jobs:
         run: |
           for image in passivbot-full:ci passivbot-live:ci; do
             docker run --rm --network none --entrypoint sh "$image" -ec '
-              for path in api-keys.json configs/private/docker-smoke.json logs/docker-smoke.log monitor/docker-smoke.json src/docker-smoke.hjson; do
+              for path in api-keys.json configs/private/docker-smoke.json logs/docker-smoke.log monitor/docker-smoke.json var/bitunix/ci/create_attempts.sqlite3 src/docker-smoke.hjson; do
                 test ! -e "/app/$path"
               done
               test -f /app/broker_codes.hjson
@@ -95,3 +96,58 @@ jobs:
           docker run --rm --network none \
             -e PB_USER=ci_fake -e PB_EXCHANGE=fake -e PB_API_KEY=synthetic -e PB_API_SECRET=synthetic \
             passivbot-live:ci --help
+
+      - name: Recover a pending Bitunix create after container replacement
+        run: |
+          export PB_USER=ci_journal
+          unset PB_STATE_DIR
+          for compose_file in docker-compose.yml container/examples/docker-compose.live.yml; do
+            compose=(docker compose -f "$compose_file" --profile live)
+            default_state=$("${compose[@]}" config --format json | jq -er '
+              .services["passivbot-live"].volumes[]
+              | select(.type == "bind" and .target == "/app/var" and .read_only != true)
+              | .source
+            ')
+            test "$default_state" = "$PWD/var"
+            export PB_STATE_DIR
+            PB_STATE_DIR=$(mktemp -d)
+            state=$("${compose[@]}" config --format json | jq -er '
+              .services["passivbot-live"].volumes[]
+              | select(.type == "bind" and .target == "/app/var" and .read_only != true)
+              | .source
+            ')
+            test "$state" = "$PB_STATE_DIR"
+            for phase in write read; do
+              docker run --rm -i --network none --entrypoint python \
+                --mount "type=bind,source=$state,target=/app/var" \
+                passivbot-live:ci - "$phase" <<'PY'
+          from pathlib import Path
+          import sys
+
+          from live.bitunix_create_journal import BitunixCreateAttempt, BitunixCreateJournal
+
+          journal = BitunixCreateJournal(Path("var/bitunix/ci_journal/create_attempts.sqlite3"))
+          attempt = BitunixCreateAttempt.from_wire(
+              {
+                  "clientId": "ci-pending-create",
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "reduceOnly": True,
+                  "tradeSide": "CLOSE",
+                  "positionId": "1",
+                  "orderType": "LIMIT",
+                  "qty": "0.004",
+                  "price": "10000",
+                  "effect": "POST_ONLY",
+              },
+              submitted_at_ms=1763312000000,
+          )
+          if sys.argv[1] == "write":
+              assert journal.load() == ()
+              journal.record(attempt)
+          else:
+              assert journal.load() == (attempt,)
+          PY
+            done
+            unset PB_STATE_DIR
+          done

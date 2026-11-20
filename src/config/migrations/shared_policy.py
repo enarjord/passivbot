@@ -26,6 +26,23 @@ def minimum_cost_policy_targets(path):
 COIN_SOURCE_FIELDS = ("approved_coins", "ignored_coins")
 
 
+def released_v8_coin_list_fallback(source):
+    """Locate the historical replacement for a missing relative v8 source."""
+    from utils import PROJECT_ROOT
+
+    candidate = source[0] if isinstance(source, list) and len(source) == 1 else source
+    if not isinstance(candidate, str):
+        return None
+    requested = Path(candidate.strip()).expanduser()
+    if requested.is_absolute() or requested.name not in {
+        "approved_coins_topmcap.json",
+        "approved_coins_topmcap.txt",
+    }:
+        return None
+    fallback = PROJECT_ROOT / "configs" / "approved_coins.json"
+    return fallback.absolute() if fallback.is_file() else None
+
+
 def normalize_released_coin_source(value, *, field, path, record, base_config_path="", side=None):
     """Decode only released inline shorthand, retaining every external file binding.
 
@@ -39,6 +56,11 @@ def normalize_released_coin_source(value, *, field, path, record, base_config_pa
         if resolve_universe_source_path(source, base_config_path=base_config_path,
                 discover_ambiguous=True, allow_all=field == "approved_coins") is not None:
             return source, True
+        fallback = released_v8_coin_list_fallback(source)
+        if fallback is not None:
+            bound = [str(fallback)] if isinstance(source, list) else str(fallback)
+            record(source_path, source, bound, "bound the historical released-v8 coin-list fallback")
+            return bound, True
         text = (source if isinstance(source, str) else
                 ",".join(item.strip() for item in source if item.strip())
                 if isinstance(source, list) and source and all(isinstance(item, str) for item in source)

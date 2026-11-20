@@ -46,7 +46,7 @@ def source_config():
 
 
 @pytest.mark.parametrize("source_kind", ["scalar", "wrapper"])
-@pytest.mark.parametrize("lookup", ["repo", "cwd", "legacy"])
+@pytest.mark.parametrize("lookup", ["repo", "cwd"])
 def test_initial_fallback_selection_precedes_semantic_export_anchoring(tmp_path,monkeypatch,source_kind,lookup):
     import utils
     inputs,repo,cwd,output=(tmp_path/name for name in ("inputs","repo","cwd","output"))
@@ -56,10 +56,6 @@ def test_initial_fallback_selection_precedes_semantic_export_anchoring(tmp_path,
     monkeypatch.chdir(cwd)
     name="coins.json"
     selected=(repo if lookup != "cwd" else cwd)/name
-    if lookup == "legacy":
-        name="approved_coins_topmcap.json"
-        selected=repo/"configs"/"approved_coins.json"
-        selected.parent.mkdir()
     write_json(selected,["BTC"])
     source=source_config()
     source["bot"]["global"]["universe"]["approved_coins"] = [name] if source_kind == "wrapper" else name

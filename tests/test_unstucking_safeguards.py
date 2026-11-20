@@ -143,7 +143,7 @@ def _make_mock_pbr():
     module.calc_pnl_short = (
         lambda entry_price, close_price, qty, c_mult: (entry_price - close_price) * qty
     )
-    module.calc_pside_adverse_price_change_fraction = lambda *args, **kwargs: 0.0
+    module.calc_signed_entry_distance_fraction = lambda *args, **kwargs: 0.0
     module.calc_abs_relative_difference_fraction = lambda price, reference: price - reference
     module.calc_order_price_gap_fraction = lambda side, price, market: (
         (0.0 if not market else (1 - price / market))
@@ -207,8 +207,6 @@ def _make_mock_pbr():
                         "config_path": ["strategy", pside, *parts],
                         "default": default,
                         "bounds": [default, default],
-                        "legacy_config_paths": [],
-                        "mirror_from": None,
                     }
                 )
         return {

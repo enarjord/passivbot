@@ -15,6 +15,7 @@ This is the recommended way to work with Passivbot configs on the current config
   [v8 converter](v8_to_v9_migration.md) for released v8 inputs, with the required semantic
   choices and fresh backtests. Config schema and [package release versions](releases.md)
   are separate. Unreleased intermediate schemas, `pb_multi` and pre-v8 layouts are unsupported.
+- Give coin lists the path to the intended file. A missing file leaves its source unavailable.
 - Retained strategies are `trailing_martingale` and `ema_anchor`. The v7 strategy and its
   dedicated migration command have been removed.
 

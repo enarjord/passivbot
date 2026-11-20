@@ -371,6 +371,58 @@ async def test_bitunix_ordinary_cancel_wave(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("blocker", [None, "cancel", "risk", "unstuck"])
+async def test_create_wave_binding_respects_original_plan(
+    execution_shell, monkeypatch, blocker
+):
+    bot = _PlanBot()
+    bot.cca = SimpleNamespace(
+        supports_ordinary_create_wave=True, ordinary_create_recovery=object()
+    )
+    bot._hsl_live = SimpleNamespace(_ordinary_create_wave=None)
+    bot._current_planning_snapshot = SimpleNamespace(account_invalidation_generation=0)
+    cancelled = (
+        [{**_order("stale"), "symbol": "SOL/USDT:USDT"}] if blocker == "cancel" else []
+    )
+    planned = [
+        {
+            **_order(name),
+            "symbol": symbol,
+            "side": "sell",
+            "reduce_only": True,
+            "pb_order_type": "close_grid_long",
+        }
+        for name, symbol in (("one", "BTC/USDT:USDT"), ("two", "ETH/USDT:USDT"))
+    ]
+    if blocker == "risk":
+        planned.append(_order("panic", panic=True))
+    elif blocker == "unstuck":
+        planned.append({**planned[0], "pb_order_type": "close_unstuck_long"})
+    bound = []
+    confirmed = []
+    create_wave = SimpleNamespace(confirm=lambda _: confirmed.append(True))
+
+    def bind(owner, orders, snapshot):
+        assert owner is bot and snapshot is bot._current_planning_snapshot
+        bound.append(tuple(orders))
+        return create_wave
+
+    async def submit(orders):
+        assert hsl_live.active_ordinary_create_wave(bot) is (
+            create_wave if blocker is None else None
+        )
+        return orders
+
+    monkeypatch.setattr(hsl_live, "bind_ordinary_create_wave", bind)
+    bot.execute_orders_parent = submit
+    await executor.execute_order_plan(bot, cancelled, planned)
+    assert bot.cancelled == cancelled
+    assert bound == ([tuple(planned)] if blocker is None else [])
+    assert confirmed == ([True] if blocker is None else [])
+    assert hsl_live.active_ordinary_create_wave(bot) is None
+
+
+@pytest.mark.asyncio
 async def test_stale_actual_defers_normal_create_for_same_symbol_and_pside(
     execution_shell,
 ):

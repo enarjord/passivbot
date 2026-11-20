@@ -66,6 +66,7 @@ assert not any(name == prefix or name.startswith(prefix + ".")
 def test_cpu_backtest_exports_and_plots_without_gpu_imports(tmp_path, strategy):
     run_cpu_process(tmp_path, strategy, """
         from backtest import build_backtest_payload, execute_backtest, post_process, BacktestPlotContext
+        from config.load import load_prepared_config
         config["disable_plotting"] = ["coin_fills", "hard_stop"]
         payload = build_backtest_payload(
             candles, markets, config, "binance", btc, timestamps,
@@ -78,6 +79,11 @@ def test_cpu_backtest_exports_and_plots_without_gpu_imports(tmp_path, strategy):
                      plot_context=BacktestPlotContext.from_payload(payload))
         files = {path.name: path for path in output.rglob("*") if path.is_file()}
         assert {"analysis.json", "fills.csv", "balance_and_equity.npz", "config.json"} <= files.keys()
+        saved = json.loads(files["config.json"].read_text())
+        assert saved["result_version"] == 1
+        assert "coins" not in saved["config"]["backtest"]
+        reloaded = load_prepared_config(str(files["config.json"]), allow_result_records=True, verbose=False)
+        assert reloaded["bot"]["portfolio"]["strategy_kind"] == strategy
         pictures = [path for name, path in files.items() if name.endswith(".png")]
         assert len(pictures) >= 1
         assert all(path.read_bytes().startswith(b"\\x89PNG\\r\\n\\x1a\\n") for path in pictures)
@@ -143,6 +149,12 @@ def test_cpu_optimizer_and_resume_use_real_workers_without_gpu_imports(tmp_path,
                 output = sessions[0]
                 initial = len(entries(output))
                 assert initial > 0 and list((output / "pareto").glob("*.json"))
+                from opt_utils import load_results
+                for record in load_results(output / "all_results.bin"):
+                    assert record["result_version"] == 1
+                    assert "coins" not in record["config"]["backtest"]
+                    assert record["provenance"]["backtest_coins"] == config["backtest"]["coins"]
+                assert optimize.get_starting_configs(str(output / "pareto"))
                 manifest = (output / "session.json").read_bytes()
                 assert json.loads(manifest)["setup"]["config"]["optimize"]["backend"] == backend
                 await optimize_offline(["passivbot optimize", str(config_path), "--offline", "y",

@@ -214,6 +214,15 @@ Primary reference: `src/fill_events_manager.py` (`BybitFetcher._fetch_positions_
 
 ## KuCoin Futures
 
+KuCoin Futures can reject a private request with code `400002` when its signed
+timestamp is outside the accepted window. At the CCXT REST transport boundary,
+retry only `futuresPrivate` GET requests once through normal throttling and signing.
+A successful retry supplies fresh exchange data. If it fails, propagate the failure
+to the existing caller policy. The transport logs the retry without request details.
+Authentication failures and write requests retain the existing policy.
+
+Primary reference: [KuCoin Futures error codes](https://www.kucoin.com/docs-new/error-code/futures).
+
 ### Authoritative futures book quotes
 
 Use the public `allTickers` endpoint through CCXT's explicit
@@ -657,9 +666,11 @@ Primary references: [place order](https://www.bitunix.com/api-docs/futures/trade
 
 Keep the Bitunix create journal under `var/bitunix/<user>/create_attempts.sqlite3`
 in the live data directory. Keep that data directory across restarts and release switches.
+See [persistent live state](../../container_deployment.md#persistent-live-state) for containers.
 The [recovery contract](../error_contract.md#live-action-readiness) applies to one outstanding
-ordinary create. A committed pending-order cohort can adopt a working order by exact
-`clientId`. Otherwise, use exact order detail and bounded order-history queries. Query both
+ordinary create or two members of one eligible close wave. A committed pending-order cohort can
+adopt a working order by exact `clientId`. Otherwise, use exact order detail and bounded
+order-history queries. Query both
 canceled and non-canceled history where applicable. A terminal fill quantity must agree with
 the canonical trade data by venue order ID. The journal retains the exact venue ID and the
 greatest observed cumulative fill across restarts. A conflicting venue ID keeps the slot
@@ -674,36 +685,50 @@ back to a build that cannot read the journal.
 [order history](https://www.bitunix.com/api-docs/futures/trade/get_history_orders.html),
 [error codes](https://www.bitunix.com/api-docs/futures/ErrorCode/error_code.html).
 
+For a close wave, send individual placement requests. Require the exact echoed client ID and
+a unique venue order ID from the placement response before continuing. Persist that venue ID
+as identity evidence and retain the reservation until authoritative recovery. An account
+update on the private order stream during the wave invalidates its permission.
+
+An existing serial journal remains readable and keeps its pending evidence. The first wave
+upgrades an empty journal to schema v2 in a transaction with its first reservation. Once that
+occurs, keep a v2-aware build for restart and rollback. A downgrade to a v1-only build requires
+the bot to be stopped and all reservations resolved before the empty journal can be archived
+and reinitialized.
+
 ### Product-admission retry policy
 
-The native connector opts structured exchange error `710003` into the existing per-symbol
-API-unavailable cooldown. This is a local retry policy after an actual failed write, not a
-classification of every market sharing a public product label or proof of account-wide permission.
-The classifier reads the bounded structured exception code, never exception text.
+The native connector starts the per-symbol API-unavailable cooldown after a failed write
+with structured exchange error code `710003`. The cooldown applies to the affected
+symbol's entries for `live.recovery.exchange_symbol_unavailable_cooldown_hours`.
+Held positions retain `tp_only` and stronger explicit modes.
 Bitunix's [stock-perpetual guide](https://www.bitunix.com/hub/helpcenter/article/introduction-to-stock-perpetuals?id=211)
 describes a separate product boundary; its
 [public error-code table](https://www.bitunix.com/api-docs/futures/ErrorCode/error_code.html)
 does not define `710003`.
 
-Keep the original failure, ambiguous-write reconciliation, and execution error-budget charge.
-Only the affected symbol's entries are paused for
-`live.recovery.exchange_symbol_unavailable_cooldown_hours`; unrelated symbols continue.
-Held positions retain `tp_only` and stronger explicit modes. During an active cooldown, an explicit
-reduce-only close does not require the postponed leverage/margin configuration write: native
-`CLOSE` still requires its authoritative `positionId` and all normal account, fill, and risk guards.
-Outside that cooldown, the existing configuration prerequisite is unchanged. Expiry, disabling
-the cooldown, and a new process retain the shared recovery policy; no timer promises venue recovery.
+An ordinary create that receives `710003` leaves its outcome unresolved and consumes the normal
+execution error budget. The journal reservation defers ordinary creates across the account,
+including replacement closes on other symbols. Cancellation and dedicated HSL protection
+remain eligible under their own readiness, risk, and execution checks. The symbol cooldown
+defers leverage and margin configuration for that symbol. An explicit reduce-only close can
+bypass that configuration prerequisite while the cooldown is active. Native `CLOSE` still
+requires the authoritative `positionId` and the normal account, fill, and risk guards.
+
+Recovery of the journal reservation follows the [ordinary creation recovery contract](#recovery-of-ordinary-creations)
+even after cooldown expiry or restart. See [Bitunix create recovery](../../troubleshooting.md#bitunix-ordinary-creates-are-paused)
+for operator checks.
 
 ### Live quotes and candles
 
 The bulk REST ticker omits bid and ask. Use the official public `tickers` WebSocket for
 authoritative top-of-book and last price, splitting the active market set across connections
 because Bitunix permits at most 300 subscriptions per connection. Refresh those subscriptions when
-the active market-ID set changes. Determine cache freshness from the bounded local receipt time;
-retain exchange timestamps only as quote provenance so future-skewed venue timestamps cannot keep a
-stale quote eligible. A targeted ticker request may use one-row REST depth for at most eight missing
-symbols as a bounded startup fallback, with the bid/ask midpoint labeled as its synthetic last
-through ticker normalization and into snapshot provenance. Broad operation must fail instead of
+the active market-ID set changes. Determine cache freshness from the bounded local receipt time
+and preserve that receipt through normalization and the shared quote cache. Exchange timestamps
+remain provenance. A targeted ticker request may use one-row REST depth for at most eight missing
+or expired symbols, with the bid/ask midpoint labeled as its synthetic last through ticker
+normalization and into snapshot provenance. Broad operation must fail instead of
 fanning out one depth request per market or substituting bid/ask for a last trade. When WebSockets
 are explicitly disabled, live market snapshots select this targeted REST path directly without
 opening or waiting for a public ticker socket; unbounded bulk requests and requests above the
@@ -712,8 +737,11 @@ eight-symbol limit fail closed.
 Live snapshots default to targeted ticker reads even with WebSockets enabled. Only requested
 symbols participate in the bounded readiness wait, so an unrelated silent market cannot delay
 protection of a held position. This still uses the shared websocket cache and retains its freshness
-checks and capped depth fallback. An explicit `market_snapshot_ticker_strategy=bulk` remains an
-operator override.
+checks and capped depth fallback. It applies the caller's stricter freshness age and can repair
+an established stream's stale subset without waiting for cold subscriptions. An explicit refresh
+reads the requested symbols from the connector, bypassing the shared snapshot cache. A WebSocket
+observation within the requested age remains eligible at its original receipt time.
+`market_snapshot_ticker_strategy=bulk` remains an operator override for normal reads.
 
 Bitunix klines return at most 200 rows. The live field names are inverted relative to their units:
 `quoteVol` is base quantity and `baseVol` is quote notional; normalize `quoteVol` as CCXT base
@@ -915,7 +943,9 @@ the same adapter. Discover market age by walking bounded daily pages backward, n
 one pre-listing day from the epoch. Historical sizing uses base units and one-way positions.
 Verify the pinned signer hash before native loading.
 
-Use actual order-book quotes because ticker responses lack bid/ask. Keep cross/isolated margin
+Use actual order-book quotes because ticker responses lack bid/ask. Preserve the earliest local
+receipt of the required last-price and top-of-book observations when certifying their freshness.
+Keep cross/isolated margin
 and leverage together in their per-market configuration transaction. Balance is realized USDC
 collateral and must validate the exact requested account, not CCXT's missing-field zero defaults.
 The synchronous balance CLI and asynchronous trading adapter share this validation.

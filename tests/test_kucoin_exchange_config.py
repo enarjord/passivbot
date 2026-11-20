@@ -1,4 +1,6 @@
 import asyncio
+import json
+from contextlib import asynccontextmanager
 import logging
 import math
 import socket
@@ -6,13 +8,109 @@ import types
 
 import pytest
 import ccxt.pro as ccxt_pro
+from ccxt.base.errors import AuthenticationError, InvalidNonce
 
 from exchanges.kucoin import (
     AsyncKucoinBrokerFutures,
     KucoinBot,
     ProKucoinBrokerFutures,
 )
+from exchanges.retry_after import install_ccxt_retry_after
 from market_snapshot import MarketSnapshotProvider
+
+
+@pytest.fixture(
+    params=[AsyncKucoinBrokerFutures, ProKucoinBrokerFutures],
+    ids=["rest", "pro"],
+)
+def kucoin_transport(request, monkeypatch):
+    def build(*response_codes):
+        exchange = request.param({
+            "apiKey": "test-key",
+            "secret": "test-secret",
+            "password": "test-passphrase",
+            "options": {
+                "partner": {
+                    "future": {"id": "test-id", "secret": "test-partner-secret", "name": "test-name"}
+                }
+            },
+        })
+        requests = []
+        throttles = []
+        codes = iter(response_codes)
+        timestamps = iter((1_700_000_000_000, 1_700_000_006_000))
+
+        @asynccontextmanager
+        async def respond(url, *, headers, **kwargs):
+            requests.append((url, headers))
+            code = next(codes)
+            payload = {"code": code, "data": []} if code == "200000" else {"code": code}
+
+            async def text(**_kwargs):
+                return json.dumps(payload)
+
+            yield types.SimpleNamespace(
+                status=200 if code == "200000" else 400,
+                reason="test response", headers={}, text=text,
+            )
+
+        async def throttle(cost):
+            throttles.append(cost)
+
+        monkeypatch.setattr(exchange, "open", lambda: None)
+        monkeypatch.setattr(exchange, "nonce", lambda: next(timestamps))
+        monkeypatch.setattr(exchange, "throttle", throttle)
+        monkeypatch.setattr(exchange, "session", types.SimpleNamespace(
+            get=respond, post=respond, delete=respond, headers={},
+        ))
+        install_ccxt_retry_after(exchange)
+        return exchange, requests, throttles
+
+    return build
+
+
+@pytest.mark.asyncio
+async def test_kucoin_futures_read_retries_rejected_timestamp_with_fresh_signature(
+    kucoin_transport, caplog,
+):
+    exchange, requests, throttles = kucoin_transport("400002", "200000")
+
+    result = await exchange.futuresPrivateGetOrders({"status": "active", "currentPage": 2})
+
+    assert result == {"code": "200000", "data": []}
+    assert len(requests) == 2
+    assert len(throttles) == 2
+    (first_url, first_headers), (retry_url, retry_headers) = requests
+    assert retry_url == first_url
+    assert retry_url.query["currentPage"] == "2"
+    assert int(retry_headers["KC-API-TIMESTAMP"]) > int(first_headers["KC-API-TIMESTAMP"])
+    assert retry_headers["KC-API-SIGN"] != first_headers["KC-API-SIGN"]
+    assert retry_headers["KC-API-PARTNER-SIGN"] != first_headers["KC-API-PARTNER-SIGN"]
+    assert retry_headers["KC-BROKER-NAME"] == first_headers["KC-BROKER-NAME"] == "test-name"
+    assert "rejected read timestamp; retrying once" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint,codes,error_type",
+    [
+        ("futuresPrivateGetOrders", ("400002", "400002"), InvalidNonce),
+        ("futuresPrivateGetOrders", ("400004",), AuthenticationError),
+        ("futuresPrivateGetOrders", ("400002", "400004"), AuthenticationError),
+        ("futuresPrivatePostOrders", ("400002",), InvalidNonce),
+        ("futuresPrivateDeleteOrders", ("400002",), InvalidNonce),
+        ("futuresPublicGetTimestamp", ("400002",), InvalidNonce),
+    ],
+)
+async def test_kucoin_futures_nonce_retry_preserves_failure_boundaries(
+    kucoin_transport, endpoint, codes, error_type
+):
+    exchange, requests, throttles = kucoin_transport(*codes)
+
+    with pytest.raises(error_type):
+        await getattr(exchange, endpoint)()
+
+    assert len(requests) == len(throttles) == len(codes)
 
 
 class DummyTask:

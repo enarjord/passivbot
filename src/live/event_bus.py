@@ -214,6 +214,7 @@ class EventTypes:
     EXECUTION_CREATE_REJECTED = "execution.create_rejected"
     EXECUTION_CREATE_DEFERRED = "execution.create_deferred"
     EXECUTION_CREATE_SKIPPED = "execution.create_skipped"
+    ORDER_CLOSE_REPLACEMENT_TIMING = "order.close_replacement_timing"
     ENTRY_INITIAL_ELIGIBILITY = "entry.initial_eligibility"
     ORDER_CHURN_EVIDENCE = "order.churn_evidence"
     ORDER_CHURN_ADMISSION = "order.churn_admission"
@@ -341,6 +342,7 @@ class ReasonCodes:
     ORDER_CHURN_MARKET_DATA_UNAVAILABLE = "order_churn_market_data_unavailable"
     ACCOUNT_CANCEL_FIRST_BARRIER = "account_cancel_first_barrier"
     UNRESOLVED_CREATE_ATTEMPT = "unresolved_create_attempt"
+    ORDINARY_CREATE_WAVE_STOPPED = "ordinary_create_wave_stopped"
     CANCEL_BATCH_CAPACITY = "cancel_batch_capacity"
     BATCH_CAPACITY = "batch_capacity"
     LENGTH_MISMATCH = "length_mismatch"
@@ -544,6 +546,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EXECUTION_CREATE_REJECTED,
     EventTypes.EXECUTION_CREATE_DEFERRED,
     EventTypes.EXECUTION_CREATE_SKIPPED,
+    EventTypes.ORDER_CLOSE_REPLACEMENT_TIMING,
     EventTypes.ENTRY_INITIAL_ELIGIBILITY,
     EventTypes.ORDER_CHURN_EVIDENCE,
     EventTypes.ORDER_CHURN_ADMISSION,
@@ -1369,6 +1372,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CREATE_REJECTED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_DEFERRED: EventRoute(console=False, text=False),
     EventTypes.EXECUTION_CREATE_SKIPPED: EventRoute(console=True, text=True),
+    EventTypes.ORDER_CLOSE_REPLACEMENT_TIMING: EventRoute(console=False, text=False),
     EventTypes.ENTRY_INITIAL_ELIGIBILITY: EventRoute(console=False, text=False),
     EventTypes.ORDER_CHURN_EVIDENCE: EventRoute(console=False, text=False),
     EventTypes.ORDER_CHURN_ADMISSION: EventRoute(console=False, text=False),
@@ -2013,6 +2017,17 @@ def _format_position_console_percentage(value: float | None) -> str:
     return f"{percentage:.4f}%"
 
 
+def format_entry_distance_percent(value: float | None) -> str:
+    if not isinstance(value, (int, float)):
+        return "-"
+    percentage = value * 100.0
+    if not math.isfinite(percentage):
+        return "-"
+    if percentage == 0.0:
+        return "0.00%"
+    return f"{percentage:+.2f}%"
+
+
 def _format_console_label(value: object) -> str:
     text = _ANSI_ESCAPE_RE.sub("", str(value or ""))
     text = _CONTROL_CHARACTER_RE.sub(" ", text)
@@ -2058,6 +2073,11 @@ def _format_console_position_changed(event: LiveEvent) -> str:
             "uPnL=" f"{_format_console_number(_data_number(data, 'upnl'))}",
         )
     )
+    entry_distance = format_entry_distance_percent(
+        _data_number(data, "signed_entry_distance_fraction")
+    )
+    if entry_distance != "-":
+        metrics += f" entry_dist={entry_distance}"
     return (
         f"[pos] {action:>7} {coin:<10} {pside:<5} {old_leg:<22} "
         f"-> {new_leg:<22} | {metrics}"
@@ -2661,9 +2681,11 @@ def _console_unstuck_selection_summary(event: LiveEvent) -> list[str]:
     current_price = _data_number(data, "current_price")
     if current_price:
         parts.append(f"current={current_price:g}")
-    diff_pct = _data_number(data, "price_change_percent")
-    if diff_pct is not None:
-        parts.append(f"pos_pnl_dist={diff_pct:.4f}%")
+    entry_distance = format_entry_distance_percent(
+        _data_number(data, "signed_entry_distance_fraction")
+    )
+    if entry_distance != "-":
+        parts.append(f"entry_dist={entry_distance}")
     allowance = _data_number(data, "allowance")
     if allowance is not None:
         parts.append(f"allowance={allowance:g}")

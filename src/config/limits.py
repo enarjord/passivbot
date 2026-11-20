@@ -11,7 +11,6 @@ import hjson
 from .metrics import canonical_metric_name, canonicalize_limit_name, canonicalize_metric_name, reject_retired_metric
 from .reducers import (
     LIMIT_REDUCER_ALIASES,
-    REDUCER_ALIASES,
     SUPPORTED_REDUCERS,
     reducer_from_aliases,
 )
@@ -122,13 +121,13 @@ def _cli_scalar_op_to_internal_penalize_if(token: str) -> Optional[str]:
 
 def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
     if isinstance(raw_entry, dict):
-        return _normalize_limit_entry_preserve_extras(raw_entry)
+        return _normalize_cli_limit_object(raw_entry)
     if not isinstance(raw_entry, str) or not raw_entry.strip():
         raise ValueError("CLI limit entries must be non-empty strings.")
 
     parsed = _parse_jsonish(raw_entry)
     if isinstance(parsed, dict):
-        return _normalize_limit_entry_preserve_extras(parsed)
+        return _normalize_cli_limit_object(parsed)
     if parsed is not None:
         raise ValueError("CLI --limit expects a single limit object, not a list.")
 
@@ -168,9 +167,9 @@ def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, An
         key, value = token.split("=", 1)
         key = key.strip().lower()
         value = value.strip()
-        if key in REDUCER_ALIASES:
-            # Preserve the supplied alias until normalization so conflicting
-            # aliases are detected instead of silently overwriting each other.
+        if key in entry:
+            raise ValueError(f"CLI --limit option {key!r} was specified more than once.")
+        if key == "reducer":
             entry[key] = value
         elif key == "scenario":
             entry["scenario"] = None if value.lower() == "null" else value
@@ -183,6 +182,21 @@ def parse_limit_cli_entry(raw_entry: Union[str, Dict[str, Any]]) -> Dict[str, An
             )
 
     return _normalize_limit_entry_preserve_extras(entry)
+
+
+def _normalize_cli_limit_object(entry: dict[str, Any]) -> dict[str, Any]:
+    for key in LIMIT_REDUCER_ALIASES:
+        if key != "reducer" and key in entry:
+            raise ValueError(f"Unsupported CLI limit field {key!r}; use 'reducer'.")
+    return _normalize_limit_entry_preserve_extras(entry)
+
+
+def parse_limit_cli_payload(raw_limits: str | list[dict]) -> list[dict[str, Any]]:
+    """Parse the whole list supplied by --limits."""
+    entries = _parse_jsonish(raw_limits) if isinstance(raw_limits, str) else raw_limits
+    if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
+        raise ValueError("CLI --limits expects a JSON or HJSON list of limit objects.")
+    return [_normalize_cli_limit_object(entry) for entry in entries]
 
 
 def parse_limit_cli_entries(raw_entries: List[Union[str, Dict[str, Any]]]) -> List[Dict[str, Any]]:
@@ -296,8 +310,9 @@ def _normalize_limit_entry(entry: Any) -> Dict[str, Any]:
         raise ValueError("Limit entries must include a 'metric' field.")
     reject_retired_metric(metric, path="config.optimize.limits.metric")
     metric = canonicalize_metric_name(str(metric))
-    enabled = payload.get("enabled")
-    enabled = True if enabled is None else bool(enabled)
+    enabled = payload.get("enabled", True)
+    if type(enabled) is not bool:
+        raise TypeError(f"Limit enabled flag for {metric} must be a boolean.")
     raw_penalize_if = payload.get("penalize_if")
     if raw_penalize_if is None and not enabled:
         penalize_if = "greater_than"

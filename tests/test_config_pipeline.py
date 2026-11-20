@@ -599,7 +599,7 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
         compiled["bot"]["long"]["forager_log_range_ema_span_minutes"]
         == canonical["bot"]["long"]["forager"]["log_range_ema_span_minutes"]
     )
-    assert compiled["bot"]["long"]["filter_volatility_drop_pct"] == pytest.approx(0.0)
+    assert "filter_volatility_drop_pct" not in compiled["bot"]["long"]
     assert compiled["optimize"]["bounds"] == canonical["optimize"]["bounds"]
     assert (
         _strategy_side(compiled, "long")["entry"]["ema_span_0_minutes"]

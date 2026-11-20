@@ -1686,7 +1686,7 @@ class TestPrepareHLCVSCombined:
             def get_symbol(self, coin):
                 return f"{coin}/USDT:USDT"
 
-            def update_date_range(self, start_ts, end_ts):
+            def update_timestamp_range(self, start_ts, end_ts):
                 self.start_ts = start_ts
                 self.end_ts = end_ts
 
@@ -1780,7 +1780,7 @@ class TestPrepareHLCVSCombined:
             def get_symbol(self, coin):
                 return f"{coin}/USDT:USDT"
 
-            def update_date_range(self, start_ts, end_ts):
+            def update_timestamp_range(self, start_ts, end_ts):
                 self.start_ts = start_ts
                 self.end_ts = end_ts
 
@@ -1870,7 +1870,7 @@ class TestPrepareHLCVSCombined:
             def get_symbol(self, coin):
                 return f"{coin}/USDT:USDT"
 
-            def update_date_range(self, start_ts, end_ts):
+            def update_timestamp_range(self, start_ts, end_ts):
                 self.start_ts = int(start_ts)
                 self.end_ts = int(end_ts)
 
@@ -3109,7 +3109,7 @@ async def test_combined_force_refetch_btc_prices_rejects_truncated_v2_range(monk
             self.force_refetch_gaps = bool(kwargs.get("force_refetch_gaps", False))
             self.cc = None
 
-        def update_date_range(self, start_ts, end_ts):
+        def update_timestamp_range(self, start_ts, end_ts):
             self.start_ts = int(start_ts)
             self.end_ts = int(end_ts)
 
@@ -3168,7 +3168,7 @@ async def test_combined_btc_source_dir_uses_source_dir_only(monkeypatch, tmp_pat
             self.exchange = exchange
             self.cc = None
 
-        def update_date_range(self, start_ts, end_ts):
+        def update_timestamp_range(self, start_ts, end_ts):
             self.start_ts = int(start_ts)
             self.end_ts = int(end_ts)
 

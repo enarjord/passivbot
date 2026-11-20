@@ -37,16 +37,6 @@ def shared_evaluation_period(payloads):
     return periods[0] if periods and all(item == periods[0] for item in periods) else {}
 
 
-def attach_result_metrics(config, *, metrics=None, suite_metrics=None):
-    config.pop("metrics", None)
-    config.pop("suite_metrics", None)
-    if metrics is not None:
-        config["metrics"] = metrics
-    if suite_metrics is not None:
-        config["suite_metrics"] = suite_metrics
-    return config
-
-
 def decode_metric_value(payload, name):
     if name not in payload:
         raise MetricAggregationError(f"required metric {name!r} is missing")

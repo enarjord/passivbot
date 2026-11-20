@@ -70,9 +70,10 @@ def _unit_config(patch):
                 target[key] = deepcopy(value)
 
     merge(config, patch)
-    from config.bot import apply_forager_internal_aliases
+    from config.shared_bot import inject_flattened_shared_bot_side
 
-    apply_forager_internal_aliases(config)
+    for side in ("long", "short"):
+        inject_flattened_shared_bot_side(config["bot"][side])
     return config
 
 
@@ -1353,7 +1354,6 @@ async def test_log_position_changes_batches_market_snapshot_request(monkeypatch)
         "BTC/USDT:USDT": 1.0,
         "ETH/USDT:USDT": 1.0,
     }
-    bot.pside_int_map = {"long": 1, "short": -1}
     bot.get_raw_balance = lambda: 1_000.0
     bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit_ratio" else 0.0
     bot.bot_value = lambda pside, key: 10.0
@@ -1373,9 +1373,6 @@ async def test_log_position_changes_batches_market_snapshot_request(monkeypatch)
         passivbot_module.pbr,
         "qty_to_cost",
         lambda qty, price, c_mult: abs(qty) * price * c_mult,
-    )
-    monkeypatch.setattr(
-        passivbot_module.pbr, "calc_pside_adverse_price_change_fraction", lambda *args: 0.0, raising=False
     )
 
     await bot.log_position_changes(
@@ -1430,7 +1427,6 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
     bot = _unit_bot()
     bot.inverse = False
     bot.c_mults = {"XMR/USDT:USDT": 1.0}
-    bot.pside_int_map = {"long": 1, "short": -1}
     bot.get_raw_balance = lambda: 1_000.0
     bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit_ratio" else 0.0
     bot.bot_value = lambda pside, key: 10.0
@@ -1452,16 +1448,13 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
     )
 
     async def _get_live_market_snapshots(symbols, **kwargs):
-        return {symbol: SimpleNamespace(last=0.0, fetched_ms=passivbot_module.utc_ms()) for symbol in symbols}
+        return {symbol: SimpleNamespace(last=98.0, fetched_ms=passivbot_module.utc_ms()) for symbol in symbols}
 
     bot._get_live_market_snapshots = _get_live_market_snapshots
     monkeypatch.setattr(
         passivbot_module.pbr,
         "qty_to_cost",
         lambda qty, price, c_mult: abs(qty) * price * c_mult,
-    )
-    monkeypatch.setattr(
-        passivbot_module.pbr, "calc_pside_adverse_price_change_fraction", lambda *args: 0.0, raising=False
     )
 
     with caplog.at_level(logging.INFO):
@@ -1501,6 +1494,9 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
     assert event.data["old_size"] == pytest.approx(old_size)
     assert event.data["new_size"] == pytest.approx(new_size)
     assert event.data["size_delta"] == pytest.approx(new_size - old_size)
+    expected = -0.02 if pside == "long" else 0.02
+    assert event.data["signed_entry_distance_fraction"] == pytest.approx(expected)
+    assert f"{expected * 100:+.2f}%" in pos_logs[0]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -1511,7 +1507,6 @@ async def test_log_position_changes_suppresses_legacy_table_when_event_console_a
     bot = _unit_bot()
     bot.inverse = False
     bot.c_mults = {"XMR/USDT:USDT": 1.0}
-    bot.pside_int_map = {"long": 1, "short": -1}
     bot.get_raw_balance = lambda: 1_000.0
     bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit_ratio" else 0.0
     bot.bot_value = lambda pside, key: 10.0
@@ -1542,9 +1537,6 @@ async def test_log_position_changes_suppresses_legacy_table_when_event_console_a
         "qty_to_cost",
         lambda qty, price, c_mult: abs(qty) * price * c_mult,
     )
-    monkeypatch.setattr(
-        passivbot_module.pbr, "calc_pside_adverse_price_change_fraction", lambda *args: 0.0, raising=False
-    )
 
     with caplog.at_level(logging.INFO):
         await bot.log_position_changes(
@@ -1573,6 +1565,7 @@ async def test_log_position_changes_suppresses_legacy_table_when_event_console_a
     assert event.reason_code == "added"
     assert event.data["old_size"] == pytest.approx(0.1)
     assert event.data["new_size"] == pytest.approx(0.3)
+    assert "signed_entry_distance_fraction" not in event.data
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

@@ -28,6 +28,7 @@ from config.access import require_config_value, require_live_value
 from config.overrides import parse_overrides
 from config.param_paths import require_existing_config_path
 from config.parse import load_raw_config
+from config.result_records import build_result_record
 from config.scenario_overrides import (
     normalize_scenario_overrides as _normalize_scenario_overrides,
 )
@@ -61,7 +62,6 @@ from warmup_utils import (
 from ohlcv_utils import align_and_aggregate_hlcvs
 from shared_arrays import SharedArraySpec
 from metrics_schema import (
-    attach_result_metrics,
     flatten_metric_stats,
     merge_suite_payload,
 )
@@ -2404,7 +2404,7 @@ async def run_backtest_suite_async(
     config: Dict[str, Any],
     suite_cfg: Dict[str, Any],
     *,
-    disable_plotting: bool,
+    disable_plotting: bool = False,
     suite_output_root: Optional[Path] = None,
     report_options=None,
 ) -> SuiteSummary:
@@ -2648,16 +2648,21 @@ async def run_backtest_suite_async(
         },
     }
     (suite_dir / "suite_summary.json").write_text(json.dumps(summary_payload, indent=2))
-    saved_config = attach_result_metrics(
-        sanitize_prepared_config_for_dump(config), suite_metrics=suite_metrics
-    )
+    saved_config = sanitize_prepared_config_for_dump(config)
     saved_config["backtest"].update(
         suite_enabled=True,
         exchanges=deepcopy(suite_cfg.get("exchanges") or base_exchanges),
         scenarios=deepcopy(suite_cfg["scenarios"]),
         reducer=deepcopy(reducer_cfg),
     )
-    dump_config(saved_config, str(suite_dir / "config.json"))
+    dump_config(
+        build_result_record(
+            saved_config,
+            provenance={"suite_summary": "suite_summary.json"},
+            suite_metrics=suite_metrics,
+        ),
+        str(suite_dir / "config.json"),
+    )
 
     return SuiteSummary(
         suite_id=suite_dir.name,
@@ -2678,7 +2683,7 @@ def run_backtest_suite_sync(
     config_path_str = str(config_path)
     if config_path_str in {"", "."}:
         config_path_str = None
-    source, base_path, raw = load_input_config(config_path_str)
+    source, base_path, raw = load_input_config(config_path_str, allow_result_records=True)
     suite_override = None
     if suite_config_path:
         suite_override = load_suite_override_config(

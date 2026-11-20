@@ -86,8 +86,9 @@ transport, request fresh account confirmation after the wave. Creates in the sam
 plan wait for a fresh ordinary plan. This does not change the reconciliation or
 create-only replacement churn contracts.
 
-Bitunix ordinary creates reserve one durable submission slot per configured account. Record the
-exact wire request before placement and recheck transport admission after persisting it. A proven
+Bitunix ordinary creates reserve one durable submission per configured account, or one per
+submitted member of its bounded create wave. Record the exact wire request before placement
+and recheck transport admission after persisting it. A proven
 pre-send denial or a definitive placement rejection can release the slot. An acknowledgment,
 timeout, duplicate client ID response, or lookup miss alone cannot release it. A fresh
 authoritative account cohort may adopt an exact working order. Exact terminal order evidence
@@ -95,6 +96,18 @@ requires subsequent account and fill confirmation, with explicit cumulative exec
 accounted for. Recovery can defer ordinary creates across restart. It has no time-based release
 and does not block stale-order cancellation or dedicated protection dispatch. Rust still owns
 the next ordinary plan. See [Bitunix Futures](features/exchange_integrations.md#bitunix-futures).
+
+Bitunix may submit two leading ordinary post-only, reduce-only limit closes serially from one
+current Rust plan. Require distinct positions on different symbols, sufficient account order
+capacity, and enough position size for each new close plus authoritative resting close
+remainders. The original plan must have no cancels, panic, unstuck, or risk-critical creates.
+Both HSL and the portfolio realized-loss gate must be disabled. Use the existing admission and
+create-only churn gates. Recheck the bound account cohort, position IDs, planning snapshot,
+quote freshness, and wire fields at transport. The second member also has a deadline of at
+most one configured execution-delay interval from wave start. Any invalidation, pre-send
+denial, or uncertain, inexact, or rejected placement stops the wave. Request full confirmation
+after the wave if any member entered transport. On restart recover each submitted member
+independently and hold ordinary creates until all pending attempts are resolved.
 
 The live execution owner backs off transport failures, including exchange backpressure,
 with an interruptible bounded schedule and logs persistent outages. A valid request-local

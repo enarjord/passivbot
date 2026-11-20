@@ -7,6 +7,7 @@ import pytest
 
 import passivbot
 from live import close_replacement_diagnostics, executor
+from live.event_bus import EventTypes
 from live.freshness import FreshnessLedger
 from live.order_churn_gate import OrderChurnGateState
 from live.reconciler import annotate_order_deltas
@@ -80,11 +81,176 @@ def _observe(bot, monkeypatch, *, now_ms, resting=(), pending=(), surfaces=_SURF
     Passivbot._finalize_authoritative_refresh_consistency(bot, surfaces)
 
 
+def _record_timings(bot):
+    timings = []
+
+    def record(kind, _tags, payload, **envelope):
+        if kind == EventTypes.ORDER_CLOSE_REPLACEMENT_TIMING:
+            timings.append((payload, envelope))
+
+    bot._monitor_record_event = record
+    return timings
+
+
+@pytest.mark.asyncio
+async def test_replacement_timing_requires_post_cancel_fills_and_the_admitted_order(
+    scenario, monkeypatch
+):
+    bot, old, new, cancel_wave = scenario
+    cancel_wave["id"] = 4
+    timings = _record_timings(bot)
+    ledger = bot.freshness_ledger
+    ledger.begin_epoch()
+    ledger.stamp("fills", now_ms=900)
+    close_replacement_diagnostics.observe_plan(bot, cancel_wave, [old], [new], 900)
+    await _cancel(bot, old, cancel_wave, monkeypatch)
+
+    # Position/order refresh and then one fills refresh still leave the
+    # required post-cancel fills epoch outstanding.
+    bot._authoritative_pending_confirmations["fills"] = ledger.epoch + 3
+    _observe(bot, monkeypatch, now_ms=1400, surfaces=_SURFACES | {"balance"})
+    _observe(bot, monkeypatch, now_ms=1700, surfaces={"fills"})
+    close_replacement_diagnostics.observe_confirmation(bot, 1700)
+    _observe(bot, monkeypatch, now_ms=2100, surfaces={"fills"})
+    close_replacement_diagnostics.observe_confirmation(bot, 2100)
+
+    create_wave = {"id": 7}
+    amended = {**new, "price": 103.0}
+    alternative = {**new, "price": 104.0}
+    # More than one candidate makes the association ambiguous. This also
+    # ensures the reported first plan excludes the ambiguous candidate set.
+    close_replacement_diagnostics.observe_plan(
+        bot, {"id": 6}, [], [amended, alternative], 2400
+    )
+    close_replacement_diagnostics.observe_admission(bot, [amended], 2450)
+    close_replacement_diagnostics.observe_create_sent(bot, {"id": 6}, amended, 2500)
+    assert not timings
+
+    close_replacement_diagnostics.observe_plan(bot, create_wave, [], [amended], 2700)
+    close_replacement_diagnostics.observe_create_sent(bot, create_wave, amended, 2750)
+    close_replacement_diagnostics.observe_admission(bot, [dict(amended)], 2800)
+    close_replacement_diagnostics.observe_create_sent(
+        bot, create_wave, dict(amended), 2850
+    )
+    assert not timings
+
+    close_replacement_diagnostics.observe_admission(bot, [amended], 2900)
+    close_replacement_diagnostics.observe_create_sent(bot, create_wave, amended, 3100)
+    close_replacement_diagnostics.observe_create_sent(bot, create_wave, amended, 3200)
+    _observe(bot, monkeypatch, now_ms=4000, resting=[{**amended, "id": "new"}])
+
+    [(timing, envelope)] = timings
+    assert timing == {
+        "outcome": "create_sent",
+        "elapsed_ms": 2100,
+        "account_confirmed_ms": 1100,
+        "first_plan_ms": 1700,
+        "create_admitted_ms": 1900,
+        "cancel_wave_id": 4,
+        "create_wave_id": 7,
+    }
+    assert envelope["symbol"] == _SYMBOL
+    assert envelope["pside"] == "long"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sink_fails", [False, True])
+async def test_replacement_timing_uses_guarded_send_and_isolates_sink_failure(
+    sink_fails, scenario, monkeypatch, caplog
+):
+    bot, old, new, cancel_wave = scenario
+    cancel_wave["id"] = 4
+    close_replacement_diagnostics.observe_plan(bot, cancel_wave, [old], [new], 900)
+    await _cancel(bot, old, cancel_wave, monkeypatch)
+    _observe(bot, monkeypatch, now_ms=1500, surfaces=_SURFACES | {"balance", "fills"})
+
+    timing_calls = []
+    order_events = []
+    transport_calls = []
+    fills_settling = True
+    now_ms = 2300
+    close_replacement_diagnostics.observe_reconciled_plan(bot, [new], 1900)
+
+    def record(kind, _tags, payload, **_envelope):
+        if kind == EventTypes.ORDER_CLOSE_REPLACEMENT_TIMING:
+            timing_calls.append(payload)
+            if sink_fails:
+                raise RuntimeError("private sink failure detail")
+
+    async def cancel(orders):
+        assert not orders
+        return []
+
+    async def keep_market_snapshot(_bot, orders, **_kwargs):
+        return orders
+
+    async def create(orders):
+        nonlocal now_ms
+        [order] = orders
+        assert order is new
+        assert not timing_calls
+        # This callback marks the final guarded transport admission. Entering
+        # the connector alone has not sent an order or emitted its timing.
+        now_ms = 2700
+        executor.record_create_connector_admission(bot, order)
+        transport_calls.append(order)
+        return [{**order, "id": "new"}]
+
+    bot._monitor_record_event = record
+    bot.execute_cancellations_parent = cancel
+    bot.execute_orders_parent = lambda orders: executor.execute_orders_parent(bot, orders)
+    bot.execute_orders = create
+    bot.log_order_action = lambda *_a, **_kw: None
+    bot._is_market_execution_order = lambda _order: False
+    bot._log_order_action_summary = lambda *_a: None
+    bot.did_create_order = lambda order: bool(order.get("id"))
+    bot.add_to_recent_order_executions = lambda _order: None
+    bot.add_new_order = lambda *_a, **_kw: None
+    bot._health_orders_placed = 0
+    bot.get_raw_balance = lambda: 100.0
+    bot.order_was_recently_updated = lambda _order: 0
+    bot._order_requires_exchange_config_before_create = lambda _order: False
+    monkeypatch.setattr(passivbot, "utc_ms", lambda: now_ms)
+    monkeypatch.setattr(Passivbot, "_filter_fresh_market_snapshot_creations", keep_market_snapshot)
+    monkeypatch.setattr(Passivbot, "_record_emitted_order_custom_id", lambda *_a, **_kw: None)
+    monkeypatch.setattr(Passivbot, "_shutdown_requested", lambda *_args: False)
+    monkeypatch.setattr(Passivbot, "_track_order_wave_confirmation", lambda *_args: None)
+    monkeypatch.setattr(Passivbot, "_log_order_wave_summary", lambda *_args: None)
+    monkeypatch.setattr(
+        executor.position_fill_sync, "permits", lambda *_args: not fills_settling
+    )
+    monkeypatch.setattr(
+        Passivbot, "_emit_execution_order_event",
+        lambda _bot, **event: order_events.append(event["event_type"]),
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        await executor.execute_order_plan(bot, [], [new])
+        assert not transport_calls
+        assert not timing_calls
+        fills_settling = False
+        now_ms = 2400
+        await executor.execute_order_plan(bot, [], [new])
+
+    assert transport_calls == [new]
+    assert order_events == [EventTypes.EXECUTION_CREATE_SENT, EventTypes.EXECUTION_CREATE_SUCCEEDED]
+    [timing] = timing_calls
+    assert timing["outcome"] == "create_sent"
+    assert timing["account_confirmed_ms"] == 500
+    assert timing["first_plan_ms"] == 900
+    assert timing["create_admitted_ms"] == 1400
+    assert timing["create_action_index"] == 0
+    assert timing["last_create_defer"] == "position_fill_settling"
+    assert timing["elapsed_ms"] == 1700
+    assert "private sink failure detail" not in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_delay_requires_current_uncovered_cohort_and_reports_restored_quantity(
     scenario, monkeypatch, caplog
 ):
     bot, old, new, wave = scenario
+    timings = _record_timings(bot)
     close_replacement_diagnostics.observe_plan(bot, wave, [old], [new], 900)
     await _cancel(bot, old, wave, monkeypatch)
     # The original order is still visible, only one surface refreshed, or the
@@ -113,6 +279,12 @@ async def test_delay_requires_current_uncovered_cohort_and_reports_restored_quan
     assert "last_planning_defer=fills" in caplog.messages[0]
     assert "resting close observed" in caplog.messages[1]
     assert "resting_close_qty=1.5/2" in caplog.messages[1]
+    assert [
+        (timing["outcome"], timing["elapsed_ms"])
+        for timing, _envelope in timings
+    ] == [("still_waiting", 60_030), ("resting_close_observed", 63_000)]
+    assert timings[0][0]["last_missing_surfaces"] == ["fills"]
+    assert all("account_confirmed_ms" not in timing for timing, _envelope in timings)
 
 
 @pytest.mark.asyncio
@@ -151,6 +323,7 @@ async def test_flat_or_changed_intent_clears_warning_without_claiming_coverage(
     bot, old, new, wave = scenario
     close_replacement_diagnostics.observe_plan(bot, wave, [old], [new], 900)
     await _cancel(bot, old, wave, monkeypatch)
+    timings = _record_timings(bot)
     executor._observe_close_create_defer(bot, [new], "state_change_detected")
     other_scope = {**new, "position_side": "short", "side": "buy"}
     executor._observe_close_create_defer(bot, [other_scope], "account_cancel_first_barrier")
@@ -169,6 +342,12 @@ async def test_flat_or_changed_intent_clears_warning_without_claiming_coverage(
     assert "last_planning_defer=fills" in caplog.messages[0]
     assert resolution in caplog.messages[1]
     assert len(caplog.records) == 2
+    outcome = "position_closed" if resolution == "position closed" else "no_close_in_plan"
+    assert [timing["outcome"] for timing, _envelope in timings] == [
+        "still_waiting",
+        outcome,
+    ]
+    assert timings[0][0]["last_create_defer"] == "state_change_detected"
     assert not bot._console_close_replacements
 
 

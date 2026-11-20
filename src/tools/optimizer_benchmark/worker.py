@@ -402,7 +402,9 @@ def _authored_result_vectors(configs, evaluator):
             vector=vector, metrics=None, template=evaluator.config,
             build_config_fn=build_config, overrides_fn=optimize.optimizer_overrides,
         )
-        vectors.add(tuple(get_path(recorded, path) for _key, path in evaluator.key_paths))
+        # The worker imports the target revision's recorder, which may predate envelopes.
+        authored = recorded.get("config", recorded)
+        vectors.add(tuple(get_path(authored, path) for _key, path in evaluator.key_paths))
     return vectors
 
 
@@ -505,13 +507,19 @@ def search_run(entry, arrays, args):
         last_timestamp_ms = int(arrays[2][-1])
         for record_row in records:
             saved = record_row["result"]
+            candidate = saved.get("config", saved)
+            if "result_version" in saved:
+                # The reference pass replays the same prepared candle columns.
+                candidate = {**candidate, "backtest": {
+                    **candidate["backtest"], "coins": saved["provenance"]["backtest_coins"],
+                }}
             source = saved["metrics"].get("sources", {}).get(exchange, {})
             if source.get("actual_end_timestamp_ms") == source.get("intended_end_timestamp_ms") == last_timestamp_ms:
-                vector = tuple(get_path(saved, path) for _key, path in base.key_paths)
+                vector = tuple(get_path(candidate, path) for _key, path in base.key_paths)
                 completed_vectors.add(vector)
                 if vector in authored_vectors:
                     completed_authored[vector] = saved["metrics"]
-            reference_rows.append(cpu_candidate((saved, arrays[0], entry["markets"], arrays[1], arrays[2],
+            reference_rows.append(cpu_candidate((candidate, arrays[0], entry["markets"], arrays[1], arrays[2],
                                                  exchange, names)))
             from metrics_schema import copy_metric_value
             selected = {"definition_version": saved["metrics"]["definition_version"]}

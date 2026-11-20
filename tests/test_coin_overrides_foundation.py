@@ -5,11 +5,12 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from config.load import prepare_config
+from config.load import load_prepared_config, prepare_config
 from config.overrides import parse_overrides
 from config.runtime_compile import compile_runtime_config
 from config.schema import get_expanded_config_prototype, get_template_config
 from config.strategy import merge_runtime_bot_side
+from config_utils import dump_config, sanitize_prepared_config_for_dump
 from passivbot import Passivbot
 
 
@@ -102,15 +103,11 @@ def test_partial_file_extracts_only_explicit_values_and_inline_wins():
     }
 
 
-@pytest.mark.parametrize(
-    ("value", "error", "message"),
-    [
-        ("false", TypeError, "must be numeric or boolean, not a string"),
-        (None, TypeError, "may not be null"),
-    ],
-)
-def test_invalid_boolean_override_types_fail(value, error, message):
-    with pytest.raises(error, match=message):
+@pytest.mark.parametrize("value", ["false", None])
+def test_invalid_boolean_override_types_fail(value):
+    with pytest.raises(
+        TypeError, match=r"coin_overrides\.BTC\.bot\.long\.unstuck\.enabled must be a boolean"
+    ):
         _parse({"BTC": {"bot": {"long": {"unstuck": {"enabled": value}}}}})
 
 
@@ -215,6 +212,47 @@ def test_runtime_compilation_after_parsing_preserves_normalized_patch():
         runtime_config["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["exposure_trigger_ratio"]
         == 0.0
     )
+
+
+def test_exported_runtime_config_round_trips_canonical_coin_policy(tmp_path):
+    patch = {
+        "bot": {
+            "long": {
+                "strategy": {
+                    "trailing_martingale": {"entry": {"initial_qty_fraction": 0.02}}
+                },
+                "unstuck": {"enabled": False, "ema_distance_fraction": 0.012},
+                "hsl": {"drawdown_threshold_fraction": 0.19},
+                "wallet_exposure_limit_ratio": 0.125,
+            }
+        }
+    }
+    source = get_template_config()
+    source["bot"]["portfolio"]["hsl"]["scope"] = "coin"
+    source["coin_overrides"] = {"BTC": patch}
+    prepared = prepare_config(source, verbose=False)
+    compiled = compile_runtime_config(prepared, runtime="live")
+    assert compiled["coin_overrides"] == prepared["coin_overrides"] == {"BTC": patch}
+
+    path = tmp_path / "export.json"
+    dump_config(sanitize_prepared_config_for_dump(compiled), str(path))
+    reloaded = load_prepared_config(str(path), verbose=False, runtime="live")
+    assert reloaded["coin_overrides"] == compiled["coin_overrides"]
+
+    symbol = "BTC/USDT:USDT"
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = reloaded
+    bot.coin_overrides = {symbol: reloaded["coin_overrides"]["BTC"]}
+    native = merge_runtime_bot_side(
+        reloaded["bot"]["long"], pside="long", override_side=patch["bot"]["long"]
+    )
+    for key, value in {
+        "unstuck_enabled": False,
+        "unstuck_ema_distance_fraction": 0.012,
+        "hsl_drawdown_threshold_fraction": 0.19,
+        "wallet_exposure_limit_ratio": 0.125,
+    }.items():
+        assert native[key] == bot.bp("long", key, symbol) == value
 
 
 def test_unknown_and_disallowed_inline_paths_fail():

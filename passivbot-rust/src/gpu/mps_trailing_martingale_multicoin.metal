@@ -477,6 +477,7 @@ struct TrailingMartingaleMulticoinSideState {
     float ema0[MAX_COINS];
     float ema1[MAX_COINS];
     float ema2[MAX_COINS];
+    float ema_residual[3][MAX_COINS];
     float volatility_1m[MAX_COINS];
     float volatility_1h[MAX_COINS];
     AdaptiveTiming adaptive[MAX_COINS];
@@ -2796,6 +2797,9 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.ema0[c] = seed_close;
         side.ema1[c] = seed_close;
         side.ema2[c] = seed_close;
+        side.ema_residual[0][c] = 0.0f;
+        side.ema_residual[1][c] = 0.0f;
+        side.ema_residual[2][c] = 0.0f;
         side.volatility_1m[c] = 0.0f;
         side.volatility_1h[c] = 0.0f;
         side.forager_volume_ema[c] = seed_volume;
@@ -2947,6 +2951,17 @@ inline float accumulate_tm_multicoin_side_unrealized_pnl(
     return accumulator;
 }
 
+// Retain the discarded part of each FP32 update. Its influence decays at the
+// same rate as the scalar EMA, including when an update is below one price ULP.
+inline void advance_tm_entry_ema(
+    thread float& ema, thread float& residual, float close, float alpha
+) {
+    const float increment = fma(alpha, close - ema, (1.0f - alpha) * residual);
+    const float next = ema + increment;
+    residual = increment - (next - ema);
+    ema = next;
+}
+
 inline void update_tm_multicoin_side_indicators(
     thread TrailingMartingaleMulticoinSideState& side,
     thread const TrailingMartingaleMulticoinSideConfig& config,
@@ -2985,14 +3000,14 @@ inline void update_tm_multicoin_side_indicators(
 #if PASSIVBOT_UNSTUCK_EMA_ENABLED
         update_unstuck_ema_band(side.unstuck_ema[c], close);
 #endif
-        side.ema0[c] = fma(
-            side.alpha0_coin[c], close - side.ema0[c], side.ema0[c]
+        advance_tm_entry_ema(
+            side.ema0[c], side.ema_residual[0][c], close, side.alpha0_coin[c]
         );
-        side.ema1[c] = fma(
-            side.alpha1_coin[c], close - side.ema1[c], side.ema1[c]
+        advance_tm_entry_ema(
+            side.ema1[c], side.ema_residual[1][c], close, side.alpha1_coin[c]
         );
-        side.ema2[c] = fma(
-            side.alpha2_coin[c], close - side.ema2[c], side.ema2[c]
+        advance_tm_entry_ema(
+            side.ema2[c], side.ema_residual[2][c], close, side.alpha2_coin[c]
         );
         if (side.alpha_1m_coin[c] > 0.0f) {
             side.volatility_1m[c] = fma(
@@ -3037,6 +3052,9 @@ inline void update_tm_multicoin_side_indicators(
             side.ema0[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count, lo, bootstrap_counts[c * 10 + 0], 0, observed);
             side.ema1[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count, mid, bootstrap_counts[c * 10 + 1], 0, observed);
             side.ema2[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count, hi, bootstrap_counts[c * 10 + 2], 0, observed);
+            side.ema_residual[0][c] = 0.0f;
+            side.ema_residual[1][c] = 0.0f;
+            side.ema_residual[2][c] = 0.0f;
             if (side.alpha_1m_coin[c] > 0.0f)
                 side.volatility_1m[c] = bootstrap_market_ema(bars, hour_log_ranges, k, first_valid, c, coin_count,
                     coin_override_or(coin_overrides, c, 3, config.log_range_ema_span_candles), bootstrap_counts[c * 10 + 6], 1, observed);
@@ -3590,9 +3608,9 @@ inline int select_tm_multicoin_unstuck_coin(
     int coin_count,
     bool short_side,
     int effective_n_positions,
-    thread float& selected_diff
+    thread float& selected_entry_distance_fraction
 ) {
-    selected_diff = INFINITY;
+    selected_entry_distance_fraction = -INFINITY;
 #if PASSIVBOT_UNSTUCK_ENABLED
     if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
     const float effective_wel = config.twel
@@ -3682,14 +3700,14 @@ inline int select_tm_multicoin_unstuck_coin(
             if (!triggered) continue;
         }
 #endif
-        const float pprice_diff = short_side
-            ? price_now / side.pprice[c] - 1.0f
-            : 1.0f - price_now / side.pprice[c];
-        if (!isfinite(pprice_diff)) continue;
-        if (selected_coin < 0 || pprice_diff < selected_diff
-            || (pprice_diff == selected_diff && c < selected_coin)) {
+        const float signed_entry_distance_fraction = calc_signed_entry_distance_fraction(
+            short_side, side.pprice[c], price_now
+        );
+        if (!isfinite(signed_entry_distance_fraction)) continue;
+        if (selected_coin < 0 || signed_entry_distance_fraction > selected_entry_distance_fraction
+            || (signed_entry_distance_fraction == selected_entry_distance_fraction && c < selected_coin)) {
             selected_coin = c;
-            selected_diff = pprice_diff;
+            selected_entry_distance_fraction = signed_entry_distance_fraction;
         }
     }
     return selected_coin;
@@ -4130,7 +4148,7 @@ inline void generate_tm_multicoin_side_orders(
 #if PASSIVBOT_UNSTUCK_ENABLED
     float balance_peak = balance + account.unstuck_memory.drawdown;
     int unstuck_coin = -1;
-    float best_unstuck_diff = INFINITY;
+    float best_entry_distance_fraction = -INFINITY;
     float selected_unstuck_qty = 0.0f;
     int selected_unstuck_tick = 0;
     for (int c = 0; c < C; ++c) {
@@ -4251,13 +4269,13 @@ inline void generate_tm_multicoin_side_orders(
                 )
             );
         }
-        float pprice_diff = short_side
-            ? price_now / pprice[c] - 1.0f
-            : 1.0f - price_now / pprice[c];
-        if (unstuck_coin < 0 || pprice_diff < best_unstuck_diff
-            || (pprice_diff == best_unstuck_diff && c < unstuck_coin)) {
+        float signed_entry_distance_fraction = calc_signed_entry_distance_fraction(
+            short_side, pprice[c], price_now
+        );
+        if (unstuck_coin < 0 || signed_entry_distance_fraction > best_entry_distance_fraction
+            || (signed_entry_distance_fraction == best_entry_distance_fraction && c < unstuck_coin)) {
             unstuck_coin = c;
-            best_unstuck_diff = pprice_diff;
+            best_entry_distance_fraction = signed_entry_distance_fraction;
             selected_unstuck_qty = reducer_qty;
             selected_unstuck_tick = reducer_tick;
         }
@@ -5658,14 +5676,14 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
             return;
         }
-        float long_unstuck_diff = INFINITY;
-        float short_unstuck_diff = INFINITY;
+        float long_entry_distance_fraction = -INFINITY;
+        float short_entry_distance_fraction = -INFINITY;
         const int long_unstuck_candidate = long_can_generate
             ? select_tm_multicoin_unstuck_coin(
                 long_side, long_config, account,
                 bars, touch_ticks, coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_effective_n_positions,
-                long_unstuck_diff
+                long_entry_distance_fraction
             )
             : -1;
         const int short_unstuck_candidate = short_can_generate
@@ -5673,20 +5691,20 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_side, short_config, account,
                 bars, touch_ticks, coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_effective_n_positions,
-                short_unstuck_diff
+                short_entry_distance_fraction
             )
             : -1;
         if (!account.realized_decay_valid) {
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
             return;
         }
-        // Exact Rust ranks by price difference, then symbol index. Its stable
-        // long-first input order makes long win an equal-symbol tie.
+        // Rust prefers the highest signed entry distance, then the lowest symbol
+        // index. Its stable long-first input order breaks an equal-symbol tie.
         const bool long_unstuck_wins = long_unstuck_candidate >= 0
             && (
                 short_unstuck_candidate < 0
-                || long_unstuck_diff < short_unstuck_diff
-                || (long_unstuck_diff == short_unstuck_diff
+                || long_entry_distance_fraction > short_entry_distance_fraction
+                || (long_entry_distance_fraction == short_entry_distance_fraction
                     && long_unstuck_candidate <= short_unstuck_candidate)
             );
         const int long_unstuck_coin = long_unstuck_wins

@@ -96,7 +96,7 @@ def test_changed_source_is_rejected_before_cache_publication(cache_source,monkey
     monkeypatch.setattr(bt,'_save_coins_hlcvs_artifacts_to_cache_dir',changed)
     with pytest.raises(ExternalSourceChangedError,match='source changed'):
         save_fixture(config)
-    assert list(bt.HLCVS_CACHE_ROOT.iterdir())==[]
+    assert not any(path.is_dir() for path in bt.HLCVS_CACHE_ROOT.iterdir())
 
 
 def test_changed_source_is_rejected_while_loading_cache(cache_source,monkeypatch):

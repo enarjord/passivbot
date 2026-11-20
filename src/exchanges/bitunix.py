@@ -33,6 +33,7 @@ from live.balance_composition import normalize_bitunix_balance_composition
 from live.bitunix_create_journal import (
     CLIENT_ORDER_ID_PATTERN as BITUNIX_CLIENT_ORDER_ID_PATTERN,
     BitunixCreateJournal,
+    WIRE_TOKEN_PATTERN,
 )
 from live.bitunix_create_recovery import BitunixCreateRecovery
 from live.diagnostic_safety import bounded_exception_code
@@ -104,6 +105,7 @@ class BitunixClient:
 
     _position_fill_transport_guard = True
     supports_ordinary_cancel_wave = True
+    supports_ordinary_create_wave = True
     id = "bitunix"
     name = "Bitunix"
     precisionMode = 4  # ccxt.TICK_SIZE
@@ -468,14 +470,29 @@ class BitunixClient:
         url = f"{self.rest_url}{path}" + (f"?{query}" if query else "")
         await self._throttle(cancel=cancel)
         session = await self._get_session()
-        from live.position_fill_sync import check_transport_admission
+        from live.position_fill_sync import WriteDeferred, check_transport_admission
         recovery = getattr(self, "ordinary_create_recovery", None)
         attempt = None
+        create_wave = None
         if method == "POST" and path == self.PLACE_ORDER_PATH and recovery is not None:
 
             def prepare(context):
-                nonlocal attempt
-                attempt = recovery.record(body, context)
+                from live.hsl_live import active_ordinary_create_wave
+
+                nonlocal attempt, create_wave
+                if context is not None:
+                    create_wave = active_ordinary_create_wave(context.bot)
+                wire_body = body
+                if create_wave is not None:
+                    member = create_wave.members[len(create_wave.submitted)]
+                    wire_body = json.loads(body_text)
+                    if not member.matches_wire(
+                        wire_body, venue_symbol=self.market(member.symbol)["id"]
+                    ):
+                        raise WriteDeferred()
+                attempt = recovery.record(wire_body, context)
+                if create_wave is not None and attempt is None:
+                    raise WriteDeferred()
                 if attempt is not None:
                     return lambda: recovery.resolve(attempt, "not_sent")
                 return None
@@ -519,6 +536,21 @@ class BitunixClient:
             self._raise_api_error(code, payload.get("msg"))
         if "data" not in payload:
             raise ExchangeError("Bitunix success response missing data")
+        if create_wave is not None:
+            data = payload["data"]
+            order_id = data.get("orderId") if isinstance(data, dict) else None
+            if (
+                type(code) not in (int, str)
+                or not isinstance(order_id, str)
+                or not WIRE_TOKEN_PATTERN.fullmatch(order_id)
+                or data.keys() != {"orderId", "clientId"}
+                or order_id in create_wave.existing_order_ids
+                or order_id in create_wave.acknowledged_ids
+                or data.get("clientId") != attempt.client_id
+            ):
+                raise ExchangeError("Bitunix create wave received an inexact placement acknowledgment")
+            if not recovery.record_acknowledgment(attempt, order_id):
+                raise ExchangeError("Bitunix create wave could not persist acknowledged order ID")
         return payload["data"]
 
     async def load_markets(self, reload: bool = False) -> dict[str, dict]:
@@ -1445,6 +1477,7 @@ class BitunixClient:
             "/api/v1/futures/market/depth",
             params={"symbol": self.market(symbol)["id"], "limit": 1},
         )
+        received_at = self.milliseconds()
         if not isinstance(data, dict):
             raise ValueError("Bitunix depth response has invalid shape")
         bids = data.get("bids") or []
@@ -1460,7 +1493,7 @@ class BitunixClient:
             "bid": bid,
             "ask": ask,
             "last": (bid + ask) / 2.0,
-            "timestamp": self.milliseconds(),
+            "snapshot_received_ms": received_at,
             "source": "bitunix_depth_mid",
             "info": data,
         }
@@ -1514,6 +1547,7 @@ class BitunixClient:
                                     "ask": ask,
                                     "last": last,
                                     "timestamp": timestamp,
+                                    "snapshot_received_ms": received_at,
                                     "info": deepcopy(row),
                                 }
                                 self._ticker_received_monotonic[
@@ -1565,19 +1599,38 @@ class BitunixClient:
             )
 
     def _ticker_is_fresh(
-        self, symbol: str, now_monotonic: float
+        self,
+        symbol: str,
+        now_monotonic: float,
+        *,
+        now_ms: int,
+        max_age_ms: int,
     ) -> bool:
-        if symbol not in self._ticker_cache:
+        ticker = self._ticker_cache.get(symbol)
+        if ticker is None:
             return False
         received_monotonic = self._ticker_received_monotonic.get(symbol)
         if received_monotonic is None:
             return False
+        received_ms = ticker.get("snapshot_received_ms")
         age_ms = (now_monotonic - received_monotonic) * 1000.0
-        return 0.0 <= age_ms <= self.TICKER_MAX_AGE_MS
+        return (
+            0.0 <= age_ms <= max_age_ms
+            and type(received_ms) is int
+            and 0 < received_ms <= now_ms
+            and now_ms - received_ms <= max_age_ms
+        )
 
     async def fetch_tickers(
-        self, symbols: list[str] | None = None, params: dict | None = None
+        self,
+        symbols: list[str] | None = None,
+        params: dict | None = None,
+        *,
+        max_age_ms: int | None = None,
     ) -> dict[str, dict]:
+        age_limit = self.TICKER_MAX_AGE_MS
+        if max_age_ms is not None:
+            age_limit = min(age_limit, max_age_ms)
         await self._ensure_markets()
         desired = list(
             dict.fromkeys(
@@ -1607,12 +1660,27 @@ class BitunixClient:
                 for symbol in desired
             }
         self._ensure_ticker_tasks()
+
+        def missing_tickers():
+            now_monotonic = time.monotonic()
+            now_ms = self.milliseconds()
+            return [
+                symbol for symbol in desired
+                if not self._ticker_is_fresh(
+                    symbol, now_monotonic, now_ms=now_ms, max_age_ms=age_limit
+                )
+            ]
+
         deadline = time.monotonic() + self.TICKER_WAIT_SECONDS
         while time.monotonic() < deadline:
-            now_monotonic = time.monotonic()
-            if all(
-                self._ticker_is_fresh(symbol, now_monotonic)
-                for symbol in desired
+            missing = missing_tickers()
+            # A live targeted read can repair an established stream's stale
+            # subset promptly. Give cold subscriptions their normal startup wait.
+            if not missing or (
+                symbols
+                and max_age_ms is not None
+                and len(missing) <= self.MAX_DEPTH_FALLBACK_SYMBOLS
+                and all(symbol in self._ticker_cache for symbol in missing)
             ):
                 break
             try:
@@ -1623,14 +1691,14 @@ class BitunixClient:
                 self._ticker_ready.clear()
             except asyncio.TimeoutError:
                 pass
-        now_monotonic = time.monotonic()
+        missing = missing_tickers()
+        missing_set = set(missing)
         result = {
             symbol: deepcopy(self._ticker_cache[symbol])
             for symbol in desired
-            if self._ticker_is_fresh(symbol, now_monotonic)
+            if symbol not in missing_set
         }
         if symbols:
-            missing = [symbol for symbol in desired if symbol not in result]
             if len(missing) > self.MAX_DEPTH_FALLBACK_SYMBOLS:
                 raise NetworkError(
                     "Bitunix ticker websocket missing "
@@ -2428,10 +2496,17 @@ class BitunixBot(CCXTBot):
             raw = fetched[symbol]
             if raw.get("timestamp") is not None:
                 ticker["timestamp"] = int(raw["timestamp"])
+            ticker["snapshot_received_ms"] = raw["snapshot_received_ms"]
             source = raw.get("source")
             if isinstance(source, str) and source.strip():
                 ticker["source"] = source.strip()
         return tickers
+
+    async def fetch_market_tickers_for_symbols(
+        self, symbols: list[str], *, max_age_ms: int
+    ) -> dict:
+        fetched = await self.cca.fetch_tickers(symbols, max_age_ms=max_age_ms)
+        return self._normalize_tickers(fetched)
 
     def _normalize_balance_diagnostics(self, fetched: object) -> dict:
         """Expose only documented Bitunix account components for diagnostics."""
@@ -2561,6 +2636,14 @@ class BitunixBot(CCXTBot):
                 if require_live_value(self.config, "time_in_force") == "post_only"
                 else "GTC"
             )
+        from live.hsl_live import active_ordinary_create_wave
+
+        wave = active_ordinary_create_wave(self)
+        if wave is not None:
+            member = wave.members[len(wave.submitted)]
+            if member.order is not order:
+                raise ValueError("Bitunix create wave member does not match order")
+            params["positionId"] = member.position_id
         return params
 
     def _get_position_side_for_order(self, order: dict) -> str:

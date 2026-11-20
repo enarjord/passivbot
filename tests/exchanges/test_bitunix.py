@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from copy import deepcopy
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -31,7 +32,11 @@ from live.bitunix_create_journal import (
     BitunixCreateJournalError,
 )
 from live.bitunix_create_recovery import BitunixCreateRecovery
-from live.hsl_live import ProtectiveBatch
+from live.bitunix_create_wave import OrdinaryCloseWaveMember
+from live import executor, hsl_live
+from live.event_bus import ReasonCodes
+from live.hsl_live import OrdinaryCreateWave, ProtectiveBatch
+from live.market_snapshot import MarketSnapshot
 from live.position_fill_sync import WriteDeferred, connector_context, defer_submission
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 from fill_events_manager import (
@@ -2165,6 +2170,7 @@ async def test_depth_ticker_uses_midpoint_as_synthetic_last():
 
     assert ticker["last"] == 100.0
     assert ticker["source"] == "bitunix_depth_mid"
+    assert ticker["snapshot_received_ms"] == 1_700_000_000_000
 
 
 @pytest.mark.asyncio
@@ -2180,6 +2186,7 @@ async def test_future_exchange_timestamp_does_not_extend_cache_freshness():
         "ask": 101.0,
         "last": 100.0,
         "timestamp": 10**15,
+        "snapshot_received_ms": 60_000,
     }
     client._ticker_received_monotonic[symbol] = 60.0
     fallback = {
@@ -2212,6 +2219,7 @@ async def test_bot_ticker_normalization_preserves_source_and_timestamp():
                     "ask": 101.0,
                     "last": 100.0,
                     "timestamp": 1_700_000_000_000,
+                    "snapshot_received_ms": 1_700_000_000_125,
                     "source": "bitunix_depth_mid",
                 }
             }
@@ -2225,8 +2233,80 @@ async def test_bot_ticker_normalization_preserves_source_and_timestamp():
         "ask": 101.0,
         "last": 100.0,
         "timestamp": 1_700_000_000_000,
+        "snapshot_received_ms": 1_700_000_000_125,
         "source": "bitunix_depth_mid",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("age_ms", "refresh", "strategy", "extra_markets", "expect_depth"),
+    [
+        (1_000, False, "symbols", 0, False),
+        (25_000, False, "symbols", 0, True),
+        (1_000, True, "symbols", 9, False),
+        (25_000, True, "symbols", 9, True),
+        (25_000, True, "bulk", 0, True),
+    ],
+)
+async def test_bitunix_snapshot_respects_receipt_age_and_targeted_refresh(
+    monkeypatch, age_ms, refresh, strategy, extra_markets, expect_depth
+):
+    import live.market_snapshot as snapshots
+
+    now = 1_800_000_000_000
+    monkeypatch.setattr(snapshots, "utc_ms", lambda: now)
+    client = _prepared_client()
+    client.milliseconds = lambda: now
+    client._ensure_ticker_tasks = lambda: None
+    client._ticker_ready.wait = AsyncMock(side_effect=AssertionError("unexpected WS wait"))
+    symbol = "BTC/USDT:USDT"
+    client._ticker_cache[symbol] = {
+        "symbol": symbol,
+        "bid": 89.0,
+        "ask": 91.0,
+        "last": 90.0,
+        "timestamp": now + 60_000,  # venue time is not the local observation stamp
+        "snapshot_received_ms": now - age_ms,
+    }
+    client._ticker_received_monotonic[symbol] = time.monotonic() - age_ms / 1_000
+    for i in range(extra_markets):
+        extra = f"COIN{i}/USDT:USDT"
+        client.markets[extra] = {**_market(), "id": f"COIN{i}USDT", "symbol": extra}
+        client._ticker_cache[extra] = {
+            **client._ticker_cache[symbol], "symbol": extra, "snapshot_received_ms": now - 100,
+        }
+        client._ticker_received_monotonic[extra] = time.monotonic() - 0.1
+    client._request = AsyncMock(return_value={"bids": [["99", "1"]], "asks": [["101", "1"]]})
+    bot = _snapshot_bot()
+    bot.cca = client
+    bot.markets_dict = client.markets
+    provider = snapshots.MarketSnapshotProvider(
+        exchange_name="bitunix",
+        fetch_tickers=bot.fetch_tickers,
+        fetch_tickers_for_symbols=bot.fetch_tickers_for_symbols,
+        fetch_market_tickers_for_symbols=bot.fetch_market_tickers_for_symbols,
+        ticker_strategy=strategy,
+    )
+    quotes = await provider.get_snapshots(
+        list(client.markets), max_age_ms=5_000, refresh=refresh
+    )
+    quote = quotes.pop(symbol)
+    assert len(quotes) == extra_markets
+    assert all(other.fetched_ms == now - 100 for other in quotes.values())
+    if expect_depth:
+        assert quote.last == 100.0
+        assert quote.source == "bitunix_depth_mid"
+        assert quote.fetched_ms == now
+        assert quote.exchange_timestamp_ms is None
+        client._request.assert_awaited_once_with(
+            "GET", "/api/v1/futures/market/depth", params={"symbol": "BTCUSDT", "limit": 1}
+        )
+    else:
+        assert quote.last == 90.0
+        assert quote.fetched_ms == now - age_ms
+        assert quote.exchange_timestamp_ms == now + 60_000
+        client._request.assert_not_awaited()
 
 
 def test_ticker_tasks_restart_when_active_market_ids_change():
@@ -2862,9 +2942,11 @@ async def test_hsl_quote_refresh_does_not_wait_for_unrelated_bitunix_market(
         exchange_name="bitunix",
         fetch_tickers=bot.fetch_tickers,
         fetch_tickers_for_symbols=bot.fetch_tickers_for_symbols,
+        fetch_market_tickers_for_symbols=bot.fetch_market_tickers_for_symbols,
         ticker_strategy=bot._market_snapshot_ticker_strategy(),
     )
     bot.market_snapshot_provider = provider
+    client.milliseconds = lambda: clock[0]
     owner = Owner(bot)
     try:
         # Every pass expires the provider cache, reproducing repeated refreshes.
@@ -2876,6 +2958,7 @@ async def test_hsl_quote_refresh_does_not_wait_for_unrelated_bitunix_market(
                 ask=price + 1,
                 last=price,
                 timestamp=clock[0],
+                snapshot_received_ms=clock[0],
             )
             client._ticker_received_monotonic[symbol] = time.monotonic()
             quotes = await owner.acquire_quotes({symbol})
@@ -2895,3 +2978,214 @@ def test_order_stream_kline_rejection_does_not_expose_raw_field():
     with pytest.raises(ValueError, match="invalid high") as error:
         stream._normalize_ohlcv_payload(_kline_payload(h="UNBOUNDED_SENSITIVE_VALUE"))
     assert "UNBOUNDED_SENSITIVE_VALUE" not in str(error.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "sent_count", "ack_count", "pending_count"),
+    [
+        ("all_ack", 2, 2, 2),
+        ("wrong_client_id", 1, 0, 1),
+        ("missing_client_id", 1, 0, 1),
+        ("old_venue_id", 1, 0, 1),
+        ("boolean_success", 1, 0, 1),
+        ("unexpected_fill_payload", 1, 0, 1),
+        ("ack_storage_failure", 1, 0, 1),
+        ("timeout_first", 1, 0, 1),
+        ("timeout_second", 2, 1, 2),
+        ("duplicate_venue_id", 2, 1, 2),
+        ("rejected_second", 2, 1, 1),
+        ("changed_account", 1, 1, 1),
+        ("reconfirmed_account", 1, 1, 1),
+        ("changed_wire", 1, 1, 1),
+        ("market_moved", 1, 1, 1),
+        ("expired_after_fsync", 1, 1, 1),
+    ],
+)
+async def test_bitunix_ordinary_close_wave_transport_and_recovery(
+    tmp_path, monkeypatch, outcome, sent_count, ack_count, pending_count
+):
+    bot, journal, _ = _tracked_create_fixture(tmp_path, "")
+    client = bot.cca
+    eth_symbol = "ETH/USDT:USDT"
+    eth_market = _market_for("ETHUSDT", eth_symbol)
+    client.markets[eth_symbol] = eth_market
+    client.markets_by_id["ETHUSDT"] = eth_market
+    client.symbols.append(eth_symbol)
+    members = []
+    quotes = {}
+    clock = int(time.time() * 1000)
+    for i, symbol in enumerate(("BTC/USDT:USDT", eth_symbol), start=1):
+        order = dict(
+            symbol=symbol,
+            position_side="long",
+            side="sell",
+            type="limit",
+            reduce_only=True,
+            qty=0.002,
+            price=51_000.0,
+            custom_id=f"wave-member-{i}",
+        )
+        position_id = f"position-{i}"
+        client._position_ids[(symbol, "long")] = position_id
+        member = OrdinaryCloseWaveMember(
+            order,
+            symbol,
+            "long",
+            position_id,
+            order["custom_id"],
+            Decimal(str(order["qty"])),
+            Decimal(str(order["price"])),
+        )
+        members.append(member)
+        quotes[symbol] = MarketSnapshot(
+            symbol,
+            49_999.0,
+            50_001.0,
+            50_000.0,
+            clock,
+            "bitunix_depth_mid",
+            clock,
+        )
+    snapshot = SimpleNamespace(
+        symbols=tuple(quotes),
+        invalid_details=lambda **_: [],
+    )
+    wave = OrdinaryCreateWave(
+        tuple(members),
+        snapshot,
+        asyncio.get_running_loop().time() + 10,
+        account_cohort=(0,),
+        existing_order_ids=frozenset({"old-order"}),
+    )
+    bot._current_planning_snapshot = snapshot
+    changed_account = False
+    account_revision = 0
+    bot._hsl_live = SimpleNamespace(
+        _ordinary_create_wave=wave,
+        _write_lock=asyncio.Lock(),
+        admit=lambda order: not changed_account,
+        quotes=quotes,
+        _ordinary_account_cohort=lambda: (account_revision,),
+    )
+    bot._loss_gate_max_drawdown_fraction = lambda: 1.0
+    bot._live_market_snapshot_fetch_max_age_ms = lambda: 10_000
+    bot.live_value = lambda name: {"time_in_force": "post_only"}[name]
+    bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}
+    bot.CLIENT_ORDER_ID_PATTERN = BitunixBot.CLIENT_ORDER_ID_PATTERN
+    confirmations = []
+    bot._request_authoritative_confirmation = lambda surfaces: confirmations.append(
+        set(surfaces)
+    )
+    bot.did_create_order = lambda result: isinstance(result, dict) and bool(
+        result.get("id")
+    )
+    bot._handle_order_write_failures = AsyncMock()
+    monkeypatch.setattr(hsl_live.runtime, "enabled", lambda _: False)
+
+    @hsl_live.connector_write("create")
+    async def send(bot, order):
+        params = BitunixBot._build_order_params(bot, order)
+        return await client.create_order(
+            order["symbol"],
+            order["type"],
+            order["side"],
+            order["qty"],
+            order["price"],
+            params,
+        )
+
+    bot.execute_order = lambda order: send(bot, order)
+    requests = []
+    place = journal.record
+
+    def persist(attempt, **kwargs):
+        place(attempt, **kwargs)
+        if (
+            outcome == "expired_after_fsync"
+            and attempt.client_id == members[1].client_id
+        ):
+            wave.deadline = asyncio.get_running_loop().time() - 1
+
+    monkeypatch.setattr(journal, "record", persist)
+    if outcome == "ack_storage_failure":
+
+        def failed_observation(*_args):
+            raise BitunixCreateJournalError("simulated write failure")
+
+        monkeypatch.setattr(journal, "observe", failed_observation)
+
+    def request(method, url, *, data, headers):
+        nonlocal changed_account
+        assert method == "POST" and url.endswith(BitunixClient.PLACE_ORDER_PATH)
+        assert headers["sign"]
+        index = len(requests)
+        body = json.loads(data)
+        requests.append(body)
+        assert body["positionId"] == members[index].position_id
+        assert body["effect"] == "POST_ONLY"
+        pending = BitunixCreateJournal(journal.path).load()
+        assert [attempt.client_id for attempt in pending] == [
+            member.client_id for member in members[: index + 1]
+        ]
+
+        async def response():
+            nonlocal changed_account, account_revision
+            if index == 0:
+                if outcome == "changed_account":
+                    changed_account = True
+                elif outcome == "reconfirmed_account":
+                    account_revision += 1
+                elif outcome == "changed_wire":
+                    members[1].order["price"] += 1
+                elif outcome == "market_moved":
+                    quotes[eth_symbol] = MarketSnapshot(
+                        eth_symbol,
+                        51_000.0,
+                        51_002.0,
+                        51_001.0,
+                        clock,
+                        "bitunix_depth_mid",
+                        clock,
+                    )
+            if (index, outcome) in {(0, "timeout_first"), (1, "timeout_second")}:
+                raise asyncio.TimeoutError()
+            if index == 1 and outcome == "rejected_second":
+                return '{"code":20003,"msg":"insufficient balance","data":null}'
+            ack = {"orderId": f"venue-{index}"}
+            if index == 0 and outcome == "old_venue_id":
+                ack["orderId"] = "old-order"
+            if index == 1 and outcome == "duplicate_venue_id":
+                ack["orderId"] = "venue-0"
+            if not (index == 0 and outcome == "missing_client_id"):
+                ack["clientId"] = (
+                    "other"
+                    if index == 0 and outcome == "wrong_client_id"
+                    else body["clientId"]
+                )
+            if outcome == "unexpected_fill_payload":
+                ack["tradeQty"] = "0.001"
+            return json.dumps(
+                {"code": False if outcome == "boolean_success" else 0, "data": ack}
+            )
+
+        return _ResponseContext(SimpleNamespace(status=200, headers={}, text=response))
+
+    client._get_session = AsyncMock(return_value=SimpleNamespace(request=request))
+    results = await executor._execute_ordinary_creates_serially(
+        bot,
+        [member.order for member in members],
+        wave,
+    )
+    assert len(results) == 2
+    assert len(requests) == sent_count == len(wave.submitted)
+    assert len(wave.acknowledged_ids) == ack_count
+    pending = BitunixCreateJournal(journal.path).load_pending_all()
+    assert len(pending) == pending_count
+    assert sum(observation is not None for _, observation in pending) == ack_count
+    if not ack_count:
+        assert results[1].reason_code == ReasonCodes.ORDINARY_CREATE_WAVE_STOPPED
+    assert not confirmations
+    wave.confirm(bot)
+    wave.confirm(bot)
+    assert confirmations == [{"balance", "positions", "open_orders", "fills"}]

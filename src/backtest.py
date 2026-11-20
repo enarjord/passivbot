@@ -85,7 +85,8 @@ from asset_inception import (
 from config.risk_memory import (
     normalize_memory_ema_span_minutes,
 )
-from metrics_schema import attach_result_metrics, build_standalone_metrics
+from metrics_schema import build_standalone_metrics
+from config.result_records import build_result_record
 from config.coerce import normalize_hsl_signal_mode
 from config.overrides import parse_overrides
 from config.shared_bot import flatten_shared_bot_side
@@ -102,7 +103,6 @@ from config_utils import (
     update_config_with_args,
     recursive_config_update,
     format_config,
-    strip_config_metadata,
     sanitize_prepared_config_for_dump,
 )
 from backtest_dataset import dump_backtest_dataset_metadata
@@ -186,12 +186,6 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 
 PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl", "hard_stop"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
-DISABLE_PLOTTING_HELP = (
-    "Disable selected plot groups. Use without a value to disable all plotting. "
-    "Allowed values: all, summary, balance, twe, pnl, hard_stop, coin_fills, "
-    "or a comma-separated combination. summary disables balance, twe, pnl, "
-    "and hard_stop; coin_fills disables per-coin fill plots only."
-)
 HLCVS_CACHE_ROOT = Path("caches") / "hlcvs_data"
 HLCVS_CACHE_HASH_LEN = 16
 HLCVS_CACHE_DIR_SEP = "__"
@@ -1590,7 +1584,7 @@ def _assert_external_source_unchanged(config, exchange, expected):
         raise ExternalSourceChangedError("External OHLCV source changed during preparation; retry")
 
 
-def get_cache_hash(config, exchange):
+def get_cache_hash(config, exchange, *, source_revision=None):
     from preparation_identity import CACHE_REQUEST_SCHEMA_VERSION, gap_tolerance_minutes
 
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
@@ -1620,7 +1614,8 @@ def get_cache_hash(config, exchange):
         "resolved_market_identities": resolved_market_identities,
         "hlcv_preparation_algorithm_version": HLCV_PREPARATION_ALGORITHM_VERSION,
     }
-    source_revision = _external_source_revision(config, exchange, resolved_market_identities)
+    if source_revision is None:
+        source_revision = _external_source_revision(config, exchange, resolved_market_identities)
     if source_revision is not None:
         to_hash["external_source_revision"] = source_revision
     if exchange == "combined":
@@ -1855,7 +1850,7 @@ def _inception_market_identity_matches(previous, current):
     )
 
 
-def _preserve_cached_inception_facts(config, exchange, mss):
+def _preserve_cached_inception_facts(config, exchange, mss, *, cache_hash=None, source_revision=None):
     """Carry matching, verified facts through independent candle-cache rebuilds.
 
     A transient lookup cannot erase a known fact. New positive facts win; only
@@ -1867,7 +1862,8 @@ def _preserve_cached_inception_facts(config, exchange, mss):
                   and _current_inception_timestamp(settings) is None]
     if not unresolved:
         return mss
-    cache_hash = get_cache_hash(config, exchange)
+    if cache_hash is None:
+        cache_hash = get_cache_hash(config, exchange, source_revision=source_revision)
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
     if cache_dir is None:
         return mss
@@ -1901,8 +1897,11 @@ def _preserve_cached_inception_facts(config, exchange, mss):
 
 def load_coins_hlcvs_from_cache(
     config, exchange, warmup_minutes=0, *, inception_fact_coins=None, allow_unresolved_inception=False,
+    source_revision=None,
 ):
-    cache_hash = get_cache_hash(config, exchange)
+    if source_revision is None:
+        source_revision = _external_source_revision(config, exchange)
+    cache_hash = get_cache_hash(config, exchange, source_revision=source_revision)
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
     if cache_dir and os.path.exists(cache_dir):
         manifest = load_hlcvs_manifest(cache_dir)
@@ -1958,8 +1957,8 @@ def load_coins_hlcvs_from_cache(
         btc_usd_prices = verified_arrays["btc_usd_prices"]
         try:
             if (
-                config.get("backtest", {}).get("ohlcv_source_dir")
-                and get_cache_hash(config, exchange) != cache_hash
+                source_revision is not None
+                and _external_source_revision(config, exchange) != source_revision
             ):
                 raise ExternalSourceChangedError(
                     "External OHLCV source changed while loading cache; retry"
@@ -1991,9 +1990,10 @@ def save_coins_hlcvs_to_cache(
 ):
     if source_revision is None:
         source_revision = _external_source_revision(config, exchange)
-    _assert_external_source_unchanged(config, exchange, source_revision)
-    mss = _preserve_cached_inception_facts(config, exchange, mss)
-    cache_hash = get_cache_hash(config, exchange)
+    else:
+        _assert_external_source_unchanged(config, exchange, source_revision)
+    cache_hash = get_cache_hash(config, exchange, source_revision=source_revision)
+    mss = _preserve_cached_inception_facts(config, exchange, mss, cache_hash=cache_hash)
     cache_dir = _get_hlcvs_cache_dir_for_save(
         config,
         exchange,
@@ -2077,7 +2077,6 @@ def save_coins_hlcvs_to_cache(
             is_compressed=is_compressed,
         )
         raise_if_backtest_cancel_requested("cache publish")
-        _assert_external_source_unchanged(config, exchange, source_revision)
         with _hlcvs_cache_publish_lock(cache_dir):
             _assert_external_source_unchanged(config, exchange, source_revision)
             _replace_hlcvs_cache_directory(cache_dir, tmp_cache_dir, backup_cache_dir)
@@ -2499,7 +2498,8 @@ async def prepare_hlcvs_mss(
             None
             if force_refetch_gaps
             else load_coins_hlcvs_from_cache(
-                config, exchange, backtest_warmup_minutes, allow_unresolved_inception=True, **cache_requirements,
+                config, exchange, backtest_warmup_minutes, allow_unresolved_inception=True,
+                source_revision=source_revision, **cache_requirements,
             )
         )
         if result:
@@ -2538,7 +2538,7 @@ async def prepare_hlcvs_mss(
             assert_hlcv_has_tradable_coverage(coins, mss)
             try:
                 _assert_external_source_unchanged(config, exchange, source_revision)
-            except ExternalSourceChangedError:
+            except BaseException:
                 release_materialized_payload(hlcvs)
                 raise
             # Pass through cached timestamps if they were stored; fall back to None otherwise
@@ -2598,7 +2598,7 @@ async def prepare_hlcvs_mss(
             "for the requested range"
         )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
-    mss = _preserve_cached_inception_facts(config, exchange, mss)
+    mss = _preserve_cached_inception_facts(config, exchange, mss, source_revision=source_revision)
     mss = await _resolve_prepared_inception(config, exchange, coins, mss, **cache_requirements)
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
     _validate_hlcvs_valid_windows_from_mss(
@@ -3191,27 +3191,15 @@ def post_process(
     original_config = config.get("_original_backtest_config")
     if original_config is not None:
         dump_config(
-            strip_config_metadata(original_config),
+            sanitize_prepared_config_for_dump(original_config),
             f"{results_path}config.original.json",
         )
-    if get_optional_config_value(config, "backtest.hlcvs_data_dir"):
-        sanitized_config = strip_config_metadata(
-            config,
-            keys=(
-                "_raw",
-                "_raw_effective",
-                "_transform_log",
-                "_coins_sources",
-                "_original_backtest_config",
-                "analysis",
-            ),
-        )
-    else:
-        sanitized_config = sanitize_prepared_config_for_dump(config)
-    attach_result_metrics(
-        sanitized_config, metrics=build_standalone_metrics(analysis, exchange)
+    record = build_result_record(
+        sanitize_prepared_config_for_dump(config),
+        provenance={"dataset": "dataset.json"},
+        metrics=build_standalone_metrics(analysis, exchange),
     )
-    dump_config(sanitized_config, f"{results_path}config.json")
+    dump_config(record, f"{results_path}config.json")
     dump_backtest_dataset_metadata(config, exchange, results_path)
     stages["metadata_export"] = time.perf_counter() - export_started
     export_started = time.perf_counter()
@@ -3356,15 +3344,6 @@ async def main():
 
     runtime_group = parser.add_argument_group("Backtest Runtime")
     add_report_arguments(runtime_group)
-    runtime_group.add_argument(
-        "--disable_plotting",
-        "-dp",
-        dest="disable_plotting",
-        nargs="?",
-        const="all",
-        default=None,
-        help=DISABLE_PLOTTING_HELP,
-    )
     runtime_group.add_argument(
         "--cm-debug",
         nargs="?",
@@ -3511,10 +3490,6 @@ async def main():
         )
         suite_cfg["enabled"] = bool(args.suite)
 
-    # Log disable_plotting if set (not a config key, just a runtime flag)
-    if args.disable_plotting is not None:
-        logging.info("changed disable_plotting False -> %s", args.disable_plotting)
-
     if suite_cfg.get("enabled"):
         logging.info(
             "Running backtest suite (%d scenarios)...",
@@ -3523,7 +3498,6 @@ async def main():
         summary = await run_backtest_suite_async(
             config,
             suite_cfg,
-            disable_plotting=args.disable_plotting,
             report_options=report_options,
         )
         logging.info(
@@ -3547,9 +3521,6 @@ async def main():
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
     )
     validate_simulation_config(config, resolved=True)
-    config["disable_plotting"] = (
-        args.disable_plotting if args.disable_plotting is not None else False
-    )
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
     if get_optional_config_value(config, "backtest.hlcvs_data_dir"):

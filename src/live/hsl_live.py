@@ -7,7 +7,9 @@ must be admitted again from current facts immediately before a connector write.
 from dataclasses import dataclass, field, replace
 from functools import wraps
 import logging
+from math import isfinite
 from random import uniform
+from typing import TYPE_CHECKING
 import weakref
 from uuid import uuid4
 
@@ -27,6 +29,10 @@ from live.diagnostic_safety import log_process_recovery
 from live.events import run_diagnostic_step
 from live.market_snapshot import MarketSnapshotUnavailable
 from live.ordinary_diagnostics import describe_ordinary_admission
+
+if TYPE_CHECKING:
+    from live.bitunix_create_wave import OrdinaryCloseWaveMember
+    from live.planning_snapshot import PlanningSnapshot
 
 
 _EXCHANGE_BACKPRESSURE_ERRORS = (DDoSProtection, OnMaintenance, RateLimitExceeded)
@@ -62,7 +68,11 @@ def active_ordinary_cancel_wave(bot):
     return getattr(getattr(bot, "_hsl_live", None), "_ordinary_cancel_wave", None)
 
 
-async def _submit_before_cancel_deadline(operation, bot, order, transport, deadline):
+def active_ordinary_create_wave(bot):
+    return getattr(getattr(bot, "_hsl_live", None), "_ordinary_create_wave", None)
+
+
+async def _submit_before_wave_deadline(operation, bot, order, transport, deadline):
     import asyncio
 
     timeout = asyncio.timeout_at(deadline)
@@ -97,7 +107,9 @@ def connector_write(action):
                 async with instance._write_lock:
                     batch = getattr(instance, "_protective_batch", None)
                     cancel_wave = active_ordinary_cancel_wave(bot)
-                    if cancel_wave is not None and not cancel_wave.permits(
+                    create_wave = active_ordinary_create_wave(bot)
+                    ordinary_wave = cancel_wave or create_wave
+                    if ordinary_wave is not None and not ordinary_wave.permits(
                         bot, order, action
                     ):
                         return deferred()
@@ -112,9 +124,10 @@ def connector_write(action):
                         return (
                             active_protective_batch(bot) is batch
                             and active_ordinary_cancel_wave(bot) is cancel_wave
+                            and active_ordinary_create_wave(bot) is create_wave
                             and instance.admit(order)
                             and (
-                                cancel_wave is None or cancel_wave.permits(bot, order, action)
+                                ordinary_wave is None or ordinary_wave.permits(bot, order, action)
                             )
                         )
 
@@ -126,16 +139,18 @@ def connector_write(action):
                     ) as transport:
                         if action == "cancel":
                             executor.record_cancel_connector_admission(bot, order)
-                        if cancel_wave is not None:
+                        if ordinary_wave is not None:
                             transport.callbacks.append(
-                                lambda: cancel_wave.record_submission(order)
+                                lambda: ordinary_wave.record_submission(order)
                             )
                         surfaces = {"balance", "positions", "open_orders"}
+                        if create_wave is not None:
+                            surfaces.add("fills")
                         needs_confirmation = True
                         try:
-                            if cancel_wave is not None and cancel_wave.continuing:
-                                result = await _submit_before_cancel_deadline(
-                                    operation, bot, order, transport, cancel_wave.deadline
+                            if ordinary_wave is not None and ordinary_wave.continuing:
+                                result = await _submit_before_wave_deadline(
+                                    operation, bot, order, transport, ordinary_wave.deadline
                                 )
                             else:
                                 result = await operation(bot, order)
@@ -162,10 +177,13 @@ def connector_write(action):
                         finally:
                             # A read made during submission cannot confirm its result.
                             if needs_confirmation:
-                                if cancel_wave is not None:
+                                if ordinary_wave is not None:
                                     if transport.submitted:
-                                        if active_ordinary_cancel_wave(bot) is cancel_wave:
-                                            cancel_wave.confirmations.update(surfaces)
+                                        if (
+                                            active_ordinary_cancel_wave(bot) is cancel_wave
+                                            and active_ordinary_create_wave(bot) is create_wave
+                                        ):
+                                            ordinary_wave.confirmations.update(surfaces)
                                         else:
                                             bot._request_authoritative_confirmation(surfaces)
                                 elif batch is not None and active_protective_batch(bot) is batch:
@@ -201,10 +219,13 @@ class OrdinaryReceipts:
 
     sources: tuple
     fills: object
+    trailing_resets: object
 
     def mismatch_reason(self, other):
         if self.fills is not other.fills:
             return "hsl_fill_receipt_replaced"
+        if self.trailing_resets is not other.trailing_resets:
+            return "hsl_trailing_reset_evidence_replaced"
         if len(self.sources) != len(other.sources) or any(
             symbol != current_symbol or receipt is not current_receipt
             for (symbol, receipt), (current_symbol, current_receipt)
@@ -314,6 +335,113 @@ class OrdinaryCancelWave:
 
 
 @dataclass
+class OrdinaryCreateWave:
+    """At most two close creates bound to the same ordinary planning snapshot."""
+
+    members: tuple["OrdinaryCloseWaveMember", "OrdinaryCloseWaveMember"]
+    snapshot: "PlanningSnapshot"
+    deadline: float
+    account_cohort: tuple
+    existing_order_ids: frozenset[str] = field(default_factory=frozenset)
+    wave_id: str = field(default_factory=lambda: uuid4().hex)
+    confirmations: set[str] = field(default_factory=set)
+    submitted: list[dict] = field(default_factory=list)
+    acknowledged_ids: set[str] = field(default_factory=set)
+
+    @property
+    def continuing(self):
+        return bool(self.acknowledged_ids)
+
+    def permits(self, bot, order, action):
+        import asyncio
+        from utils import utc_ms
+        from live.bitunix_create_wave import close_is_passive
+        from live.planning_gates import current_planning_snapshot_invalid_for_creations
+
+        index = len(self.submitted)
+        if (
+            action != "create"
+            or index != len(self.acknowledged_ids)
+            or index >= len(self.members)
+            or self.members[index].order is not order
+            or getattr(bot, "_current_planning_snapshot", None) is not self.snapshot
+            or runtime.enabled(bot)
+            or not bot._loss_gate_max_drawdown_fraction() >= 1.0
+            or bot.live_value("time_in_force") != "post_only"
+            or (self.continuing and asyncio.get_running_loop().time() >= self.deadline)
+        ):
+            return False
+        member = self.members[index]
+        symbol = order["symbol"]
+        instance = owner(bot)
+        return (
+            instance._ordinary_account_cohort() == self.account_cohort
+            and bot.cca._position_ids.get((symbol, order["position_side"]))
+            == member.position_id
+            and not current_planning_snapshot_invalid_for_creations(
+                bot, (symbol,), snapshot=self.snapshot
+            )
+            and close_is_passive(
+                member,
+                instance.quotes.get(symbol),
+                now_ms=int(utc_ms()),
+                max_age_ms=bot._live_market_snapshot_fetch_max_age_ms(),
+            )
+        )
+
+    def record_submission(self, order):
+        self.submitted.append(order)
+
+    def confirm(self, bot):
+        if self.confirmations:
+            bot._request_authoritative_confirmation(self.confirmations)
+            self.confirmations.clear()
+
+
+def bind_ordinary_create_wave(bot, orders, snapshot):
+    """Choose a wave after order-specific admission, while the original plan is current."""
+    import asyncio
+    from utils import utc_ms
+    from live.bitunix_create_wave import select_ordinary_close_wave
+
+    instance = getattr(bot, "_hsl_live", None)
+    if instance is None or snapshot is None or runtime.enabled(bot):
+        return None
+    now_ms = int(utc_ms())
+    members = select_ordinary_close_wave(
+        bot,
+        orders,
+        instance.quotes,
+        now_ms=now_ms,
+        max_age_ms=bot._live_market_snapshot_fetch_max_age_ms(),
+    )
+    if not members:
+        return None
+    if not all(
+        position_fill_sync.permits(bot, member.order, "create") for member in members
+    ):
+        return None
+    ledger = bot._ensure_freshness_ledger()
+    oldest_ms = min(
+        ledger.surface_updated_ms(surface)
+        for surface in ("balance", "positions", "open_orders")
+    )
+    account_time_left = (
+        oldest_ms + bot._live_market_snapshot_max_age_ms() - now_ms
+    ) / 1000
+    interval = float(bot.live_value("execution_delay_seconds"))
+    if not isfinite(interval) or min(interval, account_time_left) <= 0:
+        return None
+    return OrdinaryCreateWave(
+        members,
+        snapshot,
+        asyncio.get_running_loop().time() + min(interval, account_time_left),
+        account_cohort=instance._ordinary_account_cohort(),
+        existing_order_ids=frozenset(order["id"] for order in bot.fetched_open_orders),
+    )
+
+
+@dataclass
 class CurrentIoRetry:
     """Transport retry state shared by replacement bots in one live process."""
 
@@ -376,6 +504,7 @@ class Owner:
         self._waves = {}
         self._protective_batch = None
         self._ordinary_cancel_wave = None
+        self._ordinary_create_wave = None
         self._retired_ordinary_receipts = weakref.WeakSet()
         self._quote_tasks = {}
         self._quote_started = {}
@@ -1073,6 +1202,7 @@ class Owner:
         return OrdinaryReceipts(
             tuple(sorted(self.sources.items())),
             getattr(self.bot, "_hsl_fill_observation", None),
+            getattr(self.bot, "_trailing_reset_evidence", None),
         )
 
     async def _ordinary_plan(self):
@@ -1284,6 +1414,9 @@ class Owner:
             self.bot._hsl_planning_wave = replace(wave, ordinary_receipts=None)
 
     def _freeze_ordinary_plan(self, account, initial_receipts, cancels, creates):
+        from live import close_replacement_diagnostics
+        from utils import utc_ms
+
         bot = self.bot
         if not self.same_account_facts(account, self.account_facts()):
             self._defer_ordinary("account_facts_changed", phase="after_reconciliation")
@@ -1312,6 +1445,13 @@ class Owner:
             required_fills=self.required_fill_facts(),
             ordinary_receipts=receipts,
         )
+        if getattr(bot, "_console_close_replacements", None) and not bot.debug_mode:
+            run_diagnostic_step(
+                "observe reconciled close replacement",
+                lambda: close_replacement_diagnostics.observe_reconciled_plan(
+                    bot, creates, int(utc_ms())
+                ),
+            )
         return cancels, creates, bot._current_planning_snapshot, wave
 
     def schedule_account_reporting(self):

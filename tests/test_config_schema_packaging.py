@@ -1,6 +1,7 @@
 """Exercise schema resources through offline source/archive/wheel packaging."""
 
 import json
+from email.parser import BytesParser
 import os
 from pathlib import Path
 import shutil
@@ -8,6 +9,8 @@ import subprocess
 import sys
 import tarfile
 import zipfile
+
+from passivbot_version import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -96,6 +99,9 @@ def test_source_archive_and_wheel_ship_checked_schema_and_installed_cli_is_offli
     assert built.returncode == 0, built.stdout + built.stderr
     installed = tmp_path / "installed"
     with zipfile.ZipFile(next(wheels.glob("passivbot-*.whl"))) as wheel:
+        metadata_path = next(name for name in wheel.namelist() if name.endswith(".dist-info/METADATA"))
+        metadata = BytesParser().parsebytes(wheel.read(metadata_path))
+        assert metadata["Version"] == __version__
         assert wheel.read("tools/schemas/config-v9.schema.json") == expected
         for path, contents in dashboard_assets.items():
             assert wheel.read(path) == contents
@@ -116,14 +122,19 @@ socket.socket.connect = offline
 socket.create_connection = offline
 socket.getaddrinfo = offline
 from passivbot_cli.main import main
+from passivbot_version import __version__
+from importlib.metadata import version
 from tools.config_schema import DEFAULT_OUTPUT
+assert version("passivbot") == __version__ == sys.argv[3]
+assert main(["--version"]) == 0
 assert DEFAULT_OUTPUT == Path(sys.argv[1])
 assert main(["tool", "config-schema", "--check"]) == 0
 assert main(["tool", "config-schema", "--output", sys.argv[2]]) == 0
 assert main(["tool", "config-schema", "--field", "bot.long.unstuck.ema_span_0_minutes"]) == 0
-""", str(resource), str(destination), cwd=tmp_path, pythonpath=installed,
+""", str(resource), str(destination), __version__, cwd=tmp_path, pythonpath=installed,
     )
     assert checked.returncode == 0, checked.stdout + checked.stderr
+    assert f"passivbot {__version__}\n" in checked.stdout
     assert destination.read_bytes() == expected
     assert resource.read_bytes() == expected
     assert resource.stat().st_mtime_ns == before

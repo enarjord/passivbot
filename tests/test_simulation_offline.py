@@ -397,7 +397,7 @@ async def test_btc_candidates_try_all_local_sources(monkeypatch, use_v2, all_mis
         cc = None
         def __init__(self, exchange, *args, **kwargs):
             self.exchange = exchange
-        def update_date_range(self, *args):
+        def update_timestamp_range(self, *args):
             pass
         async def load_markets(self):
             pass
@@ -461,7 +461,7 @@ async def test_multi_venue_btc_prefers_configured_local_sources(
             self.start_date = "2024-01-01"
             self.end_date = "2024-01-02"
 
-        def update_date_range(self, *args):
+        def update_timestamp_range(self, *args):
             pass
 
         async def load_markets(self):
@@ -686,7 +686,7 @@ async def test_combined_btc_rejects_partial_history(
             self.exchange = exchange
             attempts.append(exchange)
 
-        def update_date_range(self, *args):
+        def update_timestamp_range(self, *args):
             pass
 
         async def load_markets(self):
@@ -732,3 +732,53 @@ async def test_combined_btc_rejects_partial_history(
                         else ["hyperliquid", "bybit", "binanceusdm"])
     assert closed == attempts
     assert "does not cover requested range" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_available", [False, True])
+async def test_single_venue_external_btc_requires_complete_prepared_range(tmp_path, monkeypatch, caplog, fallback_available):
+    from utils import ts_to_date
+
+    monkeypatch.chdir(tmp_path)
+    cache = metadata(tmp_path)
+    markets = json.loads((cache / "binance/markets.json").read_text())
+    eth_symbol = "ETH/USDT:USDT"
+    markets[eth_symbol] = dict(markets[SYMBOL], id="ETHUSDT", base="ETH", symbol=eth_symbol)
+    (cache / "bybit").mkdir()
+    (cache / "bybit/markets.json").write_text(json.dumps(markets))
+
+    end = START + 86_400_000
+    source = tmp_path / "source"
+
+    def write_days(exchange, coin, first, close):
+        folder = source / exchange / "1m" / coin
+        folder.mkdir(parents=True)
+        for timestamps in (np.arange(first, end, 60_000), np.array([end])):
+            day = ts_to_date(int(timestamps[0]))[:10]
+            n = len(timestamps)
+            np.save(folder / f"{day}.npy", np.column_stack((
+                timestamps, np.full(n, close), np.full(n, close + 1),
+                np.full(n, close - 1), np.full(n, close), np.ones(n),
+            )))
+
+    write_days("bybit", "ETH", START, 100.0)
+    write_days("bybit", "BTC", START + 3 * 60_000, 50_000.0)
+    if fallback_available:
+        write_days("binance", "BTC", START, 40_000.0)
+
+    config = minute_cache_config()
+    config["backtest"].update(
+        offline=True, exchanges=["bybit"], start_date=ts_to_date(START),
+        end_date=ts_to_date(end), ohlcv_source_dir=str(source), gap_tolerance_ohlcvs_minutes=0,
+    )
+    set_side_universe_sources(config, "approved_coins", {"long": ["ETH"], "short": []})
+    if not fallback_available:
+        with pytest.raises(OfflineDataError, match="BTC benchmark"):
+            await hp.prepare_hlcvs(config, "bybit")
+        return
+    settings, timestamps, _, btc_prices = await hp.prepare_hlcvs(config, "bybit")
+    assert settings["__meta__"]["btc_source_exchange"] == "binanceusdm"
+    assert settings["ETH"]["external_source_window"]["actual_start_ms"] == START
+    assert int(timestamps[0]) == START
+    np.testing.assert_array_equal(btc_prices, np.full(len(timestamps), 40_000.0))
+    assert "BTC/USD candidate bybit does not cover requested range" in caplog.text

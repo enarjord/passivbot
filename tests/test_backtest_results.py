@@ -21,6 +21,7 @@ from backtest_reports import (
     equity_view,
     hsl_view,
     render_reports,
+    wallet_exposure_view,
 )
 from tools.backtest_dash import BacktestAPI
 
@@ -204,10 +205,10 @@ def test_report_failure_keeps_facts_and_records_the_failure(tmp_path, monkeypatc
     assert len(store.equity()) == 5
 
 
-def test_reports_default_to_equity_and_hsl_and_keep_csv_an_explicit_export(tmp_path):
+def test_default_reports_skip_unavailable_facts_and_keep_csv_an_explicit_export(tmp_path):
     store, frame = result(tmp_path)
     status = render_reports(store)
-    assert status["artifacts"] == ["equity.png"]  # HSL has no producer in this fixture.
+    assert status["artifacts"] == ["equity.png"]
     assert not list(tmp_path.rglob("*pnl*"))
     assert not (tmp_path / "balance_and_equity.csv.gz").exists()
     status = render_reports(store, options=ReportOptions((), equity_csv=True))
@@ -218,6 +219,57 @@ def test_reports_default_to_equity_and_hsl_and_keep_csv_an_explicit_export(tmp_p
     )
     np.testing.assert_equal(
         loaded.strategy_equity.to_numpy(), frame.strategy_equity.to_numpy()
+    )
+
+
+def test_wallet_exposure_uses_last_same_clock_fill_and_weights_by_elapsed_time(tmp_path):
+    store, frame = result(tmp_path, [100.0] * 101)
+    pd.DataFrame(
+        {
+            "timestamp": frame.index[[1, 1, 2, 3, 80]],
+            "twe_long": [4.0, 0.25, 1.5, 0.0, 0.5],
+            "twe_short": [0.0, -0.5, -0.5, 0.0, 0.0],
+            "twe_net": [42.0] * 5,
+        }
+    ).to_csv(tmp_path / "fills.csv", index=False)
+    view = wallet_exposure_view(store)
+    np.testing.assert_array_equal(
+        view["timestamp"], frame.index[[0, 1, 2, 3, 80, 100]].as_unit("ms").asi8
+    )
+    np.testing.assert_array_equal(
+        view["exposure_ratio"],
+        [[0, 0], [0.25, 0.5], [1.5, 0.5], [0, 0], [0.5, 0], [0.5, 0]],
+    )
+    # A one-minute peak lies above P95, and the last state persists for 20 minutes.
+    np.testing.assert_allclose(
+        view["summary"], [[0.1175, 0.5, 1.5, 0.22], [0.01, 0, 0.5, 0.02]]
+    )
+    assert not view["has_gaps"]
+    assert render_reports(store)["artifacts"] == ["equity.png", "total_wallet_exposure.png"]
+    assert render_reports(store, disabled={"twe"})["artifacts"] == ["equity.png"]
+
+
+def test_wallet_exposure_reports_flat_runs_and_excludes_depleted_balance(tmp_path):
+    store, frame = result(tmp_path)
+    fills_path = tmp_path / "fills.csv"
+    pd.DataFrame(columns=["timestamp", "twe_long", "twe_short"]).to_csv(
+        fills_path, index=False
+    )
+    view = wallet_exposure_view(store)
+    np.testing.assert_equal(view["summary"], [(0.0,) * 4, (0.0,) * 4])
+    pd.DataFrame(
+        {
+            "timestamp": frame.index[[1, 2]],
+            "twe_long": [1.0, 0.0],
+            "twe_short": [-0.5, 0.0],
+            "usd_total_balance": [100.0, 0],
+        }
+    ).to_csv(fills_path, index=False)
+    view = wallet_exposure_view(ResultStore(tmp_path))
+    assert view["has_gaps"]
+    assert np.isnan(view["exposure_ratio"][-2:]).all()
+    np.testing.assert_allclose(
+        view["summary"], [[0.5, 1, 1, 0.5], [0.25, 0.5, 0.5, 0.5]]
     )
 
 

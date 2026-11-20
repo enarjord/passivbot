@@ -387,7 +387,7 @@ def test_report_option_roundtrips_and_is_strictly_boolean(detailed):
     )
     for bad in ["false", 0, None]:
         cfg["backtest"]["hsl_detailed_report"] = bad
-        with pytest.raises(ValueError, match="hsl_detailed_report must be a boolean"):
+        with pytest.raises(TypeError, match="hsl_detailed_report must be a boolean"):
             prepare_config(cfg, verbose=False, target="canonical", runtime=None)
     del cfg["backtest"]["hsl_detailed_report"]
     assert (

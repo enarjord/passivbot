@@ -9,7 +9,7 @@ from config import prepare_config
 from config.field_registry import get_field_registry
 from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 from config.param_paths import resolve_optimizer_key_path
-from config.public_names import PUBLIC_PATH_RENAMES, SHARED_SIDE_PATH_RENAMES
+from config.migrations.released_public_names import PUBLIC_PATH_RENAMES, SHARED_SIDE_PATH_RENAMES
 from config.schema import get_template_config, get_expanded_config_prototype
 from config.migrations.released_v8_strategy import RELEASED_V8_STRATEGY_PATH_RENAMES
 from released_v8_fixtures import released_v8_policy

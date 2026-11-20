@@ -12,6 +12,13 @@ eligibility, replay order, or runtime decisions.
 
 ## Signed Price Diagnostics
 
+`position.changed.data.signed_entry_distance_fraction` uses the new average entry price and the
+diagnostic last price. Monitor position rows use the same
+[signed entry distance](../numeric_conventions.md#quantities) convention with their snapshot last
+price. Positive means favorable for either position side. Closed or flat positions and observations
+without a usable entry or last price omit the field. A measured breakeven is zero. Historical
+`price_action_distance` fields use the former adverse-positive convention.
+
 Trailing `current_price_change_from_threshold_fraction` and
 `current_price_change_from_retracement_fraction` report `current / reference - 1`.
 Monitor `next_target_price_offset_fraction` and `next_unstuck_trigger_price_offset_fraction`
@@ -23,8 +30,8 @@ values retained. Console and dashboard percentage formatting is unchanged.
 
 Owned diagnostic fields ending in `_percent` use scale 100: `2.5` means 2.5%, without a numeric
 rescaling from their previous abbreviated spelling. This includes replacement price/quantity
-differences (absolute relative differences), unstuck price changes and changes from a balance peak
-(signed), memory changes, execution-distance samples, progress, budget usage and failure shares.
+differences (absolute relative differences), changes from a balance peak (signed), memory changes,
+execution-distance samples, progress, budget usage and failure shares.
 CPU, memory and budget usage may exceed 100 where the producer's existing contract permits it.
 Percentile qualifiers such as `p95` describe selection, not a percent-valued output. External
 library field names remain unchanged; report producers and consumers use the owned names together.
@@ -340,6 +347,36 @@ classification, guardrails, confirmations, balance handling, or follow-up refres
 retains order rows, identifiers, symbols, prices, raw payloads, exception text, or samples.
 When the structured console is disabled or unavailable, the same bounded count retains one legacy
 `[order]` INFO fallback; the two console paths never intentionally write the same observation.
+
+## Close Replacement Timing
+
+`order.close_replacement_timing` records timing for a tracked ordinary limit close replacement
+after an unambiguous cancel acknowledgment. The event identifies the symbol and position side,
+with optional synthetic `cancel_wave_id` and `create_wave_id` for joining execution events.
+These numeric wave IDs correspond to the `ow_{id}` execution event IDs. When available,
+`create_action_index` identifies the specific create within its wave.
+`elapsed_ms` is the time from the cancel acknowledgment to the observation. Milestones use
+the same origin:
+
+- `account_confirmed_ms` records the first observed post-cancel epoch readiness covering
+  balance, positions, open orders, and fills. A subsequent change can require reconfirmation.
+- `first_plan_ms` records the first validated, reconciled plan with a unique ordinary create
+  candidate for the same symbol and position side, before waiting for executor handoff.
+- `create_admitted_ms` records executor admission of the candidate that reached transport.
+
+Milestones are omitted when unobserved. When present, `last_create_defer` identifies a recent
+create-side guard for this position side. `last_missing_surfaces` lists recent missing account
+surfaces from the ordinary planner. These observations do not assign elapsed time to a blocker.
+
+`outcome=create_sent` is recorded once at guarded submission. If the existing delayed-close
+warning fires first, `still_waiting` records one partial observation. A tracked replacement
+that resolves before a guarded send may report `position_closed`, `resting_close_observed`,
+or `no_close_in_plan`. Each tracked replacement produces at most one terminal observation.
+`create_sent` marks submission. Placement acknowledgments retain their existing event.
+
+The event goes to structured and monitor sinks. It carries no prices, quantities, or venue
+order IDs. Tracking and publication are best effort and leave order admission, account
+confirmation, reconciliation, and retry scheduling unchanged.
 
 ## Order-Replacement Churn
 

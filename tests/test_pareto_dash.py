@@ -75,6 +75,36 @@ def test_load_pareto_dataframe_handles_suite_and_params(tmp_path):
     assert np.isclose(df["objective.cagr_fraction_strategy_equity"].iloc[0], 1.0)
 
 
+def test_dashboard_exports_authored_bot_policy_from_versioned_records(tmp_path):
+    from config.result_records import build_result_record
+    from config.schema import get_template_config
+    from optimize import get_starting_configs
+
+    config = get_template_config()
+    config["bot"]["long"]["enabled"] = True
+    entry = config["bot"]["global"]["strategy"]["trailing_martingale"]["entry"]
+    entry["initial_qty_fraction"] = 0.031
+    metric = "cagr_fraction_strategy_equity"
+    config["optimize"]["scoring"] = [{"metric": metric, "goal": "max"}]
+    record = build_result_record(
+        config,
+        metrics={"definition_version": 2, "objectives": {metric: 0.5}},
+        provenance={"backtest_coins": {"binance": ["BTC"]}},
+    )
+    name = "candidate.json"
+    _write_pareto_entry(tmp_path / "pareto" / name, record)
+
+    dashboard = pareto_dash.load_pareto_dataframe(str(tmp_path))
+    assert dashboard.dataframe[f"objective.{metric}"].iloc[0] == 0.5
+    assert dashboard.raw_configs[name] == config
+    exported = pareto_dash._export_bot_config(dashboard.raw_configs[name])
+    assert json.loads(exported) == {"config_version": "v9.0.0", "bot": config["bot"]}
+    path = tmp_path / "seed.json"
+    path.write_text(exported)
+    [seed] = get_starting_configs(str(path))
+    assert seed["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == 0.031
+
+
 def test_load_pareto_dataframe_keeps_median_named_aggregated_metric(tmp_path):
     run_dir = tmp_path / "run"
     pareto_dir = run_dir / "pareto"

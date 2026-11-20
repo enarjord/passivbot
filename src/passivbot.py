@@ -47,6 +47,7 @@ from fill_events_manager import (
     FillEventsManager,
     FillRefreshWork,
     PNL_SOURCE_SYNTHETIC_DEGRADED,
+    TrailingResetFill,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     _hyperliquid_fill_position_chain,
@@ -59,6 +60,7 @@ from fill_events_manager import (
 )
 from live import (
     candle_ws,
+    close_replacement_diagnostics,
     executor,
     market_data,
     planning_gates,
@@ -91,7 +93,6 @@ from live.diagnostic_safety import (
     exception_text_contains,
     exception_type_name_contains,
 )
-from live.close_replacement_diagnostics import observe_account as observe_close_replacements
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
 from live.console_health import (
@@ -103,6 +104,7 @@ from live.console_health import (
 from live.event_bus import (
     ConsoleSummarySink,
     EventTypes,
+    format_entry_distance_percent,
     format_forager_eligibility_console,
     format_market_snapshot_diagnostic_console,
     format_memory_snapshot_console,
@@ -130,7 +132,7 @@ from live.market_snapshot import (
     SHARED_QUOTE_CANCEL_GRACE_SECONDS,
 )
 from live.planning_snapshot import PlanningSnapshot, PlanningSnapshotUnavailable
-from passivbot_exceptions import RestartBotException, FatalBotException
+from passivbot_exceptions import FillEventDataError, RestartBotException, FatalBotException
 from live import exchange_params, planner_inputs
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
@@ -191,6 +193,7 @@ BOT_CLOSE_TIMEOUT_SECONDS = (
     SHARED_QUOTE_CLEANUP_SECONDS + SHARED_QUOTE_CANCEL_GRACE_SECONDS + 3.0
 )
 EXECUTION_SCHEDULED_WAIT_SECONDS = 30
+TRAILING_RESET_PROBE_TIMEOUT_SECONDS = 1.0
 
 
 from config.universe import get_authored_side_universe_sources, require_side_universe_sources
@@ -212,6 +215,21 @@ class _OrchestratorPreparation:
     signed_rms_directionality: dict
     forager_signed_rms_directionality: dict
     rms_directionality_unavailable: dict
+
+
+@dataclass(frozen=True)
+class _TrailingResetPosition:
+    state: tuple[float, float]
+    update_ms: int | None
+    open_ms: int | None
+
+
+@dataclass(frozen=True)
+class _TrailingResetEvidence:
+    manager: FillEventsManager
+    position: _TrailingResetPosition
+    generation: int
+    fill: TrailingResetFill
 
 
 class FillHistoryCoverageUnavailable(RuntimeError):
@@ -1401,7 +1419,6 @@ class Passivbot:
         self.price_steps = {}
         self.c_mults = {}
         self.max_leverage = {}
-        self.pside_int_map = {"long": 0, "short": 1}
         self.PB_modes = {"long": {}, "short": {}}
         self._order_churn_gate_state = OrderChurnGateState()
         self._order_churn_risk_active_pairs: tuple[tuple[str, str], ...] = ()
@@ -1628,6 +1645,7 @@ class Passivbot:
             exchange_name=self.exchange,
             fetch_tickers=getattr(self, "fetch_tickers", None),
             fetch_tickers_for_symbols=getattr(self, "fetch_tickers_for_symbols", None),
+            fetch_market_tickers_for_symbols=getattr(self, "fetch_market_tickers_for_symbols", None),
             ticker_strategy=self._market_snapshot_ticker_strategy(),
         )
         if self.monitor_publisher is not None or self._live_event_pipeline is not None:
@@ -7574,48 +7592,6 @@ class Passivbot:
             return
         apply_rest_overrides_to_ccxt(client, self.endpoint_override)
 
-    def _compute_fetch_budget_ttls(
-        self, syms: list, max_age_ms: Optional[int], max_network_fetches: Optional[int]
-    ) -> Tuple[Dict[str, int], set]:
-        """Compute per-symbol TTLs with fetch budget, return (per_sym_ttl, cache_only_never_fetched).
-
-        Symbols within the fetch budget get the real max_age_ms; symbols over the
-        budget get a huge TTL so they only use cached data.  Symbols assigned
-        cache-only TTL that have never been fetched are collected into a skip set
-        (get_candles treats last_refresh_ms==0 as "needs refresh" regardless of TTL).
-        """
-        CACHE_ONLY_TTL = 365 * 24 * 3600 * 1000  # ~1 year – effectively cache-only
-        per_sym_ttl: Dict[str, int] = {}
-        if (
-            max_network_fetches is not None
-            and max_network_fetches >= 0
-            and max_age_ms is not None
-        ):
-            now = utc_ms()
-            staleness = []
-            for s in syms:
-                staleness.append((s, self._candle_staleness_ms(s, now_ms=now)))
-            staleness.sort(key=lambda x: x[1], reverse=True)  # most stale first
-            fetch_set = set(s for s, _ in staleness[:max_network_fetches])
-            for s in syms:
-                per_sym_ttl[s] = int(max_age_ms) if s in fetch_set else CACHE_ONLY_TTL
-        else:
-            for s in syms:
-                per_sym_ttl[s] = int(max_age_ms) if max_age_ms is not None else 0
-
-        cache_only_never_fetched: set = set()
-        for s in syms:
-            if per_sym_ttl.get(s) == CACHE_ONLY_TTL:
-                try:
-                    last_refresh = int(self.cm.get_last_refresh_ms(s) or 0)
-                    last_final = int(self.cm.get_last_final_ts(s) or 0)
-                    if last_refresh == 0 and last_final == 0:
-                        cache_only_never_fetched.add(s)
-                except Exception:
-                    cache_only_never_fetched.add(s)
-
-        return per_sym_ttl, cache_only_never_fetched
-
     def _candle_staleness_ms(self, symbol: str, *, now_ms: Optional[int] = None) -> int:
         """Return completed-1m candle lag versus the latest finalized minute."""
         now = utc_ms() if now_ms is None else int(now_ms)
@@ -8304,6 +8280,8 @@ class Passivbot:
         pside: str,
         state: tuple[float, float],
         anchor: dict | None,
+        *,
+        reset_evidence: _TrailingResetEvidence | None = None,
     ) -> str | None:
         """Return the evidence kind matching a fill anchor to exchange state."""
         if anchor is None:
@@ -8353,6 +8331,15 @@ class Passivbot:
             qty_tolerance=qty_tolerance,
         ):
             return "position_open_boundary"
+        if self._position_update_fill_matches_state(
+            symbol,
+            pside,
+            state,
+            anchor,
+            qty_tolerance=qty_tolerance,
+            evidence=reset_evidence,
+        ):
+            return "position_update_boundary"
         return None
 
     def _position_open_fill_replay_matches_state(
@@ -8404,6 +8391,8 @@ class Passivbot:
         if not events:
             return False
         events.sort(key=lambda event: int(event.timestamp))
+        if sum(int(event.timestamp) == anchor_ts for event in events) != 1:
+            return False
 
         # Start at the first additive fill tied closely to the exchange's
         # opening timestamp. A distant first event means the available history
@@ -8503,17 +8492,116 @@ class Passivbot:
             pprice, position_price, strict_price_tolerance
         )
 
+    def _trailing_reset_position_fact(
+        self, symbol: str, pside: str
+    ) -> _TrailingResetPosition | None:
+        position = self.positions.get(symbol, {}).get(pside)
+        if position is None or not position["size"]:
+            return None
+        return _TrailingResetPosition(
+            (position["size"], position["price"]),
+            self._position_update_timestamp_from_row(position),
+            self._position_open_timestamp_from_row(position),
+        )
+
+    def _position_update_fill_matches_state(
+        self,
+        symbol: str,
+        pside: str,
+        state: tuple[float, float],
+        anchor: dict,
+        *,
+        qty_tolerance: float,
+        evidence: _TrailingResetEvidence | None,
+    ) -> bool:
+        key = (symbol, pside)
+        if evidence is None:
+            evidence = getattr(self, "_trailing_reset_evidence", {}).get(key)
+        manager = getattr(self, "_pnls_manager", None)
+        minimum = getattr(self, "_trailing_pending_fill_min_generations", {}).get(key, 0)
+        if (
+            evidence is None
+            or evidence.manager is not manager
+            or evidence.position != self._trailing_reset_position_fact(symbol, pside)
+            or evidence.generation < minimum
+        ):
+            return False
+        fill = evidence.fill
+        if (
+            fill.timestamp != anchor["timestamp"]
+            or fill.timestamp != evidence.position.update_ms
+            or evidence.position.open_ms not in (None, fill.timestamp)
+            or fill.side != ("buy" if pside == "long" else "sell")
+        ):
+            return False
+        cohort = [
+            event
+            for event in manager.get_events(fill.timestamp, fill.timestamp, symbol)
+            if event.position_side == pside
+        ]
+        if len(cohort) != 1:
+            return False
+        cached = cohort[0]
+        if (
+            cached.id != fill.id
+            or list(cached.source_ids) != [fill.id]
+            or self._fill_position_change_epoch(cached) != anchor["epoch"]
+            or (cached.side, cached.qty, cached.price, cached.c_mult)
+            != (fill.side, fill.qty, fill.price, 1.0)
+        ):
+            return False
+        size, price = state
+        price_tick = self._effective_position_price_tick(symbol, price, fill.price)
+        price_tolerance = max(price_tick * 0.5, abs(price) * 1e-9, 1e-12)
+        return abs(abs(fill.qty) - abs(size) * self.c_mults[symbol]) <= qty_tolerance and (
+            self._within_absolute_tolerance(fill.price, price, price_tolerance)
+        )
+
+    def _prune_trailing_reset_evidence(self, *, check_fills: bool = False) -> None:
+        if not check_fills:
+            retry = getattr(self, "_trailing_reset_probe_retry", {})
+            for key, (position, _) in tuple(retry.items()):
+                if position != self._trailing_reset_position_fact(*key):
+                    # Drop the in-flight request token as well as its cooldown.
+                    # A subsequent equal-looking snapshot cannot revive the proof.
+                    del retry[key]
+        receipts = getattr(self, "_trailing_reset_evidence", {})
+        if not receipts:
+            return
+        anchors = self._latest_fill_position_change_anchors() if check_fills else {}
+        retained = {}
+        for key, receipt in receipts.items():
+            if (
+                receipt.manager is not self._pnls_manager
+                or receipt.position != self._trailing_reset_position_fact(*key)
+            ):
+                continue
+            if check_fills and self._fill_anchor_position_state_match_kind(
+                *key, receipt.position.state, anchors.get(key)
+            ) != "position_update_boundary":
+                continue
+            retained[key] = receipt
+        if len(retained) != len(receipts):
+            self._trailing_reset_evidence = retained
+
     def _emit_position_open_fill_recovery_used(
-        self, symbol: str, pside: str, anchor: dict
+        self, symbol: str, pside: str, anchor: dict, *, update_boundary: bool = False
     ) -> None:
         """Report boundary recovery only after every confirmation predicate clears."""
         position = self.positions.get(symbol, {}).get(pside, {})
         open_ts = self._position_open_timestamp_from_row(position)
         update_ts = self._position_update_timestamp_from_row(position)
         anchor_ts = int(anchor.get("timestamp") or 0)
+        recovery = "position_open_single_fill"
+        payload = {"open_timestamp": open_ts} if open_ts is not None else {}
+        boundary = "open/update boundary"
+        if update_boundary:
+            recovery = "position_update_fresh_single_fill"
+            boundary = "update boundary confirmed by a complete fresh trade cohort"
         logging.warning(
             "[fills] recovered polluted cached after-state from explicit position "
-            "open/update boundary | symbol=%s pside=%s fill_ts=%s",
+            "%s | symbol=%s pside=%s fill_ts=%s",
+            boundary,
             self._log_symbol(symbol),
             pside,
             anchor_ts,
@@ -8524,8 +8612,8 @@ class Passivbot:
                 EventTypes.FILL_POSITION_OPEN_BOUNDARY_RECOVERY_USED,
                 ("diagnostic", "fills", "recovery", "fallback"),
                 {
-                    "recovery": "position_open_single_fill",
-                    "open_timestamp": int(open_ts),
+                    **payload,
+                    "recovery": recovery,
                     "position_update_timestamp": int(update_ts),
                     "fill_timestamp": int(anchor_ts),
                     "cohort_fill_count": 1,
@@ -8951,9 +9039,10 @@ class Passivbot:
                         unavailable_psides[symbol].add(pside)
                         last_position_changes.get(symbol, {}).pop(pside, None)
                         continue
-                    if position_match_kind == "position_open_boundary":
+                    if position_match_kind in ("position_open_boundary", "position_update_boundary"):
                         self._emit_position_open_fill_recovery_used(
-                            symbol, pside, anchor
+                            symbol, pside, anchor,
+                            update_boundary=position_match_kind == "position_update_boundary",
                         )
                     elif position_match_kind == "recorded_after_state_price_tolerance":
                         self._emit_bounded_fill_position_price_discrepancy(
@@ -9824,421 +9913,6 @@ class Passivbot:
                     f",+{len(rows)-3}" if len(rows) > 3 else "",
                 )
 
-    async def get_filtered_coins(
-        self, pside: str, *, max_network_fetches: Optional[int] = None
-    ) -> List[str]:
-        """Select ideal coins for a side using EMA-based volume and log-range filters.
-
-        Steps (for forager mode):
-        - Filter by age and effective min cost
-        - Rank by 1m EMA quote volume
-        - Rank remaining by 1m EMA log range
-        - Return up to n_positions most volatile symbols
-        For non-forager mode, returns all approved candidates.
-        """
-        # filter coins by age
-        # filter coins by min effective cost
-        # filter coins by relative volume
-        # filter coins by log range
-        if self.is_forager_mode(pside):
-            unavailable_by_side = getattr(
-                self, "_forager_rank_feature_unavailable_by_side", None
-            )
-            if not isinstance(unavailable_by_side, dict):
-                unavailable_by_side = {}
-            unavailable_by_side[pside] = set()
-            self._forager_rank_feature_unavailable_by_side = unavailable_by_side
-        if self.get_forced_PB_mode(pside):
-            return []
-        candidates = self.approved_coins_minus_ignored_coins[pside]
-        candidates = [s for s in candidates if self.is_old_enough(pside, s)]
-        min_cost_flags = {
-            s: self.effective_min_cost_is_low_enough(pside, s) for s in candidates
-        }
-        if not any(min_cost_flags.values()):
-            if minimum_cost_filter(self.config, pside):
-                self.warn_on_high_effective_min_cost(pside)
-            return []
-        try:
-            slots_open = self.get_max_n_positions(pside) > self.get_current_n_positions(
-                pside
-            )
-        except Exception:
-            slots_open = False
-        if self.is_forager_mode(pside):
-            forager_candidate_count = len(candidates)
-            feature_unavailable_count = 0
-            volatility_dropped_count = 0
-            # filter coins by relative volume and log range
-            volatility_drop = self.bot_value(pside, "filter_volatility_drop_pct")
-            weights = self.bot_value(pside, "forager_score_weights")
-            if not isinstance(weights, dict):
-                weights = {
-                    "volume": 0.0,
-                    "ema_readiness": 0.0,
-                    "log_range": 1.0,
-                }
-            max_n_positions = self.get_max_n_positions(pside)
-            # Apply max_ohlcv_fetches_per_minute in all cases (slots open or full).
-            max_calls = get_optional_live_value(
-                self.config, "max_ohlcv_fetches_per_minute", 0
-            )
-            try:
-                max_calls = int(max_calls) if max_calls is not None else 0
-            except Exception:
-                max_calls = 0
-            if slots_open:
-                rate_limit_age_ms = self._forager_target_staleness_ms(
-                    len(candidates), max_calls
-                )
-                # Respect rate limit even with open slots; floor at 60s for responsiveness.
-                max_age_ms = max(60_000, rate_limit_age_ms) if max_calls > 0 else 60_000
-            else:
-                max_age_ms = self._forager_target_staleness_ms(
-                    len(candidates), max_calls
-                )
-            # Use pre-computed per-side budget from caller if available;
-            # otherwise fall back to computing it here (for backward compat).
-            if max_network_fetches is None:
-                fetch_budget = (
-                    self._forager_refresh_budget(max_calls) if max_calls > 0 else None
-                )
-            else:
-                try:
-                    fetch_budget = max(0, int(max_network_fetches))
-                except Exception:
-                    fetch_budget = 0
-            if float(weights["volume"]) != 0.0:
-                volumes, log_ranges = await self.calc_volumes_and_log_ranges(
-                    pside,
-                    symbols=candidates,
-                    max_age_ms=max_age_ms,
-                    max_network_fetches=fetch_budget,
-                )
-            else:
-                volumes = {
-                    symbol: float(len(candidates) - idx)
-                    for idx, symbol in enumerate(candidates)
-                }
-                log_ranges = await self.calc_log_range(
-                    pside,
-                    eligible_symbols=candidates,
-                    max_age_ms=max_age_ms,
-                    max_network_fetches=fetch_budget,
-                )
-            feature_unavailable = [
-                symbol
-                for symbol in candidates
-                if symbol not in volumes or symbol not in log_ranges
-            ]
-            if feature_unavailable:
-                feature_unavailable_count = len(feature_unavailable)
-                self._forager_rank_feature_unavailable_by_side[pside] = set(
-                    feature_unavailable
-                )
-                Passivbot._emit_forager_feature_unavailable_event(
-                    self,
-                    pside=pside,
-                    symbols=feature_unavailable,
-                    candidate_count=forager_candidate_count,
-                    volume_count=len(volumes),
-                    log_range_count=len(log_ranges),
-                    max_age_ms=max_age_ms,
-                    fetch_budget=fetch_budget,
-                )
-                logging.debug(
-                    "[forager] %s unavailable ranking features | unavailable=%d candidates=%d symbols=%s",
-                    pside,
-                    len(feature_unavailable),
-                    len(candidates),
-                    Passivbot._log_symbols(feature_unavailable, limit=12),
-                )
-                candidates = [
-                    symbol
-                    for symbol in candidates
-                    if symbol in volumes and symbol in log_ranges
-                ]
-                if not candidates:
-                    Passivbot._emit_forager_selection_event(
-                        self,
-                        pside=pside,
-                        candidate_count=forager_candidate_count,
-                        eligible_count=0,
-                        selected_symbols=[],
-                        slots_open=slots_open,
-                        max_n_positions=max_n_positions,
-                        volatility_drop_pct=volatility_drop,
-                        max_age_ms=max_age_ms,
-                        fetch_budget=fetch_budget,
-                        feature_unavailable_count=feature_unavailable_count,
-                        volatility_dropped_count=0,
-                        status="skipped",
-                        reason_code="all_features_unavailable",
-                    )
-                    return []
-            if volatility_drop > 0.0:
-                ranked = sorted(
-                    candidates,
-                    key=lambda symbol: float(log_ranges[symbol]),
-                    reverse=True,
-                )
-                keep_from = min(
-                    len(ranked),
-                    max(0, int(round(len(ranked) * float(volatility_drop)))),
-                )
-                volatility_dropped_count = keep_from
-                candidates = ranked[keep_from:]
-                if not candidates:
-                    Passivbot._emit_forager_selection_event(
-                        self,
-                        pside=pside,
-                        candidate_count=forager_candidate_count,
-                        eligible_count=0,
-                        selected_symbols=[],
-                        slots_open=slots_open,
-                        max_n_positions=max_n_positions,
-                        volatility_drop_pct=volatility_drop,
-                        max_age_ms=max_age_ms,
-                        fetch_budget=fetch_budget,
-                        feature_unavailable_count=feature_unavailable_count,
-                        volatility_dropped_count=volatility_dropped_count,
-                        status="skipped",
-                        reason_code="all_candidates_dropped_by_volatility",
-                    )
-                    return []
-            features = [
-                {
-                    "index": idx,
-                    "enabled": min_cost_flags.get(symbol, True),
-                    "volume_ema": float(volumes[symbol]),
-                    "log_range_ema": float(log_ranges[symbol]),
-                    "ema_entry_price_gap_fraction": 0.0,
-                }
-                for idx, symbol in enumerate(candidates)
-            ]
-            selected = pbr.select_coin_indices_py(
-                features,
-                max_n_positions,
-                weights,
-                True,
-            )
-            ideal_coins = [candidates[i] for i in selected]
-            Passivbot._emit_forager_selection_event(
-                self,
-                pside=pside,
-                candidate_count=forager_candidate_count,
-                eligible_count=len(candidates),
-                selected_symbols=ideal_coins,
-                slots_open=slots_open,
-                max_n_positions=max_n_positions,
-                volatility_drop_pct=volatility_drop,
-                max_age_ms=max_age_ms,
-                fetch_budget=fetch_budget,
-                feature_unavailable_count=feature_unavailable_count,
-                volatility_dropped_count=volatility_dropped_count,
-                status="succeeded" if ideal_coins else "skipped",
-                reason_code="selected" if ideal_coins else "none_selected",
-            )
-            if not ideal_coins and minimum_cost_filter(self.config, pside):
-                if any(not flag for flag in min_cost_flags.values()):
-                    self.warn_on_high_effective_min_cost(pside)
-        else:
-            eligible = [s for s in candidates if min_cost_flags.get(s, True)]
-            if not eligible:
-                if minimum_cost_filter(self.config, pside):
-                    self.warn_on_high_effective_min_cost(pside)
-                return []
-            # all approved coins are selected, no filtering by volume and log range
-            ideal_coins = sorted(eligible)
-        return ideal_coins
-
-    async def calc_volumes_and_log_ranges(
-        self,
-        pside: str,
-        symbols: Optional[Iterable[str]] = None,
-        *,
-        max_age_ms: Optional[int] = 60_000,
-        max_network_fetches: Optional[int] = None,
-    ) -> Tuple[Dict[str, float], Dict[str, float]]:
-        """Compute 1m EMA quote volume and 1m EMA log range per symbol with one candles fetch.
-
-        This uses CandlestickManager.get_latest_ema_metrics() to avoid calling get_candles() twice
-        per symbol (once for volume and once for log range).
-
-        If *max_network_fetches* is set, at most that many symbols will be allowed to
-        trigger a network fetch.  The remaining symbols receive a very large TTL so they
-        return cached data without hitting the API. Symbols with no usable current or
-        bounded cached value are omitted from the returned maps.
-        """
-        span_volume = Passivbot._positive_finite_warmup_value(
-            self.bot_value(pside, "forager_volume_ema_span_minutes"),
-            context=f"forager {pside}.forager_volume_ema_span_minutes", symbol=None,
-        )
-        span_volatility = Passivbot._positive_finite_warmup_value(
-            self.bot_value(pside, "forager_log_range_ema_span_minutes"),
-            context=f"forager {pside}.forager_log_range_ema_span_minutes", symbol=None,
-        )
-        try:
-            activation_span_fraction = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
-            )
-        except Exception:
-            activation_span_fraction = 0.0
-        max_warmup_minutes = live_warmup_cap_minutes(self.config)
-        span_buffer = 1.0 + max(0.0, activation_span_fraction)
-        max_span = max(span_volume, span_volatility)
-        window_candles = (
-            max(1, int(math.ceil(max_span * span_buffer))) if max_span > 0 else 1
-        )
-        if max_warmup_minutes > 0:
-            window_candles = min(int(window_candles), int(max_warmup_minutes))
-        if symbols is None:
-            symbols = self.get_symbols_approved_or_has_pos(pside)
-
-        syms = list(symbols)
-
-        per_sym_ttl, cache_only_never_fetched = self._compute_fetch_budget_ttls(
-            syms, max_age_ms, max_network_fetches
-        )
-
-        async def one(symbol: str):
-            if symbol in cache_only_never_fetched:
-                return None
-            ttl = per_sym_ttl.get(symbol)
-            if ttl is None or ttl == 0:
-                if max_age_ms is not None:
-                    ttl = int(max_age_ms)
-                else:
-                    has_pos = self.has_position(symbol)
-                    has_oo = (
-                        bool(self.open_orders.get(symbol))
-                        if hasattr(self, "open_orders")
-                        else False
-                    )
-                    ttl = (
-                        60_000
-                        if (has_pos or has_oo)
-                        else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
-                    )
-            vol = float("nan")
-            lr = float("nan")
-            try:
-                res = await self.cm.get_latest_ema_metrics(
-                    symbol,
-                    {"qv": span_volume, "log_range": span_volatility},
-                    max_age_ms=ttl,
-                    window_candles=window_candles,
-                    timeframe=None,
-                )
-                vol = float(res.get("qv", float("nan")))
-                lr = float(res.get("log_range", float("nan")))
-            except Exception:
-                pass
-            missing_metrics: dict[str, float] = {}
-            if not np.isfinite(vol):
-                missing_metrics["qv"] = float(span_volume)
-            if not np.isfinite(lr):
-                missing_metrics["log_range"] = float(span_volatility)
-            if missing_metrics:
-                cached = await Passivbot._get_forager_cached_ema_metrics(
-                    self,
-                    symbol,
-                    missing_metrics,
-                    max_staleness_ms=max_age_ms,
-                    window_candles=window_candles,
-                )
-                if "qv" in cached:
-                    vol = float(cached["qv"])
-                if "log_range" in cached:
-                    lr = float(cached["log_range"])
-            if not (np.isfinite(vol) and np.isfinite(lr)):
-                return None
-            return (float(vol), float(lr))
-
-        tasks = {s: asyncio.create_task(one(s)) for s in syms}
-        volumes: Dict[str, float] = {}
-        log_ranges: Dict[str, float] = {}
-        started_ms = utc_ms()
-        for sym, task in tasks.items():
-            try:
-                res = await task
-            except Exception:
-                res = None
-            if res is None:
-                continue
-            vol, lr = res
-            volumes[sym] = float(vol)
-            log_ranges[sym] = float(lr)
-
-        # Throttle EMA ranking logs to at most once per 5 minutes per metric.
-        # Log only when rankings have changed since last logged snapshot.
-        elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
-        now_ms = utc_ms()
-        ema_log_throttle_ms = 300_000  # 5 minutes between logs per metric (reduced from 60s to reduce forager noise)
-
-        if volumes:
-            top_n = min(8, len(volumes))
-            top = sorted(volumes.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
-            top_syms = tuple(sym for sym, _ in top)
-            if not hasattr(self, "_volume_top_cache"):
-                self._volume_top_cache = {}
-            if not hasattr(self, "_volume_top_last_log_ms"):
-                self._volume_top_last_log_ms = {}
-            cache_key = (pside, span_volume)
-            last_top = self._volume_top_cache.get(cache_key)
-            last_log_ms = self._volume_top_last_log_ms.get(cache_key, 0)
-            # Require both: rankings changed AND enough time has passed
-            if last_top != top_syms and (now_ms - last_log_ms) >= ema_log_throttle_ms:
-                self._volume_top_cache[cache_key] = top_syms
-                self._volume_top_last_log_ms[cache_key] = now_ms
-                summary = ", ".join(
-                    f"{symbol_to_coin(sym)}={val:.2f}" for sym, val in top
-                )
-                logging.info(
-                    f"[ranking] volume EMA span {span_volume}: {len(syms)} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
-                )
-        if log_ranges:
-            top_n = min(8, len(log_ranges))
-            top = sorted(log_ranges.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
-            top_syms = tuple(sym for sym, _ in top)
-            if not hasattr(self, "_log_range_top_cache"):
-                self._log_range_top_cache = {}
-            if not hasattr(self, "_log_range_top_last_log_ms"):
-                self._log_range_top_last_log_ms = {}
-            cache_key = (pside, span_volatility)
-            last_top = self._log_range_top_cache.get(cache_key)
-            last_log_ms = self._log_range_top_last_log_ms.get(cache_key, 0)
-            # Require both: rankings changed AND enough time has passed
-            if last_top != top_syms and (now_ms - last_log_ms) >= ema_log_throttle_ms:
-                self._log_range_top_cache[cache_key] = top_syms
-                self._log_range_top_last_log_ms[cache_key] = now_ms
-                summary = ", ".join(
-                    f"{symbol_to_coin(sym)}={val:.6f}" for sym, val in top
-                )
-                logging.info(
-                    f"[ranking] log_range EMA span {span_volatility}: {len(syms)} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
-                )
-
-        return volumes, log_ranges
-
-    def warn_on_high_effective_min_cost(self, pside):
-        """Log a warning if min effective cost filtering removes every candidate."""
-        if not minimum_cost_filter(self.config, pside):
-            return
-        if not self.is_pside_enabled(pside):
-            return
-        approved_coins_filtered = [
-            x
-            for x in self.approved_coins_minus_ignored_coins[pside]
-            if self.effective_min_cost_is_low_enough(pside, x)
-        ]
-        if len(approved_coins_filtered) == 0:
-            logging.info(
-                f"Warning: No {pside} symbols are approved due to min effective cost too high. "
-                + f"Suggestions: 1) increase account balance, 2) "
-                + f"set 'bot.{pside}.universe.filter_by_min_effective_cost' to false, 3) reduce n_{pside}s"
-            )
-
     def get_max_n_positions(self, pside):
         """Return the configured maximum number of concurrent positions for a side."""
         max_n_positions = min(
@@ -10972,8 +10646,14 @@ class Passivbot:
             )
         if getattr(self, "_console_close_replacements", None):
             run_diagnostic_step(
+                "observe close replacement confirmation",
+                lambda: close_replacement_diagnostics.observe_confirmation(self, int(utc_ms())),
+            )
+            run_diagnostic_step(
                 "observe confirmed close replacements",
-                lambda: observe_close_replacements(self, refreshed_surfaces, int(utc_ms())),
+                lambda: close_replacement_diagnostics.observe_account(
+                    self, refreshed_surfaces, int(utc_ms())
+                ),
             )
 
     def _mark_account_critical_state_dirty(
@@ -11473,7 +11153,7 @@ class Passivbot:
 
     def _ws_order_update_is_self_echo(self, upd_list: list[dict]) -> bool:
         """Return True when a WS batch only confirms recent local creates/cancels."""
-        if not upd_list:
+        if not upd_list or hsl_live.active_ordinary_create_wave(self) is not None:
             return False
         cancel_wave = hsl_live.active_ordinary_cancel_wave(self)
         recognized = 0
@@ -11960,6 +11640,140 @@ class Passivbot:
                 since_ms=since_ms,
             )
 
+    async def _refresh_trailing_reset_evidence(self, generation: int) -> None:
+        """Probe at most four pending coin-sides under the fill single-flight lock."""
+        if getattr(self, "exchange", None) != "binance" or getattr(
+            self, "is_portfolio_margin", False
+        ):
+            return
+        manager = self._pnls_manager
+        acquire = getattr(manager, "fetch_trailing_reset_fill", None)
+        if not callable(acquire):
+            return
+        pending = getattr(self, "_trailing_fill_confirmation_diagnostics", {})
+        cursor = getattr(self, "_trailing_reset_probe_cursor", None)
+        candidates = sorted(
+            key
+            for key, detail in pending.items()
+            if detail["failed_predicates"] == ["fill_after_state_mismatch"]
+        )
+        if not candidates:
+            return
+        if cursor is not None:
+            candidates = [key for key in candidates if key > cursor] + [
+                key for key in candidates if key <= cursor
+            ]
+        anchors = self._latest_fill_position_change_anchors()
+        retry = getattr(self, "_trailing_reset_probe_retry", {})
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        if now < getattr(self, "_trailing_reset_probe_resume_at", 0.0):
+            return
+        # One minute per unchanged pending position. Keep only active pending
+        # candidates so closed positions cannot grow the retry map.
+        retry = {
+            key: retry[key] for key in candidates if key in retry and retry[key][1] > now
+        }
+        self._trailing_reset_probe_retry = retry
+        attempts = 0
+        received = {}
+        deadline = now + TRAILING_RESET_PROBE_TIMEOUT_SECONDS
+        for key in candidates:
+            minimum = getattr(self, "_trailing_pending_fill_min_generations", {}).get(key)
+            completed = getattr(self, "_trailing_fill_fetch_generation", 0)
+            position = self._trailing_reset_position_fact(*key)
+            anchor = anchors.get(key)
+            if (
+                minimum is None
+                or not minimum <= completed <= generation
+                or position is None
+                or anchor is None
+                or position.update_ms != anchor["timestamp"]
+                or position.open_ms not in (None, position.update_ms)
+                or (key in retry and retry[key][0] == position)
+                or self._fill_anchor_position_state_match_kind(*key, position.state, anchor) is not None
+            ):
+                continue
+            self._trailing_reset_probe_cursor = key
+            request = position, loop.time() + 60.0
+            retry[key] = request
+            symbol, pside = key
+            try:
+                async with asyncio.timeout_at(deadline):
+                    fill = await acquire(symbol, pside, anchor["timestamp"])
+            except TimeoutError:
+                logging.warning(
+                    "[fills] trailing reset query budget exhausted | symbol=%s pside=%s "
+                    "action=keep_trailing_pending",
+                    self._log_symbol(symbol), pside,
+                )
+                break
+            except ccxt_errors.InvalidNonce:
+                raise
+            except (
+                ccxt_errors.BadRequest, ccxt_errors.NetworkError, FillEventDataError, OSError
+            ) as exc:
+                logging.warning(
+                    "[fills] trailing reset query unavailable | symbol=%s pside=%s "
+                    "error_type=%s action=keep_trailing_pending",
+                    self._log_symbol(symbol), pside, bounded_exception_type(exc),
+                )
+                retry_after = getattr(exc, "retry_after_seconds", 0.0)
+                if isinstance(
+                    exc,
+                    (
+                        ccxt_errors.RateLimitExceeded,
+                        ccxt_errors.DDoSProtection,
+                        ccxt_errors.OnMaintenance,
+                    ),
+                ) or retry_after > 0.0:
+                    self._trailing_reset_probe_resume_at = loop.time() + max(60.0, retry_after)
+                    if isinstance(exc, ccxt_errors.RateLimitExceeded):
+                        self._health_rate_limits += 1
+                        run_diagnostic_step(
+                            "record trailing reset probe rate limit",
+                            lambda: self._monitor_record_event(
+                                "error.exchange",
+                                ("error", "exchange", "rate_limit"),
+                                {
+                                    "source": "trailing_reset_probe",
+                                    "message": "rate limit exceeded",
+                                },
+                            ),
+                        )
+                    break
+                fill = None
+            if (
+                fill is not None
+                and manager is self._pnls_manager
+                and retry.get(key) is request
+                and position == self._trailing_reset_position_fact(*key)
+                and minimum == self._trailing_pending_fill_min_generations.get(key)
+            ):
+                received[key] = _TrailingResetEvidence(manager, position, generation, fill)
+            attempts += 1
+            if attempts == 4:
+                break
+        if not received:
+            return
+        anchors = self._latest_fill_position_change_anchors()
+        accepted = {
+            key: receipt
+            for key, receipt in received.items()
+            if key in retry
+            and retry[key][0] is receipt.position
+            and self._fill_anchor_position_state_match_kind(
+                *key, receipt.position.state, anchors.get(key), reset_evidence=receipt
+            ) == "position_update_boundary"
+        }
+        if accepted:
+            # Ordinary admission binds the proof map it consumed. The fill
+            # tape and its coverage remain unchanged by this request.
+            self._trailing_reset_evidence = {
+                **getattr(self, "_trailing_reset_evidence", {}),
+                **accepted,
+            }
+
     def _trailing_fill_history_recovery_start_ms(
         self, age_limit: int | None
     ) -> int | None:
@@ -12004,6 +11818,8 @@ class Passivbot:
         cohort_states: dict[tuple[str, str], dict] = {}
         attempted_cohorts: list[tuple[str, str]] = []
         candidates: list[int] = []
+        proofs = getattr(self, "_trailing_reset_evidence", {})
+        anchors = self._latest_fill_position_change_anchors() if proofs else {}
         for raw_key, detail in diagnostics.items():
             if not isinstance(raw_key, tuple) or len(raw_key) != 2:
                 continue
@@ -12014,6 +11830,11 @@ class Passivbot:
                 continue
             symbol, pside = str(raw_key[0]), str(raw_key[1])
             cohort = (symbol, pside)
+            proof = proofs.get(cohort)
+            if proof is not None and self._fill_anchor_position_state_match_kind(
+                symbol, pside, proof.position.state, anchors.get(cohort)
+            ) == "position_update_boundary":
+                continue
             cohort_state = dict(previous_cohort_states.get(cohort, {}) or {})
             cohort_states[cohort] = cohort_state
             # First satisfy the mandatory fetch generation after the position
@@ -12522,6 +12343,8 @@ class Passivbot:
                     # bounded recent path. Potentially expensive history
                     # widening is reserved for the nonblocking trailing
                     # recovery prefetch.
+                    if trailing_recovery_refresh:
+                        await self._refresh_trailing_reset_evidence(fill_refresh_attempt_generation)
                     recovery_start_ms = (
                         self._trailing_fill_history_recovery_start_ms(pnl_age_limit)
                         if trailing_recovery_refresh
@@ -12574,6 +12397,7 @@ class Passivbot:
                 refresh_mode = f"{refresh_mode}_with_degraded_pnl_repair"
 
             if fill_fetch_completed:
+                self._prune_trailing_reset_evidence(check_fills=True)
                 self._hsl_fill_capture_interval = fill_capture_interval
                 if True and fill_capture_interval is not None:
                     # Capture before yielding again. A later cache mutation or
@@ -12686,6 +12510,13 @@ class Passivbot:
                 ):
                     recovery.record_fill_refresh(self._pnls_manager, fill_capture_interval)
                 self._trailing_fill_refresh_generation = fill_refresh_attempt_generation
+                if getattr(self, "_console_close_replacements", None):
+                    run_diagnostic_step(
+                        "observe close replacement confirmation",
+                        lambda: close_replacement_diagnostics.observe_confirmation(
+                            self, int(utc_ms())
+                        ),
+                    )
             elif not coverage_ready_after:
                 self._last_fill_refresh_block_reason = "fill_history_coverage"
                 logging.warning(
@@ -12766,6 +12597,15 @@ class Passivbot:
                 level=logging.getLevelName(structured_event_level).lower(),
             )
 
+            if (
+                source == "hsl"
+                and fills_ready
+                and fill_fetch_completed
+                and self._trailing_fill_recovery_prefetch_due()
+            ):
+                # Publish the required fill observation and readiness before the
+                # optional bounded proof adds any transport latency.
+                await self._refresh_trailing_reset_evidence(fill_refresh_attempt_generation)
             return fills_ready
 
         except position_fill_sync.FetchSkipped:
@@ -13990,7 +13830,11 @@ class Passivbot:
         table.padding_width = 0
 
         changed_symbols = list(dict.fromkeys(symbol for symbol, _pside in changed))
-        from live.diagnostic_valuation import DIAGNOSTIC_MAX_AGE_MS, remember_position_quotes
+        from live.diagnostic_valuation import (
+            DIAGNOSTIC_MAX_AGE_MS,
+            observe_signed_entry_distance_fraction,
+            remember_position_quotes,
+        )
 
         snapshots = await self._get_live_market_snapshots(
             changed_symbols,
@@ -14039,17 +13883,12 @@ class Passivbot:
             WEL_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
             WELe_ratio = wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0
 
-            last_price = last_prices[symbol]
-            try:
-                pprice_diff = (
-                    pbr.calc_pside_adverse_price_change_fraction(
-                        self.pside_int_map[pside], new["price"], last_price
-                    )
-                    if last_price
-                    else 0.0
+            last_price = last_prices.get(symbol)
+            signed_entry_distance = None
+            if new["size"] != 0.0 and math.isfinite(new["size"]):
+                signed_entry_distance = observe_signed_entry_distance_fraction(
+                    pside, new["price"], last_price
                 )
-            except:
-                pprice_diff = 0.0
 
             try:
                 upnl = (
@@ -14079,7 +13918,7 @@ class Passivbot:
                     wel_ratio=WEL_ratio,
                     wele_ratio=WELe_ratio,
                     twel_ratio=total_we_by_pside[pside] / twel if twel > 0.0 else 0.0,
-                    price_action_distance=pprice_diff,
+                    signed_entry_distance_fraction=signed_entry_distance,
                     upnl=upnl,
                     last_price=last_price,
                 )
@@ -14108,8 +13947,8 @@ class Passivbot:
                     pbr.round_dynamic(wallet_exposure, 3),
                     " ",
                     wel_str,
-                    " PA dist: ",
-                    round(pprice_diff, 4),
+                    " Entry Distance: ",
+                    format_entry_distance_percent(signed_entry_distance),
                     " upnl: ",
                     pbr.round_dynamic(upnl, 3),
                 ]
@@ -14162,6 +14001,7 @@ class Passivbot:
                 normalized_position["lastUpdateTimestamp"] = update_ts
             positions_new[symbol][pside] = normalized_position
         self.positions = positions_new
+        self._prune_trailing_reset_evidence()
         position_state = {
             (symbol, pside): (
                 round(float(position.get("size") or 0.0), 12),
@@ -15164,6 +15004,15 @@ class Passivbot:
         - h1_log_range_emas[symbol][span] = ema_log_range (1h)
         - volumes_long[symbol], log_ranges_long[symbol] (for convenience)
         """
+        # All candle reads in the bundle, including RMS directionality after
+        # the symbol EMA pass, share one remote acquisition deadline.
+        budget = getattr(self.cm, "remote_fetch_budget", None)
+        with budget(10.0) if callable(budget) else nullcontext():
+            return await Passivbot._collect_orchestrator_ema_bundle(self, symbols, modes)
+
+    async def _collect_orchestrator_ema_bundle(
+        self, symbols: list[str], modes: dict[str, dict[str, str]]
+    ):
         # Gather full EMA context for the live symbol universe.
         # Python should provide the market-state bundle; Rust decides which branches use it.
         self._forager_rank_feature_unavailable_by_side = {
@@ -16100,10 +15949,11 @@ class Passivbot:
             return values.get(float(span))
 
         async def fetch_map(symbol: str, spans: list[float], fn, ema_type: str):
+            """Return the values and whether one primary batch covered every span."""
             out: dict[float, float] = {}
             primary_spans: set[float] = set()
             if not spans:
-                return out
+                return out, False
             metric_key = {
                 "m1_volume": "qv",
                 "m1_log_range": "log_range",
@@ -16175,7 +16025,7 @@ class Passivbot:
                         ema_type, symbol, span, "non_finite_value", "NonFiniteValue"
                     )
             record_forager_gap_consumption(symbol, ema_type, primary_spans)
-            return out
+            return out, batched_values is not None and len(primary_spans) == len(spans)
 
         async def fetch_required_map(
             symbol: str,
@@ -16914,7 +16764,7 @@ class Passivbot:
                         raise
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 if vol is None:
-                    vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
+                    vol, _ = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 if lr1m is None:
                     try:
@@ -16968,20 +16818,33 @@ class Passivbot:
                                 else:
                                     lr1m = {}
                     else:
-                        optional_lr1m = await fetch_map(
+                        optional_spans = [
+                            span for span in m1_lr_spans if span not in required_lr1m
+                        ]
+                        optional_lr1m, complete_primary_batch = await fetch_map(
                             sym,
-                            [span for span in m1_lr_spans if span not in required_lr1m],
+                            optional_spans,
                             ema_lr_1m,
                             "m1_log_range",
                         )
                         lr1m = {**optional_lr1m, **required_lr1m}
+                        # Both consumers request the same strict, cache-only
+                        # finalized window here. The forager keeps its own
+                        # path for projections, overlapping strategy spans and fallbacks.
+                        if (
+                            sym in cache_only_symbols
+                            and optional_spans == m1_lr_spans
+                            and complete_primary_batch
+                        ):
+                            forager_lr1m = dict(optional_lr1m)
                 if is_forager_mode():
-                    forager_lr1m = await fetch_map(
-                        sym,
-                        m1_lr_spans,
-                        ema_forager_lr_1m,
-                        "forager_m1_log_range",
-                    )
+                    if forager_lr1m is None:
+                        forager_lr1m, _ = await fetch_map(
+                            sym,
+                            m1_lr_spans,
+                            ema_forager_lr_1m,
+                            "forager_m1_log_range",
+                        )
                 elif forager_lr1m is None:
                     forager_lr1m = {
                         span: lr1m[span] for span in m1_lr_spans if span in lr1m
@@ -17110,31 +16973,26 @@ class Passivbot:
             fetch_delay_s = float(Passivbot._get_fetch_delay_seconds(self))
         else:
             fetch_delay_s = 0.0
-        # Remote acquisition must not hold the ordinary planner behind a long
-        # pagination/gap-repair pass. Every symbol still reads its cache; existing
-        # missing-input handling scopes absent strategy/ranking data in Rust.
-        budget = getattr(self.cm, "remote_fetch_budget", None)
-        with budget(10.0) if callable(budget) else nullcontext():
-            if fetch_delay_s > 0:
-                # Preserve serial preparation on paced exchanges. The candle manager
-                # spaces actual remote requests; cached symbols need no extra pause.
-                symbol_results = []
-                for sym in ordered_symbols:
-                    Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-                    try:
-                        res = await ema_timings.run_symbol(sym, load_symbol_bundle)
-                    except Exception as e:
-                        res = e
-                    symbol_results.append(res)
-                    # Cached async calls may never suspend; let data maintainers run.
-                    await asyncio.sleep(0)
-                    Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-            else:
-                symbol_tasks = [
-                    asyncio.create_task(ema_timings.run_symbol(sym, load_symbol_bundle))
-                    for sym in ordered_symbols
-                ]
-                symbol_results = await asyncio.gather(*symbol_tasks, return_exceptions=True)
+        if fetch_delay_s > 0:
+            # Preserve serial preparation on paced exchanges. The candle manager
+            # spaces actual remote requests; cached symbols need no extra pause.
+            symbol_results = []
+            for sym in ordered_symbols:
+                Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
+                try:
+                    res = await ema_timings.run_symbol(sym, load_symbol_bundle)
+                except Exception as e:
+                    res = e
+                symbol_results.append(res)
+                # Cached async calls may never suspend; let data maintainers run.
+                await asyncio.sleep(0)
+                Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
+        else:
+            symbol_tasks = [
+                asyncio.create_task(ema_timings.run_symbol(sym, load_symbol_bundle))
+                for sym in ordered_symbols
+            ]
+            symbol_results = await asyncio.gather(*symbol_tasks, return_exceptions=True)
 
         m1_close_emas: dict[str, dict[float, float]] = {}
         m1_volume_emas: dict[str, dict[float, float]] = {}
@@ -19724,129 +19582,6 @@ class Passivbot:
     async def maintain_forager_ws_candles(self):
         """Maintain persistent finalized 1m WS ingestion for flat forager candidates."""
         return await candle_ws.maintain_forager_ws_candles(self)
-
-    async def calc_log_range(
-        self,
-        pside: str,
-        eligible_symbols: Optional[Iterable[str]] = None,
-        *,
-        max_age_ms: Optional[int] = 60_000,
-        max_network_fetches: Optional[int] = None,
-    ) -> Dict[str, float]:
-        """Compute 1m EMA of log range per symbol: EMA(ln(high/low)).
-
-        Returns mapping symbol -> ema_log_range. Symbols without a usable current or
-        bounded cached value are omitted.
-
-        If *max_network_fetches* is set, at most that many symbols will be allowed to
-        trigger a network fetch; the rest use cached data only.
-        """
-        if eligible_symbols is None:
-            eligible_symbols = self.eligible_symbols
-        span = Passivbot._positive_finite_warmup_value(
-            self.bot_value(pside, "forager_log_range_ema_span_minutes"),
-            context=f"forager {pside}.forager_log_range_ema_span_minutes", symbol=None,
-        )
-        try:
-            activation_span_fraction = float(
-                get_optional_config_value(self.config, 'bot.portfolio.warmup.activation_span_fraction', 0.0)
-            )
-        except Exception:
-            activation_span_fraction = 0.0
-        max_warmup_minutes = live_warmup_cap_minutes(self.config)
-        span_buffer = 1.0 + max(0.0, activation_span_fraction)
-        window_candles = max(1, int(math.ceil(span * span_buffer))) if span > 0 else 1
-        if max_warmup_minutes > 0:
-            window_candles = min(int(window_candles), int(max_warmup_minutes))
-
-        syms = list(eligible_symbols)
-
-        per_sym_ttl, cache_only_never_fetched = self._compute_fetch_budget_ttls(
-            syms, max_age_ms, max_network_fetches
-        )
-
-        # Compute EMA of log range on 1m candles: ln(high/low)
-        async def one(symbol: str):
-            if symbol in cache_only_never_fetched:
-                return None
-            ttl = per_sym_ttl.get(symbol)
-            if ttl is None or ttl == 0:
-                # If caller passes a TTL, use it; otherwise select per-symbol TTL
-                if max_age_ms is not None:
-                    ttl = int(max_age_ms)
-                else:
-                    # More generous TTL for non-traded symbols
-                    has_pos = self.has_position(symbol)
-                    has_oo = (
-                        bool(self.open_orders.get(symbol))
-                        if hasattr(self, "open_orders")
-                        else False
-                    )
-                    ttl = (
-                        60_000
-                        if (has_pos or has_oo)
-                        else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
-                    )
-            val = float("nan")
-            try:
-                res = await self.cm.get_latest_ema_metrics(
-                    symbol,
-                    {"log_range": span},
-                    max_age_ms=ttl,
-                    window_candles=window_candles,
-                    timeframe=None,
-                )
-                val = float(res.get("log_range", float("nan")))
-            except Exception:
-                pass
-            if not np.isfinite(val):
-                cached = await Passivbot._get_forager_cached_ema_metrics(
-                    self,
-                    symbol,
-                    {"log_range": float(span)},
-                    max_staleness_ms=max_age_ms,
-                    window_candles=window_candles,
-                )
-                val = float(cached.get("log_range", float("nan")))
-            return float(val) if np.isfinite(val) else None
-
-        tasks = {s: asyncio.create_task(one(s)) for s in syms}
-        out = {}
-        n = len(syms)
-        started_ms = utc_ms()
-        for sym, task in tasks.items():
-            try:
-                val = await task
-            except Exception:
-                val = None
-            if val is not None:
-                out[sym] = float(val)
-        elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
-        now_ms = utc_ms()
-        ema_log_throttle_ms = 300_000  # 5 minutes between logs per metric
-        if out:
-            top_n = min(8, len(out))
-            top = sorted(out.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
-            top_syms = tuple(sym for sym, _ in top)
-            # Only log when the ranking changes (membership/order) to reduce noise.
-            # Also throttle to at most once per 5 minutes per metric.
-            if not hasattr(self, "_log_range_top_cache"):
-                self._log_range_top_cache = {}
-            if not hasattr(self, "_log_range_top_last_log_ms"):
-                self._log_range_top_last_log_ms = {}
-            cache_key = (pside, span)
-            last_top = self._log_range_top_cache.get(cache_key)
-            last_log_ms = self._log_range_top_last_log_ms.get(cache_key, 0)
-            if last_top != top_syms and (now_ms - last_log_ms) >= ema_log_throttle_ms:
-                self._log_range_top_cache[cache_key] = top_syms
-                self._log_range_top_last_log_ms[cache_key] = now_ms
-                summary = ", ".join(
-                    f"{symbol_to_coin(sym)}={val:.6f}" for sym, val in top
-                )
-                logging.info(
-                    f"[ranking] log_range EMA span {span}: {n} coins elapsed={int(elapsed_s)}s, top{top_n}: {summary}"
-                )
-        return out
 
     async def execute_multiple(self, orders: [dict], type_: str):
         """Execute a list of order operations sequentially while tracking failures."""

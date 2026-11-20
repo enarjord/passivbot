@@ -86,7 +86,6 @@ def _rust_bot_params(**overrides):
         "entry_trailing_retracement_base_fraction": 0.0,
         "entry_trailing_threshold_base_fraction": 0.0,
         "forager_log_range_ema_span_minutes": 10.0,
-        "filter_volatility_drop_pct": 0.0,
         "forager_volume_ema_span_minutes": 10.0,
         "ema_span_0_minutes": 10.0,
         "ema_span_1_minutes": 20.0,
@@ -2616,6 +2615,119 @@ async def test_batched_ema_failure_retries_each_span_before_carry_forward(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case,expected_lr_windows",
+    [
+        ("complete", [(10.0, 20.0)]),
+        ("partial", [(10.0, 20.0), (10.0, 20.0)]),
+        ("batch_failure", [(10.0, 20.0), (10.0, 20.0)]),
+        ("remote_enabled", [(10.0, 20.0), (10.0, 20.0)]),
+        ("disjoint_required_strategy", [(60.0,), (10.0, 20.0)]),
+        ("overlapping_required_strategy", [(60.0,), (10.0,), (10.0, 60.0)]),
+    ],
+)
+async def test_forager_reuses_only_complete_cache_only_log_range_batch(
+    case, expected_lr_windows, monkeypatch
+):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AAVE/USDT:USDT"
+    fixed_now = 1_725_590_400_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: fixed_now)
+    requires_strategy_lr = case in {"disjoint_required_strategy", "overlapping_required_strategy"}
+    short_ranking_span = 60.0 if case == "overlapping_required_strategy" else 20.0
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        entry_m1_weight=1.0 if requires_strategy_lr else 0.0,
+        projected_close_ema={10.0: 100.0, (10.0 * 20.0) ** 0.5: 100.0, 20.0: 100.0},
+        cached_log_range_ema={20.0: 0.003},
+    )
+    remote_enabled = case == "remote_enabled"
+    if not remote_enabled:
+        bot.PB_modes = {"long": {symbol: "manual"}, "short": {symbol: "manual"}}
+    bot.active_symbols = []
+    bot.cm.get_last_refresh_ms = lambda _symbol: fixed_now
+    bot.cm.get_last_final_ts = lambda _symbol, timeframe=None: fixed_now - ONE_MIN_MS
+    bot.cm._now_ms = lambda: fixed_now
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    _enable_forager_required_ranking(bot)
+    original_bot_value = bot.bot_value
+
+    def bot_value(pside, key):
+        if key == "forager_log_range_ema_span_minutes" and pside == "short":
+            return short_ranking_span
+        return original_bot_value(pside, key)
+
+    bot.bot_value = bot_value
+    source_lr = {10.0: 0.001, 20.0: 0.002, 60.0: 0.006}
+    lr_requests = []
+
+    async def read_batch(_cm, _symbol, spans_by_metric, **policy):
+        metric, spans = next(iter(spans_by_metric.items()))
+        if metric == "log_range":
+            lr_requests.append(
+                (
+                    tuple(spans),
+                    policy["timeframe"],
+                    policy["allow_remote_fetch"],
+                    policy["allow_provisional_internal_gaps"],
+                )
+            )
+            if case == "batch_failure":
+                raise TimeoutError("local widest window unavailable")
+            return {
+                metric: {
+                    span: source_lr[span]
+                    for span in spans
+                    if case != "partial" or span != 20.0
+                }
+            }
+        value = 250000.0 if metric == "qv" else 100.0
+        return {metric: {span: value for span in spans}}
+
+    monkeypatch.setattr(type(bot.cm), "get_latest_ema_metric_spans", read_batch, raising=False)
+
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    assert lr_requests == [
+        (window, "1m", remote_enabled, remote_enabled)
+        for window in expected_lr_windows
+    ]
+    expected_ranking = {10.0: source_lr[10.0], short_ranking_span: source_lr[short_ranking_span]}
+    if case == "partial":
+        expected_ranking[20.0] = 0.003
+        assert [call["spans_by_metric"] for call in bot.cached_metric_calls] == [
+            {"log_range": 20.0},
+            {"log_range": 20.0},
+        ]
+    else:
+        assert not bot.cached_metric_calls
+    if case == "batch_failure":
+        expected_ranking = {10.0: 0.0015, 20.0: 0.0015}
+        assert bot.lr_provisional_flags == [("1m", None)] * 2 + [("1m", False)] * 2
+    else:
+        assert not bot.lr_provisional_flags
+    assert bot._orchestrator_forager_m1_log_range_emas[symbol] == expected_ranking
+    expected_strategy = dict(expected_ranking)
+    if requires_strategy_lr:
+        expected_strategy[60.0] = source_lr[60.0]
+    assert result[2][symbol] == expected_strategy
+
+    if case == "complete":
+        # A corrected finalized source in the next bundle replaces both values.
+        source_lr[20.0] = 0.004
+        lr_requests.clear()
+        result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+        assert lr_requests == [((10.0, 20.0), "1m", False, False)]
+        assert result[2][symbol] == {10.0: 0.001, 20.0: 0.004}
+        assert bot._orchestrator_forager_m1_log_range_emas[symbol] == result[2][symbol]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("h1_mode", ["timeout", "nan"])
 async def test_required_h1_log_range_ema_is_scoped_when_missing(h1_mode):
     try:
@@ -3556,8 +3668,11 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
 
 
 @pytest.mark.asyncio
-async def test_shared_live_acquisition_budget_keeps_unavailable_symbol_in_planning_bundle(tmp_path):
+async def test_shared_live_acquisition_budget_includes_rms_and_preserves_cached_inputs(
+    tmp_path, monkeypatch
+):
     import passivbot as pb_mod
+    from live import rms_directionality
 
     slow, ready = "SLOW/USDT:USDT", "READY/USDT:USDT"
     symbols = [slow, ready]
@@ -3574,6 +3689,13 @@ async def test_shared_live_acquisition_budget_keeps_unavailable_symbol_in_planni
     # remote budget does not skip the later symbol's valid local values.
     bot.positions[slow]["long"]["size"] = 1.0
     bot._get_fetch_delay_seconds = lambda: 1.0
+    bot.get_exchange_time = lambda: 21 * ONE_MIN_MS
+    bot.is_pside_enabled = lambda side: side == "long"
+    original_bot_value = bot.bot_value
+    bot.bot_value = lambda side, key: (
+        1.0 if key == "rms_directionality_ema_span_minutes" else original_bot_value(side, key)
+    )
+    monkeypatch.setattr(rms_directionality, "adverse_enabled", lambda bot, side, symbol: side == "long")
     manager = _make_cm(tmp_path)
     budgets = []
 
@@ -3592,7 +3714,20 @@ async def test_shared_live_acquisition_budget_keeps_unavailable_symbol_in_planni
         # Local complete input remains usable even when remote time is spent.
         return 123.0
 
+    rms_reads = []
+
+    async def rms_candles(symbol, **kwargs):
+        rms_reads.append(symbol)
+        if symbol == slow:
+            assert kwargs["allow_remote_fetch"]
+            manager._remote_fetch_time_remaining()
+        rows = np.zeros(21, dtype=CANDLE_DTYPE)
+        rows["ts"] = np.arange(21) * ONE_MIN_MS
+        rows["c"] = 123.0
+        return rows
+
     bot.cm.get_latest_ema_close = symbol_close
+    bot.cm.get_candles = rms_candles
     result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, symbols, bot.PB_modes)
     assert budgets == [10.0]
     assert attempted == set(symbols)
@@ -3600,6 +3735,11 @@ async def test_shared_live_acquisition_budget_keeps_unavailable_symbol_in_planni
     assert result[0][slow] == {}
     assert set(result[0][ready].values()) == {123.0}
     assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {slow}
+    assert rms_reads == symbols
+    assert bot._orchestrator_signed_rms_directionality == {slow: {}, ready: {1.0: 0.0}}
+    assert bot._orchestrator_rms_directionality_unavailable == {
+        slow: {"current": [1.0], "forager": []},
+    }
     # An unavailable member stays in the original cohort. Rust receives explicit
     # absence and retains its existing ranking/consumer readiness authority.
     assert bot._orchestrator_ema_unavailable_symbols == set()

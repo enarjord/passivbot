@@ -62,14 +62,18 @@
    An explicitly selected external OHLCV directory instead defines the caller's
    simulation data window. A late first real row bounds that coin/source window
    online and offline; it is not market inception or a cached absence certificate.
-   Offline snapshots preserve requested and actual ranges; no equivalent online
-   manifest guarantee is implied. Never synthesize a leading prefix, and retain
-   internal-gap and offline-tail checks. An existing empty/unreadable daily file
+   Warn when leading candles are missing and record requested and actual ranges
+   in prepared market settings for offline and online runs. Offline snapshots
+   retain their separate range proofs. Never synthesize a leading prefix. BTC
+   benchmark candidates must cover the prepared timestamp range before alignment.
+   Retain internal-gap and offline-tail checks. An existing empty/unreadable daily file
    is an integrity error unless a healthy same-day variant can be loaded.
    Automatic external-source cache keys include daily file metadata revisions for
    selected coin and eligible BTC directories. Reject source changes across raw
-   preparation, cache publication, and cache loading. These revisions detect normal
-   filesystem updates, not cryptographic content identity. Native store/download
+   preparation, cache publication, and cache loading. These revisions use device,
+   file identity and change time to detect same-size replacements with preserved
+   modification times. Moving or copying a source to a different filesystem can
+   invalidate its automatic prepared cache. Native store/download
    admission continues to require the independent evidence above.
    Store current confirmation under versioned v2 catalog notes. Offline use leaves old
    observation-only notes untouched and cannot accept them as coverage proof. Online corroboration
@@ -594,12 +598,21 @@ after preparing each symbol, but yields to other tasks without delay. The candle
 actual CCXT OHLCV requests, so cache-only preparation incurs no artificial per-symbol pause.
 See [EMA preparation timings](live_events.md#ema-preparation-timings) for structured attribution.
 
+An optional one-minute log-range EMA read for a cache-only symbol can serve forager
+ranking when its strict primary batch produced every ranking span. Both consumers
+then request the same finalized window and policy. The strategy's required read is
+independent. Overlapping required spans, incomplete batches, and projected or
+fallback results continue through their existing consumer paths.
+
 ### Parsed disk-row reuse
 
-A manager may retain immutable parsed source rows for up to 256 exact ranges and
-8 MiB of row arrays. Every reuse rechecks the selected source paths and index using file
-identity, size, modification time and change time, including atomic replacements
-and in-place corrections whose modification time is restored. Failed/empty shard
+A manager may retain immutable parsed source rows for up to 256 shard selections and
+8 MiB of row arrays. Requests selecting the same ordered whole shards with the same
+legacy/primary precedence can reuse those rows across candle windows. Each consumer
+still slices and validates its own requested window. Every reuse rechecks the selected
+source paths and index using file identity, size, modification time and change time,
+including atomic replacements and in-place corrections whose modification time is
+restored. Failed/empty shard
 reads and changes during parsing are not certified. For a legacy/primary overlay,
 every constituent must return nonempty rows before the merged result is certified;
 a surviving source cannot mask a failed or empty constituent. Strict audits always
@@ -617,8 +630,9 @@ and its no-pickle policy. This metadata cache does not certify any source rows.
 
 Only factual source rows are cached. Mutable consumer arrays and the one-minute
 memory cache never alias retained immutable rows. One-minute reads still merge
-against the current memory state; identical sorted overlaps may bypass the
-concatenate/sort/deduplicate work while preserving detached-array ownership and
+against the current memory state. An identical sorted subset can return a detached
+copy. If an entire incoming timestamp window is contiguous in the existing array,
+the merge can replace that slice in a detached copy. Both retain the existing
 last-write-wins behavior. Projections, synthetic gaps, EMA values and trading
 permissions are not part of this cache.
 

@@ -4324,10 +4324,10 @@ kernel void passivbot_ema_multicoin_tail_twel_probe(
     side.pprice[0] = 100.0f;
     side.pprice[1] = 100.0f;
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
-    float selected_diff = INFINITY;
+    float selected_entry_distance_fraction = -INFINITY;
     int selected_unstuck = select_ema_multicoin_unstuck_coin(
         side, config, account, bars, touch_ticks, coin_settings,
-        coin_overrides, 1, 2, short_side, 1, selected_diff
+        coin_overrides, 1, 2, short_side, 1, selected_entry_distance_fraction
     );
     generate_ema_multicoin_side_orders(
         side, config, account,
@@ -4387,10 +4387,10 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
     side.pprice[0] = 100.0f;
     side.pprice[1] = 100.0f;
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
-    float selected_diff = INFINITY;
+    float selected_entry_distance_fraction = -INFINITY;
     int selected_unstuck = select_tm_multicoin_unstuck_coin(
         side, config, account, bars, touch_ticks, coin_settings,
-        coin_overrides, 1, 2, short_side, 1, selected_diff
+        coin_overrides, 1, 2, short_side, 1, selected_entry_distance_fraction
     );
     generate_tm_multicoin_side_orders(
         side, config, account,

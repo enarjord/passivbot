@@ -13,6 +13,7 @@ import numpy as np
 import passivbot_rust as pbr
 
 from live.diagnostic_safety import bounded_exception_type
+from live.diagnostic_valuation import observe_signed_entry_distance_fraction
 from live.event_bus import EventTypes, ReasonCodes
 from live.console_health import ordinary_progress_payload
 from live import ordinary_diagnostics
@@ -1898,13 +1899,15 @@ def _build_monitor_position_side_payload(
         return payload
 
     payload["last_price"] = float(last_price)
+    if size != 0.0 and math.isfinite(size):
+        signed_entry_distance = observe_signed_entry_distance_fraction(
+            pside, price, last_price
+        )
+        if signed_entry_distance is not None:
+            payload["signed_entry_distance_fraction"] = signed_entry_distance
     if size == 0.0 or price == 0.0 or symbol not in self.c_mults:
-        payload["price_action_distance"] = 0.0
         payload["upnl"] = 0.0
         return payload
-    payload["price_action_distance"] = float(
-        pbr.calc_pside_adverse_price_change_fraction(self.pside_int_map[pside], price, last_price)
-    )
     payload["upnl"] = float(
         _calc_monitor_pnl(pside, price, last_price, size, self.c_mults[symbol])
     )

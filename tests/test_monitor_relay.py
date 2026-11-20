@@ -303,6 +303,88 @@ async def test_monitor_relay_publishes_first_entries_for_new_current_files_after
         await relay.stop()
 
 
+@pytest.mark.parametrize("stream", ["events", "history"])
+@pytest.mark.parametrize("split_at", ["json", "utf8", "newline"])
+def test_monitor_relay_retries_unfinished_current_rows(tmp_path, stream, split_at, caplog):
+    monitor_root = _make_monitor_root(tmp_path)
+    relay = create_monitor_relay_app(monitor_root=str(monitor_root))[RELAY_APP_KEY]
+    relay._initial_prime_completed = True
+    filename = "current.ndjson" if stream == "events" else "price_ticks.current.ndjson"
+    path = monitor_root / "bybit" / "user01" / stream / filename
+
+    def row(number):
+        payload = {
+            "seq": number,
+            "ts": number * 1000,
+            "kind": "test.event",
+            "stream": "price_ticks",
+            "exchange": "bybit",
+            "user": "user01",
+            "payload": {"number": number, "label": "€"},
+        }
+        return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+
+    first, second, third = row(1), row(2), row(3)
+    path.write_bytes(first)
+    assert [message["payload"]["number"] for message in relay._read_updates(path)] == [1]
+    split = {
+        "json": len(second) // 2,
+        "utf8": second.index("€".encode("utf-8")) + 1,
+        "newline": len(second) - 1,
+    }[split_at]
+    with path.open("ab") as file:
+        file.write(second[:split])
+
+    initial = relay._read_updates(path)
+    expected = [2] if split_at == "newline" else []
+    assert [message["payload"]["number"] for message in initial] == expected
+    expected_offset = path.stat().st_size if split_at == "newline" else len(first)
+    assert relay._path_states[path].offset == expected_offset
+    replay = relay._read_recent_entries(path, 2)
+    expected = [1, 2] if split_at == "newline" else [1]
+    assert [entry["payload"]["number"] for entry in replay] == expected
+    assert not caplog.records
+
+    with path.open("ab") as file:
+        file.write(second[split:] + third)
+    expected = [3] if split_at == "newline" else [2, 3]
+    assert [message["payload"]["number"] for message in relay._read_updates(path)] == expected
+    assert relay._read_updates(path) == []
+    assert relay._path_states[path].offset == path.stat().st_size
+    replay = relay._read_recent_entries(path, 2)
+    assert [entry["payload"]["number"] for entry in replay] == [2, 3]
+
+
+def test_monitor_relay_skips_malformed_terminated_rows(tmp_path, caplog):
+    monitor_root = _make_monitor_root(tmp_path)
+    relay = create_monitor_relay_app(monitor_root=str(monitor_root))[RELAY_APP_KEY]
+    relay._initial_prime_completed = True
+    path = monitor_root / "bybit" / "user01" / "events" / "current.ndjson"
+    path.write_bytes(b'{"seq":1}\ninvalid\n\xff\n{"seq":2}\n')
+
+    assert [message["seq"] for message in relay._read_updates(path)] == [1, 2]
+    assert relay._read_updates(path) == []
+    assert relay._path_states[path].offset == path.stat().st_size
+    assert [entry["seq"] for entry in relay._read_recent_entries(path, 4)] == [1, 2]
+    assert len(caplog.records) == 4
+
+
+@pytest.mark.parametrize("replacement", ["rotate", "truncate"])
+def test_monitor_relay_resets_unfinished_row_after_file_replacement(tmp_path, replacement):
+    monitor_root = _make_monitor_root(tmp_path)
+    relay = create_monitor_relay_app(monitor_root=str(monitor_root))[RELAY_APP_KEY]
+    relay._initial_prime_completed = True
+    path = monitor_root / "bybit" / "user01" / "events" / "current.ndjson"
+    path.write_bytes(b'{"seq":1,"payload":{"label":"a longer first row"}}\n{"seq":')
+    assert [message["seq"] for message in relay._read_updates(path)] == [1]
+
+    if replacement == "rotate":
+        path.rename(path.with_name("rotated.ndjson"))
+    path.write_bytes(b'{"seq":2}\n')
+    assert [message["seq"] for message in relay._read_updates(path)] == [2]
+    assert relay._read_updates(path) == []
+
+
 @pytest.mark.asyncio
 async def test_monitor_relay_websocket_sends_snapshot_then_live_updates(tmp_path, monkeypatch):
     monitor_root = _make_monitor_root(tmp_path)
@@ -477,6 +559,81 @@ async def test_monitor_relay_websocket_replays_recent_current_file_messages_on_c
         assert fake_ws.messages[2]["payload"]["last"] == pytest.approx(100100.0)
     finally:
         await relay.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filtered", [False, True])
+@pytest.mark.parametrize("queue_size", [1, 1000])
+async def test_monitor_relay_keeps_live_events_published_during_replay(
+    tmp_path, monkeypatch, filtered, queue_size
+):
+    monitor_root = _make_monitor_root(tmp_path)
+    _make_monitor_root(tmp_path, exchange="bitget", user="user02")
+    path = monitor_root / "bybit" / "user01" / "events" / "current.ndjson"
+    event = {
+        "ts": 2000,
+        "seq": 6,
+        "kind": "bot.ready",
+        "exchange": "bybit",
+        "user": "user01",
+        "payload": {},
+    }
+    _append_json_line(path, event)
+    app = create_monitor_relay_app(
+        monitor_root=str(monitor_root), subscriber_queue_size=queue_size
+    )
+    relay = app[RELAY_APP_KEY]
+    snapshots = 1 if filtered else 2
+    fake_ws = FakeWebSocket(close_after_messages=snapshots + 2)
+    original_send = fake_ws.send_json
+
+    async def send_json(message):
+        await original_send(message)
+        if message.get("type") == "event" and message.get("seq") == 6:
+            last = 8 if queue_size == 1 else 7
+            for seq in range(7, last + 1):
+                _append_json_line(path, {**event, "seq": seq, "ts": seq * 1000})
+                await relay.poll_once()
+
+    fake_ws.send_json = send_json
+    monkeypatch.setattr(monitor_relay.web, "WebSocketResponse", lambda **_: fake_ws)
+    await relay.start()
+    try:
+        url = "/ws?exchange=bybit&user=user01" if filtered else "/ws"
+        await asyncio.wait_for(_handle_ws(_make_request(app, url)), timeout=1.0)
+        assert [message["type"] for message in fake_ws.messages[:snapshots]] == ["snapshot"] * snapshots
+        assert fake_ws.messages[snapshots]["seq"] == 6
+        if queue_size == 1:
+            assert fake_ws.messages[-1] == {
+                "type": "resync_required", "reason": "subscriber_queue_overflow"
+            }
+        else:
+            assert fake_ws.messages[-1]["seq"] == 7
+        assert not relay._subscribers
+    finally:
+        await relay.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [ConnectionResetError, asyncio.CancelledError])
+async def test_monitor_relay_unsubscribes_after_initial_send_failure(tmp_path, monkeypatch, failure):
+    monitor_root = _make_monitor_root(tmp_path)
+    app = create_monitor_relay_app(monitor_root=str(monitor_root))
+    relay = app[RELAY_APP_KEY]
+    fake_ws = FakeWebSocket(close_after_messages=1)
+
+    async def send_json(message):
+        raise failure()
+
+    fake_ws.send_json = send_json
+    monkeypatch.setattr(monitor_relay.web, "WebSocketResponse", lambda **_: fake_ws)
+    if failure is asyncio.CancelledError:
+        with pytest.raises(asyncio.CancelledError):
+            await _handle_ws(_make_request(app, "/ws"))
+    else:
+        assert await _handle_ws(_make_request(app, "/ws")) is fake_ws
+    assert not relay._subscribers
+    assert fake_ws.closed
 
 
 def test_monitor_relay_tool_help_runs_without_import_errors():

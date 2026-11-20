@@ -2892,7 +2892,7 @@ class CandlestickManager:
         return tuple(signature)
 
     def _remember_disk_rows(self, key, signature, rows):
-        """Bound immutable parsed-source reuse to 256 ranges and eight MiB of rows."""
+        """Bound immutable parsed-source reuse to 256 shard selections and eight MiB."""
         if signature is None or rows.nbytes > 8 * 1024 * 1024:
             return
         cached = rows.copy()
@@ -2997,7 +2997,14 @@ class CandlestickManager:
                     }
             if not load_keys:
                 return
-            reuse_key = (symbol, tf_norm, int(start_ts), int(end_ts))
+            # The loader returns whole selected shards. Requests with different
+            # bounds can reuse those rows if they select the same day/source plan.
+            # The index and file identities still validate that plan on every hit.
+            reuse_key = (
+                symbol,
+                tf_norm,
+                tuple((day, day_ctx[day]["source"]) for day, _ in load_keys),
+            )
             signature = None if strict else self._disk_rows_signature(
                 load_keys, day_ctx, symbol, tf_norm
             )
@@ -3610,10 +3617,18 @@ class CandlestickManager:
             prefix = a[:-1] if b["ts"][0] == a["ts"][-1] else a
             return np.concatenate([prefix, b])
         # Unchanged daily shards commonly overlap a much larger live history.
-        # Compare their exact rows before sorting/copying the concatenated history.
+        # Compare a contiguous overlap without building per-row gather indices.
         # Preserve last-write-wins and detached-array ownership on every path.
         if (np.all(a["ts"][1:] > a["ts"][:-1])
                 and np.all(b["ts"][1:] > b["ts"][:-1])):
+            start = int(np.searchsorted(a["ts"], b["ts"][0]))
+            window = a[start : start + len(b)]
+            if np.array_equal(window["ts"], b["ts"]):
+                merged = a.copy()
+                if not np.array_equal(window, b):
+                    merged[start : start + len(b)] = b
+                return merged
+            # Sparse subsets can still be unchanged.
             indices = np.searchsorted(a["ts"], b["ts"])
             if (np.all(indices < len(a)) and np.array_equal(a[indices], b)):
                 return a.copy()

@@ -1,6 +1,7 @@
 import msgpack
 from typing import Any
 import passivbot_rust as pbr
+from config.result_records import RESULT_VERSION_KEY
 
 _DIFF_DELETE_KEY = "__passivbot_diff_delete__"
 _DIFF_DELETE_MARKER = {_DIFF_DELETE_KEY: True}
@@ -78,17 +79,20 @@ def apply_diffs(difflist, base=None):
         yield current
 
 
+def apply_result_delta(previous, delta):
+    """An explicit result version marks a full record in the persisted stream."""
+    if RESULT_VERSION_KEY in delta:
+        return delta
+    return deep_updated(previous, delta)
+
+
 def load_results(filepath):
-    """
-    Generator that yields each full config by applying diffs.
-    No need to distinguish between full configs and diffs.
-    """
+    """Reconstruct saved results from full records and incremental deltas."""
     with open(filepath, "rb") as f:
         unpacker = msgpack.Unpacker(f, raw=False)
         current = {}
         for entry in unpacker:
-            for full_config in apply_diffs([entry], base=current):
-                current = full_config
+            current = apply_result_delta(current, entry)
             yield current
 
 

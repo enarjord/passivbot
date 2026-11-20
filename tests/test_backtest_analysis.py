@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 from copy import deepcopy
 
 import numpy as np
@@ -9,9 +10,12 @@ import pytest
 import backtest as bt
 import plotting
 from backtest import (
-    BacktestPayload, DISABLE_PLOTTING_HELP, build_backtest_frames,
+    BacktestPayload, build_backtest_frames,
     decode_core_analysis, execute_backtest, parse_disabled_plot_groups,
 )
+from config.load import prepare_config
+from config.schema import get_template_config
+from config.universe import set_side_universe_sources
 from plotting import create_forager_balance_figures
 
 START = 1704067200000
@@ -188,7 +192,7 @@ def test_post_process_disable_plotting_skips_all_figure_generation(
 
     monkeypatch.setattr(bt, "build_backtest_frames", _fake_build_backtest_frames)
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
-    monkeypatch.setattr(bt, "strip_config_metadata", lambda config: config)
+    monkeypatch.setattr(bt, "sanitize_prepared_config_for_dump", lambda config: {})
     monkeypatch.setattr(
         bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None
     )
@@ -255,36 +259,25 @@ def test_post_process_writes_original_config_for_dataset_override(
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
     monkeypatch.setattr(bt, "dump_config", _fake_dump_config)
 
-    original_config = {
-        "backtest": {"start_date": "2025-01-01", "coins": {"binance": ["ETH"]}},
-        "live": {},
-        "bot": {
-            "long": {"universe": {"approved_coins": ["ETH"]}},
-            "short": {"universe": {"approved_coins": []}},
-        },
-    }
-    config = {
-        "disable_plotting": True,
-        "backtest": {
-            "balance_sample_divider": 60,
-            "coins": {"binance": ["BTC"]},
-            "hlcvs_data_dir": "caches/hlcvs_data/custom__abc",
-        },
-        "bot": {
-            "long": {
-                "risk": {"total_wallet_exposure_limit_ratio": 1.0},
-                "universe": {"approved_coins": ["BTC"]},
-            },
-            "short": {
-                "risk": {"total_wallet_exposure_limit_ratio": 0.0},
-                "universe": {"approved_coins": []},
-            },
-        },
-        "live": {},
-        "_original_backtest_config": original_config,
-        "metrics": {"stale": True},
-        "suite_metrics": {"stale": True},
-    }
+    def prepared_for(coins):
+        source = get_template_config()
+        set_side_universe_sources(source, "approved_coins", {"long": coins, "short": []})
+        source["backtest"].update(
+            start_date="2025-01-01",
+            hlcvs_data_dir="caches/hlcvs_data/custom__abc",
+            balance_sample_divider=60,
+        )
+        prepared = prepare_config(source, verbose=False)
+        prepared["backtest"]["coins"] = {"binance": coins}
+        return prepared
+
+    config = prepared_for(["BTC"])
+    config.update(
+        disable_plotting=True,
+        _original_backtest_config=prepared_for(["ETH"]),
+        metrics={"stale": True},
+        suite_metrics={"stale": True},
+    )
 
     bt.post_process(
         plot_context=bt.BacktestPlotContext(
@@ -311,29 +304,35 @@ def test_post_process_writes_original_config_for_dataset_override(
     )
 
     dumped_by_name = {path.split("/")[-1]: cfg for cfg, path in dumped}
-    assert dumped_by_name["config.original.json"]["backtest"]["coins"]["binance"] == [
-        "ETH"
-    ]
+    assert "coins" not in dumped_by_name["config.original.json"]["backtest"]
     assert dumped_by_name["config.original.json"]["bot"]["long"]["universe"]["approved_coins"] == [
         "ETH"
     ]
-    assert dumped_by_name["config.json"]["backtest"]["coins"]["binance"] == ["BTC"]
-    assert dumped_by_name["config.json"]["metrics"]["stats"]["cagr_fraction_strategy_equity"]["mean"] == 1.0
-    assert "suite_metrics" not in dumped_by_name["config.json"]
+    record = dumped_by_name["config.json"]
+    assert record["result_version"] == 1
+    assert record["provenance"] == {"dataset": "dataset.json"}
+    assert "coins" not in record["config"]["backtest"]
+    assert record["config"]["backtest"]["hlcvs_data_dir"] == "caches/hlcvs_data/custom__abc"
+    assert record["metrics"]["stats"]["cagr_fraction_strategy_equity"]["mean"] == 1.0
+    assert "suite_metrics" not in record
+    assert "metrics" not in record["config"]
+    prepare_config(record["config"], verbose=False)
     assert "metrics" not in dumped_by_name["config.original.json"]
+    dataset = json.loads(next(tmp_path.rglob("dataset.json")).read_text())
+    assert dataset["coins"] == ["BTC"]
 
 def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     calls = {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
 
     def _fake_build_backtest_frames(*args, **kwargs):
-        fdf = pd.DataFrame(columns=["coin", "pnl"])
+        fdf = pd.DataFrame(columns=["timestamp", "coin", "pnl", "twe_long", "twe_short"])
         bal_eq = pd.DataFrame({"usd_total_balance": [1000.0], "usd_total_equity": [1000.0], "btc_total_equity": [1.0], "strategy_equity": [1000.0]})
         bal_eq.index = pd.date_range("2024-01-01", periods=len(bal_eq), freq="min")
         return fdf, bal_eq
 
     monkeypatch.setattr(bt, "build_backtest_frames", _fake_build_backtest_frames)
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
-    monkeypatch.setattr(bt, "strip_config_metadata", lambda config: config)
+    monkeypatch.setattr(bt, "sanitize_prepared_config_for_dump", lambda config: {})
     monkeypatch.setattr(
         bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None
     )
@@ -378,7 +377,10 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
         exchange="binance",
     )
 
-    assert [p.name for p in tmp_path.rglob("*.png")] == ["equity.png"]
+    assert {p.name for p in tmp_path.rglob("*.png")} == {
+        "equity.png",
+        "total_wallet_exposure.png",
+    }
 
 def test_post_process_formats_console_without_filtering_or_rounding_exports(
     tmp_path, monkeypatch, caplog
@@ -391,7 +393,7 @@ def test_post_process_formats_console_without_filtering_or_rounding_exports(
 
     monkeypatch.setattr(bt, "build_backtest_frames", _fake_build_backtest_frames)
     monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
-    monkeypatch.setattr(bt, "strip_config_metadata", lambda config: config)
+    monkeypatch.setattr(bt, "sanitize_prepared_config_for_dump", lambda config: {})
     monkeypatch.setattr(
         bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None
     )
@@ -480,7 +482,21 @@ def test_parse_disabled_plot_groups_accepts_summary_alias_and_commas():
         "coin_fills",
     }
 
-def test_disable_plotting_help_lists_every_plot_group():
-    assert "hard_stop" in DISABLE_PLOTTING_HELP
-    assert "summary disables balance, twe, pnl, and hard_stop" in DISABLE_PLOTTING_HELP
-    assert "coin_fills disables per-coin fill plots only" in DISABLE_PLOTTING_HELP
+@pytest.mark.asyncio
+async def test_backtest_help_lists_canonical_plot_selection(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["backtest", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        await bt.main()
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--plots" in help_text
+    assert "--disable_plotting" not in help_text
+
+
+@pytest.mark.asyncio
+async def test_backtest_rejects_retired_plot_flag(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["backtest", "--disable_plotting"])
+    with pytest.raises(SystemExit) as exc:
+        await bt.main()
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --disable_plotting" in capsys.readouterr().err

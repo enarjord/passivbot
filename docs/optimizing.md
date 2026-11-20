@@ -13,7 +13,10 @@ Changing those settings requires a fresh run. Dataset selectors
 `backtest.market_settings_sources`, `backtest.ohlcv_source_dir`, and `backtest.hlcvs_data_dir`
 are compared as configured. Moving input directories therefore requires a fresh run even when
 contents match; input paths are data selectors, not excluded output paths.
-New result records include an `optimizer_evaluation_contract` snapshot. It binds fitness to
+Saved Pareto JSON and reconstructed `all_results.bin` rows have `result_version: 1`, a
+reusable `config`, metrics, and `provenance`. The provenance includes exact single-run
+dataset membership, the selected fine-tune anchor when applicable, and an
+`optimizer_evaluation_contract` snapshot. The snapshot binds fitness to
 content hashes of the prepared candles, BTC prices, timestamps, selected scenario slices, and
 market settings, plus the evaluator's Python source tree, Python runtime, installed distribution
 metadata, and the verified loaded Rust source and artifact.
@@ -75,6 +78,11 @@ input seed is unspecified; existing checkpoint/evaluation compatibility checks s
 Legacy sessions without `session.json` keep their original seed policy. Fresh runs always get a
 new random run ID, even when their setup fingerprints match. Full SHA-256 setup fingerprints,
 run IDs and canonical setup inputs are available in `session.json`.
+
+Use `--resume` with a trusted local optimizer checkpoint. Python deserializes
+`checkpoint.pkl` before checking its fitness and version, and deserialization can execute
+code. Share candidate configurations or result files and evaluate imported seeds in a
+fresh run.
 
 For a prepared or transferred dataset, require the download report at startup:
 

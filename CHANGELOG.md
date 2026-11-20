@@ -5,19 +5,61 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Reject unreadable or empty external daily candle files instead of treating them
-  as a later data start; retain healthy same-day alternatives and normal late starts.
-- Invalidate automatic prepared caches when selected external coin/BTC daily files
-  change, and reject source changes during preparation, publication or cache loading.
-- Warn when a coin has no post-warmup trading window and clarify that requested/
-  actual range manifests are recorded by offline snapshots.
+- Let explicitly selected OHLCV directories define each coin's simulation window.
+  Warn and record the requested and available starts when history begins late.
+  BTC benchmarks still require coverage across the full prepared range.
 
-- Treat explicitly selected external OHLCV folders as caller-selected simulation
-  windows, including offline and Hyperliquid. Start each coin/source at its first
-  real available candle without asserting market inception, copying raw candles,
-  changing the authored date, or relaxing native-store coverage and tail checks.
+- Reject unreadable or empty external daily candle files unless a healthy
+  same-day alternative is available. Invalidate prepared caches when selected
+  external coin or BTC candle files change.
+
+- Warn when an individual coin lacks enough candles to trade after warmup.
+
+- Retry a KuCoin Futures private read once with a fresh signature when KuCoin
+  rejects its request timestamp. Persistent timestamp errors still surface to the bot.
+
+- Buffer live monitor messages during connection replay so events published while
+  initial data is being sent reach the connected client.
+
+- Retry unfinished monitor event and history rows after an append completes,
+  preserving split UTF-8 characters and live relay offsets.
+
+- Select backtest plots with `--plots` and cap the optimizer seed shortlist with
+  `--compress-starting-configs`. Remove the duplicate flags.
+
+- Use `reducer` in CLI limit expressions and objects, and a JSON or HJSON list
+  with `--limits`. Use `passivbot tool pareto` and `passivbot tool pareto-analyze`
+  for Pareto selection and analysis. Developer exchange probes remain directly
+  callable and have their own section in the tools guide.
+
+- Include RMS directionality candle reads in the ordinary live planner's shared
+  ten-second remote acquisition budget. Complete cached inputs remain usable after expiry.
+
+- Show signed Entry Distance % in position logs and monitors, with positive values for favorable
+  price moves on either side. Position telemetry uses the new scale-one
+  `signed_entry_distance_fraction` field. Auto-unstuck preserves its order selection under the
+  new sign convention.
+
+- Include a wallet exposure plot in default backtest reports, with separate
+  long and short series and a time-weighted exposure summary.
+
+- Export compiled per-coin overrides in their authored form so the configuration
+  can be loaded again without runtime fields.
+
+- Use the maintained EMA when a CPU backtest or exact optimizer evaluation has
+  an unused volume or log-range EMA with the same span. Affected backtests can
+  produce different fills and metrics.
 
 - Show disabled sides explicitly in the live startup banner’s position and exposure limits.
+
+- Identify v9 development builds as `9.0.0.dev0` in package metadata, the CLI, and
+  runtime manifests.
+
+- Retain small Trailing Martingale entry EMA updates in native GPU replay to
+  reduce one-tick differences in entry prices.
+
+- Preserve completed planning, ordinary execution and protective work across the
+  internal passes of an offline fake-live replay step.
 
 - Recheck ordinary live order admission after connector queueing so a stale
   create or cancel is deferred before it reaches the exchange.
@@ -28,6 +70,23 @@ its own version heading. See [release status](docs/releases.md).
 
 - Recover Bitunix creates by exact client order ID after an uncertain response or restart.
   Defer further ordinary creates while a submitted attempt remains unresolved.
+
+- Allow two eligible Bitunix post-only closes on separate symbols to share one fresh
+  plan and one account confirmation. Journal each submission independently.
+
+- Record ordinary close replacement timing in structured live events, from cancel
+  acknowledgment through account confirmation, replanning, and create submission.
+
+- Recover Binance USDⓈ-M trailing resets from a complete trade query at the exact
+  position update millisecond when cached replay retains stale position residue.
+  Keep trailing confirmation pending when the boundary has multiple fills or
+  other conflicting evidence. The recovery leaves historical fills and PnL intact.
+
+- Reuse validated candle shards across overlapping EMA windows and reduce work when
+  merging contiguous candle rows into the live cache.
+
+- Persist the Bitunix pending-create journal in the documented live container
+  setups so unresolved submissions survive container replacement.
 
 - Support opt-in `optimize.gpu.tuning_mode = "max"` on Apple Silicon Metal.
   It evaluates wider seed and offspring cohorts, retains the configured parent
@@ -62,11 +121,19 @@ its own version heading. See [release status](docs/releases.md).
   panic closes while fill history settles. A protective batch can share one fresh
   account read, with current permission checked at each submission.
 
+- Preserve the original receipt time of Bitunix and Lighter market quotes for live
+  order planning and HSL. Targeted Bitunix refreshes can repair expired quotes with
+  bounded depth reads, and Lighter defers when the oldest quote input has expired.
+
 - Reduce copying when assembling candle history from cached shards.
 
 - Reuse saved optimizer results as base configs for `passivbot optimize` and
   `passivbot download`. Saved metrics and runtime metadata are ignored, and
   config validation still rejects unknown settings.
+
+- Require Boolean values for Boolean settings in v9 configs and overrides. Quoted
+  values such as `"false"` now fail validation instead of enabling monitoring,
+  raw fill payload retention, suite mode, or optimizer limits.
 
 - Reduce CPU use when verifying unchanged fill history during empty and duplicate-only refreshes.
 
@@ -335,6 +402,10 @@ its own version heading. See [release status](docs/releases.md).
 
 - Use 24-character hash prefixes for new Pareto result filenames, with longer names on collision.
   Show the same names in the CLI and HTML viewer and abbreviate older names without renaming files.
+
+- Remove the empty `legacy_config_paths` and `mirror_from` fields from native
+  strategy parameter metadata and retire `filter_volatility_drop_pct` from the
+  native order-planning input.
 
 - Speed up `migrate-config-v9` validation of scenario-heavy configs with inline coin
   strategy overrides and show progress during slow conversions.
@@ -875,6 +946,8 @@ its own version heading. See [release status](docs/releases.md).
   reloadable, add `forager.always_include`, and preserve nullable simulation minimum-cost
   inheritance. Released-v8 conversion preserves forced selections through scenario and fixed
   mode replacements. Update canonical CLI paths, cleanup/preflight tools and public examples.
+- Treat missing authored v9 coin-list paths as unavailable. Restrict historical
+  `approved_coins_topmcap` filename substitution to the released-v8 converter and report its choice.
 
 - Organize account-wide bot policy under `bot.portfolio`, with shared directional defaults under
   `bot.global` alongside `bot.long` and `bot.short`,
@@ -905,6 +978,9 @@ its own version heading. See [release status](docs/releases.md).
 - Load saved optimizer and backtest result files as backtest inputs by separating known result
   metadata from authored settings before validation. Commands printed by Pareto can
   load the selected candidate while unknown configuration fields remain errors.
+
+- Remove the deprecated Python exchange-name wrappers. Use `to_ccxt_exchange_id`
+  and `to_standard_exchange_name` for exchange-name conversion.
 
 - Add opt-in `migrate-config-v9 --best-effort` to infer supported `_ew` replacements,
   EMA spans and changed migration policies, warning and reporting every guess while
@@ -949,6 +1025,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Reuse unchanged parsed candle shards with bounded memory and file-identity invalidation, and avoid sorting the full retained history when overlapping source rows are identical. Partial reads that lose either a legacy shard or its primary overlay remain retryable. Native Windows keeps ordinary disk reads because its file creation clock cannot safely invalidate in-place corrections. Corrections, strict audits, mutable consumer arrays and restart reconstruction retain their existing behavior.
 - Avoid a second HSL history reconstruction when a complete native minute grid lacks only the non-minute current endpoint. Preserve current-fact validation, decisions, lifecycle events and estimator diagnostics in live and simulator evaluation.
+
+- Version saved backtest, suite, and optimizer records with authored configuration kept
+  separately from metrics and provenance. Existing saved v9 candidates remain readable.
 
 - Reuse prepared GPU optimizer candidate configs when recording results, avoiding
   repeated materialization while preserving exact candidate and checkpoint semantics.
@@ -1584,6 +1663,9 @@ its own version heading. See [release status](docs/releases.md).
 - Add `passivbot tool pareto-plot` for offline interactive 2D and rotatable 3D objective
   scatter plots, with candidate hover details, metric discovery, and PNG export.
 
+- Make `merge-paretos` output reusable v9 optimizer seeds. Each selected side retains its
+  inherited settings and explicit activation, and merge provenance stays outside the config.
+
 - Make live console health easier to interpret: report trailing-input recovery, current close
   coverage and account age, label summary delay and reconnect totals explicitly, and keep routine
   timing and order-refresh mechanics in DEBUG. Summarize replaced HSL observations without hiding
@@ -1764,7 +1846,7 @@ its own version heading. See [release status](docs/releases.md).
 
 Changes since [v8.1.0](https://github.com/enarjord/passivbot/releases/tag/v8.1.0).
 The earlier incremental entries are preserved in the
-[detailed development history](docs/development_history_since_v8.1.0.md).
+[detailed development history](https://github.com/enarjord/passivbot/blob/0acfeaae6d70dc5527dc1e6ff56cb6e2ace06655/docs/development_history_since_v8.1.0.md).
 
 ### Upgrade notes
 

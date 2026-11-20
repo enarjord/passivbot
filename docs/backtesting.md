@@ -296,6 +296,9 @@ The workspace includes `config`, `analysis`, `fills`, `balance_and_equity`, `hlc
 Normal backtests retain exact observations independently of their plots:
 
 - `result.json` versions the result format and identifies its factual artifacts.
+- Saved `config.json` records use `result_version: 1`. Their `config` member is reusable
+  authored policy. Metrics and links to `dataset.json` or `suite_summary.json` sit outside
+  that member. Backtest and config export commands can read the whole saved record.
 - `balance_and_equity.npz` stores integer millisecond clocks and float64 equity/cash
   columns at every native observation. Missing cash observations remain missing.
 - `fills.csv`, `analysis.json`, config, dataset and session metadata remain available.
@@ -309,11 +312,11 @@ Standalone startup timings measure module import work. Reusing the programmatic
 entry point does not include idle time since import. Suite artifacts label timings
 limited to post-processing explicitly.
 
-The default plots are `reports/equity.png` and, when HSL is enabled,
-`reports/hsl.png`. Equity uses log scale by default. A nonpositive observation causes
-an explicitly labelled linear fallback so losses are not hidden. Drawdown is computed
-from full-resolution strategy equity before view reduction; the original peak and
-trough timestamps are retained. Plot sampling never changes native metric support.
+The default plots are `reports/equity.png`, `reports/total_wallet_exposure.png`, and,
+when HSL is enabled, `reports/hsl.png`. Equity uses log scale by default. A nonpositive
+observation causes an explicitly labelled linear fallback so losses stay visible.
+Drawdown uses full-resolution strategy equity before view reduction, preserving the
+original peak and trough timestamps. Plot sampling never changes native metric support.
 
 ```bash
 passivbot backtest CONFIG --equity-scale linear
@@ -323,10 +326,17 @@ passivbot backtest CONFIG --plots none
 ```
 
 Plot groups are `equity`, `hsl`, `hsl_episodes`, `coin_fills` and `twe`; `all` and
-`none` select the complete set or disable rendering. The legacy `--disable_plotting`
-switch still suppresses its named groups. Cumulative PnL is no longer generated.
+`none` select the complete set or disable rendering.
 BTC-denominated views, full-history fill plots, stop zooms and dense equity CSV are
-optional. The TWE view labels its hourly fill-event averaging population explicitly.
+optional. The `twe` plot shows the long and short entry-price notionals separately
+as percentages of wallet balance. It carries the last post-fill snapshot at each
+timestamp forward until the next fill and uses the saved equity clock to include
+time before the first fill and after the last. BTC collateral is valued at fill times.
+The plot reports elapsed-time-weighted mean and 95th percentile exposure,
+peak exposure, time exposed, and native position-budget utilization RMS when
+available. Time statistics exclude periods with unavailable exposure. Saved
+results need the per-side fill snapshots to generate this plot.
+
 Fill reports align cached candles and position-price observations by saved UTC
 execution clocks, including when a suite scenario starts inside a master dataset.
 
@@ -334,6 +344,7 @@ Reports can be regenerated without running the strategy or contacting an exchang
 
 ```bash
 passivbot tool backtest-report RUN --equity-scale linear
+passivbot tool backtest-report RUN --plots twe
 passivbot tool backtest-report RUN --plots hsl,hsl_episodes --scope BTC:long
 passivbot tool backtest-report RUN --plots coin_fills --output-dir RUN/detail
 passivbot tool backtest-report RUN --plots none --equity-csv
@@ -439,7 +450,7 @@ the override dataset:
 
 ## Backtest CLI args
 
-- `-dp` to disable individual coin plotting.
+- `--plots none` disables plot rendering. Select individual plots by name with `--plots`.
 - `--suite [y/n]` to override `backtest.suite_enabled` (omit the value to enable, e.g. `--suite`).
 - `--scenarios label1,label2,...` to run only specific scenarios by label (implies `--suite y`).
 - `--suite-config path/to/overrides.json` to merge an additional suite definition onto the base config. Useful when you want to keep suite definitions outside the main config file.

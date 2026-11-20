@@ -3452,13 +3452,13 @@ def test_console_format_summarizes_unstuck_selection():
             "changed": True,
             "entry_price": 1.0,
             "current_price": 1.1,
-            "price_change_percent": 10.0,
+            "signed_entry_distance_fraction": 0.1,
             "allowance": -12.3,
         },
     )
 
     assert format_console_event(event) == (
-        "[unstuck] succeeded entry=1 current=1.1 pos_pnl_dist=10.0000% "
+        "[unstuck] succeeded entry=1 current=1.1 entry_dist=+10.00% "
         "allowance=-12.3 changed=true symbol=SUI/USDT:USDT pside=long "
         "reason=unstuck_selection"
     )
@@ -3876,6 +3876,7 @@ def test_console_format_position_changed_aligns_columns_and_preserves_event_data
             "wel_ratio": 1.095924,
             "wele_ratio": 0.862929,
             "twel_ratio": 0.178443,
+            "signed_entry_distance_fraction": -0.02,
             "upnl": -265.815872,
         },
     )
@@ -3886,7 +3887,7 @@ def test_console_format_position_changed_aligns_columns_and_preserves_event_data
     assert rendered == (
         "[pos]     new BTC        long  0 @ 0                  "
         "-> 0.07328 @ 67352.9      | WE=23.4841% WEL=109.5924% "
-        "eWEL=86.2929% TWEL=17.8443% uPnL=-265.815872"
+        "eWEL=86.2929% TWEL=17.8443% uPnL=-265.815872 entry_dist=-2.00%"
     )
     assert event.to_dict() == before
 
@@ -3899,6 +3900,7 @@ def test_console_format_position_changed_renders_zero_and_missing_metrics():
         data={
             "action": "closed",
             "old_size": 0.0,
+            "price_action_distance": 0.02,
             "old_price": 0.0,
             "new_size": 0.0,
             "new_price": 0.0,
@@ -3912,6 +3914,7 @@ def test_console_format_position_changed_renders_zero_and_missing_metrics():
 
     assert "0 @ 0" in rendered
     assert "WE=0.0000% WEL=0.0000% eWEL=- TWEL=- uPnL=0" in rendered
+    assert "entry_dist=" not in rendered
 
 
 def test_console_format_position_changed_does_not_truncate_long_values():
@@ -3944,6 +3947,7 @@ def test_console_format_position_changed_preserves_signed_short_values():
         pside="short",
         data={
             "action": "added",
+            "signed_entry_distance_fraction": 0.02,
             "old_size": -0.2,
             "old_price": 67_000.0,
             "new_size": -0.35,
@@ -3962,6 +3966,7 @@ def test_console_format_position_changed_preserves_signed_short_values():
     assert "-> -0.35 @ 66500" in rendered
     assert "eWEL=50.0000%" in rendered
     assert "uPnL=-7.5" in rendered
+    assert "entry_dist=+2.00%" in rendered
 
 
 def test_console_format_position_changed_handles_nonfinite_and_missing_values():

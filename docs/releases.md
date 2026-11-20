@@ -5,7 +5,7 @@ published on 2026-08-10. The [release notes](release_notes_v8.1.0.md) describe t
 
 Development branches contain subsequent changes and can differ in config compatibility. Read
 `CHANGELOG.md` under **Unreleased** at the revision you intend to install. The v9 development
-revision uses schema v9 while its package still reports `8.2.0.dev0`. Record the exact Git commit
+package reports `9.0.0.dev0` and uses config schema `v9.0.0`. Record the exact Git commit
 alongside `passivbot --version` when comparing development checkouts.
 
 | Version surface | Meaning |
@@ -26,18 +26,15 @@ auto-unstuck memory, and a schema change does not itself publish a package relea
 
 ## v9 release review
 
-The proposed major release changes authored configuration and trading behavior. The main
-upgrade work is migration and replay validation:
+The [v9 release preview](release_notes_v9.0.0.md) summarizes the major changes and gives a
+migration, validation, and rollback checklist.
 
-- Convert supported v8 configs to the canonical v9 layout and explicitly review which sides
-  may open positions. [Migration guide](v8_to_v9_migration.md)
-- Retune the forward-decay risk memory for HSL, auto-unstuck, and the realized-loss gate.
-  Re-backtest the migrated policy and reevaluate saved optimizer candidates.
-  [Equity Hard Stop Loss](equity_hard_stop_loss.md)
-- Review the new scenario and metric definitions before comparing optimizer runs across
-  versions. [Optimizer guide](optimizing.md)
-- Review live startup, logging, and monitor configuration before moving an account to the
-  new runtime. [Container deployment](container_deployment.md) and [monitoring](monitor.md)
+### v8 rollback reference
+
+Keep the exact v8 revision used by the previous installation. For the master snapshot used
+to review the cutover, use [commit `89d2ea933`](https://github.com/enarjord/passivbot/tree/89d2ea933d0c02714d4a51225f114b35012d9d3c).
+For an installation on a published tag, keep that tag and its matching configuration and
+environment.
 
 ## Choose an installation revision
 
@@ -70,7 +67,7 @@ Review status output before sharing it; include only relevant public code change
 - [v8.1.0 — 2026-08-10](release_notes_v8.1.0.md)
 - [v8.0.0 — 2026-07-14](release_notes_v8.0.0.md), including the v7 upgrade boundary
 - [Complete changelog](https://github.com/enarjord/passivbot/blob/master/CHANGELOG.md)
-- [Earlier post-v8.1.0 implementation ledger](development_history_since_v8.1.0.md)
+- [Earlier post-v8.1.0 implementation ledger](https://github.com/enarjord/passivbot/blob/0acfeaae6d70dc5527dc1e6ff56cb6e2ace06655/docs/development_history_since_v8.1.0.md)
 
 Contributors should add net user-facing changes under `Unreleased`, combining superseded entries
 for the same feature. Leave tagged sections faithful to their release. Version bumps, release

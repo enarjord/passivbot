@@ -46,10 +46,6 @@ _SYMBOL_MAP_LOCK_TIMEOUT = 5  # Seconds to wait for lock acquisition
 _SYMBOL_MAP_STALE_CLEANUP_DONE = False  # Track if cleanup has run this session
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION = 2
-LEGACY_COINS_FILE_ALIASES = {
-    "approved_coins_topmcap.json": Path("configs/approved_coins.json"),
-    "approved_coins_topmcap.txt": Path("configs/approved_coins.json"),
-}
 
 
 class MarketIdentifierResolutionError(ValueError):
@@ -120,7 +116,7 @@ def _cleanup_stale_symbol_map_locks() -> None:
 
 
 def _resolve_coins_file_path(value: str, *, preserve_selected_path: bool = False) -> Optional[Path]:
-    """Use legacy lookup precedence, optionally retaining the selected file alias."""
+    """Check the requested path, optionally preserving symlinks for later refresh."""
     if not isinstance(value, str) or not value.strip():
         return None
     raw_path = Path(value.strip())
@@ -136,13 +132,6 @@ def _resolve_coins_file_path(value: str, *, preserve_selected_path: bool = False
             ]
         )
 
-    alias = LEGACY_COINS_FILE_ALIASES.get(raw_path.name)
-    if alias is not None:
-        if not alias.is_absolute():
-            candidates.append(PROJECT_ROOT / alias)
-        else:
-            candidates.append(alias)
-
     seen: set[Path] = set()
     for candidate in candidates:
         selected_path = candidate.absolute()
@@ -151,16 +140,6 @@ def _resolve_coins_file_path(value: str, *, preserve_selected_path: bool = False
             continue
         seen.add(candidate)
         if candidate.exists():
-            if candidate.name != raw_path.name and raw_path.name in LEGACY_COINS_FILE_ALIASES:
-                try:
-                    rel = candidate.relative_to(PROJECT_ROOT)
-                except ValueError:
-                    rel = candidate
-                logging.warning(
-                    "Resolved legacy coins file '%s' to '%s'. Update your config to the new path.",
-                    raw_path,
-                    rel,
-                )
             return selected_path if preserve_selected_path else candidate
     return None
 
@@ -541,31 +520,6 @@ def to_standard_exchange_name(exchange: str) -> str:
             return ex[: -len(suffix)]
 
     return ex
-
-
-# Deprecated aliases for backward compatibility - will be removed in a future release
-def normalize_exchange_name(exchange: str) -> str:
-    """Deprecated: Use to_ccxt_exchange_id() instead."""
-    import warnings
-
-    warnings.warn(
-        "normalize_exchange_name() is deprecated, use to_ccxt_exchange_id() instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return to_ccxt_exchange_id(exchange)
-
-
-def denormalize_exchange_name(exchange: str) -> str:
-    """Deprecated: Use to_standard_exchange_name() instead."""
-    import warnings
-
-    warnings.warn(
-        "denormalize_exchange_name() is deprecated, use to_standard_exchange_name() instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return to_standard_exchange_name(exchange)
 
 
 def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout_ms: int = 60_000):

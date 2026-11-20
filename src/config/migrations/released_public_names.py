@@ -6,7 +6,7 @@ versioned converter; neither table authorizes aliases during ordinary loading.
 
 from copy import deepcopy
 
-from .migrations.released_v8_strategy import (
+from .released_v8_strategy import (
     RELEASED_V8_STRATEGY_PATH_RENAMES,
     released_strategy_kind,
     released_strategy_selector,
@@ -89,7 +89,7 @@ def _public_path_renames():
 
 def released_fixed_selector(selector, *, strategy_kind=None):
     """Retain the gene membership of released prefix/suffix fixed selectors."""
-    from .param_paths import bound_path_matches_selector
+    from config.param_paths import bound_path_matches_selector
 
     parts = released_strategy_selector(selector.split("."), strategy_kind=strategy_kind)
     candidates = set()

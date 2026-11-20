@@ -9,7 +9,7 @@ import shlex
 import pytest
 
 from config.load import load_input_config, load_prepared_config, prepare_config
-from config.result_records import extract_result_config
+from config.result_records import build_result_record, extract_result_config
 from config.schema import get_template_config
 from pareto_explorer import build_parser, run_from_args
 from tools.clean_config import cleanup_config
@@ -26,10 +26,25 @@ def result_record():
     return config
 
 
-@pytest.mark.parametrize("wrapped", [False, True])
-def test_saved_results_load_like_clean_exports_without_changing_sources(tmp_path, wrapped):
+def versioned_record(legacy):
+    return build_result_record(
+        extract_result_config(legacy),
+        provenance={
+            "backtest_coins": legacy["backtest"]["coins"],
+            "optimizer_evaluation_contract": legacy["optimizer_evaluation_contract"],
+        },
+        metrics=legacy["metrics"],
+    )
+
+
+@pytest.mark.parametrize("shape", ["inline", "wrapped", "versioned"])
+def test_saved_results_load_like_clean_exports_without_changing_sources(tmp_path, shape):
     record = result_record()
-    source = {"config": record, "analysis": {}, "timestamp": 123} if wrapped else record
+    source = {
+        "inline": record,
+        "wrapped": {"config": record, "analysis": {}, "timestamp": 123},
+        "versioned": versioned_record(record),
+    }[shape]
     path = tmp_path / "result.json"
     original = json.dumps(source)
     path.write_text(original)
@@ -79,10 +94,14 @@ def test_authored_dataset_membership_stays_invalid_without_result_metadata(tmp_p
         )
 
 
-@pytest.mark.parametrize("wrapped", [False, True])
-def test_result_extraction_requires_explicit_loader_opt_in(tmp_path, wrapped):
+@pytest.mark.parametrize("shape", ["inline", "wrapped", "versioned"])
+def test_result_extraction_requires_explicit_loader_opt_in(tmp_path, shape):
     record = result_record()
-    document = {"config": record} if wrapped else record
+    document = {
+        "inline": record,
+        "wrapped": {"config": record},
+        "versioned": versioned_record(record),
+    }[shape]
     path = tmp_path / "result.json"
     path.write_text(json.dumps(document))
 
@@ -103,6 +122,21 @@ def test_unmarked_config_wrapper_still_requires_migration(tmp_path):
             str(path), verbose=False, log_info=False, allow_result_records=True,
         )
     assert cleanup_config(document)["config_version"] == get_template_config()["config_version"]
+
+
+@pytest.mark.parametrize("version", [True, 1.0, "1", 2])
+def test_unknown_result_envelope_version_is_rejected(version):
+    record = versioned_record(result_record())
+    record["result_version"] = version
+    with pytest.raises(ValueError, match="unsupported saved result version"):
+        extract_result_config(record)
+
+
+def test_versioned_result_keeps_runtime_coin_membership_out_of_authored_config():
+    record = versioned_record(result_record())
+    record["config"]["backtest"]["coins"] = {"combined": ["BTC"]}
+    with pytest.raises(ValueError, match=r"config.backtest.coins belongs in provenance"):
+        extract_result_config(record)
 
 
 @pytest.mark.parametrize("marker_location", ["outer", "inner"])
@@ -205,14 +239,18 @@ def test_result_input_snapshots_preserve_config_before_cli_overrides(tmp_path):
     assert "metrics" not in snapshot
 
 
-def test_backtest_command_printed_by_pareto_loads_selected_result(tmp_path, capsys, monkeypatch):
+@pytest.mark.parametrize("versioned", [False, True])
+def test_backtest_command_printed_by_pareto_loads_selected_result(
+    tmp_path, capsys, monkeypatch, versioned,
+):
     import backtest
     from passivbot_cli.main import main as cli_main
 
     pareto = tmp_path / "pareto"
     pareto.mkdir()
     path = pareto / "candidate.json"
-    path.write_text(json.dumps(result_record()))
+    record = result_record()
+    path.write_text(json.dumps(versioned_record(record) if versioned else record))
     original = path.read_bytes()
     selected = run_from_args(
         build_parser().parse_args([str(pareto), "--method", "ideal"])
@@ -245,7 +283,10 @@ def test_backtest_command_printed_by_pareto_loads_selected_result(tmp_path, caps
 
 @pytest.mark.parametrize("command", ["optimize", "download"])
 @pytest.mark.parametrize("unknown_setting", [False, True])
-def test_optimizer_commands_load_saved_result(tmp_path, monkeypatch, command, unknown_setting):
+@pytest.mark.parametrize("versioned", [False, True])
+def test_optimizer_commands_load_saved_result(
+    tmp_path, monkeypatch, command, unknown_setting, versioned,
+):
     import ohlcv_download
     import optimize
     from passivbot_cli.main import main as cli_main
@@ -254,7 +295,7 @@ def test_optimizer_commands_load_saved_result(tmp_path, monkeypatch, command, un
     if unknown_setting:
         record["backtest"]["starting_balnce"] = 1000.0
     path = tmp_path / "candidate.json"
-    original = json.dumps(record)
+    original = json.dumps(versioned_record(record) if versioned else record)
     path.write_text(original)
     argv = [command, str(path)]
 

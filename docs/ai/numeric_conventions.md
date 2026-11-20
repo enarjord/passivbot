@@ -33,11 +33,19 @@ definition permits that: returns, price offsets, rebates, and excess allowances 
 Keep bounds, nullability, sentinels, rounding, and clipping explicit in their owning contracts.
 
 Use `offset` for signed displacements and `distance` for nonnegative magnitudes where practical.
-Price helpers state their reference and sign: `calc_abs_relative_difference_fraction` uses the
-absolute reference denominator; `calc_pside_adverse_price_change_fraction` is positive for a
-change adverse to long/short; `calc_order_price_gap_fraction` is positive on the passive side of
-a buy/sell order. A signed gap can be negative when an order crosses the market. Their existing
-zero, nonfinite-input and invalid-side behavior remains owned by the native implementation.
+Price helpers state their reference and sign. `calc_abs_relative_difference_fraction` uses the
+absolute reference denominator. `calc_order_price_gap_fraction` uses the market price as its
+reference and is positive on the passive side of a buy/sell order. A signed gap can be negative
+when an order crosses the market.
+
+For an open position, `calc_signed_entry_distance_fraction` measures price movement relative to
+average entry. A favorable move is positive on either side and an adverse move is negative:
+
+- Long: `observed_price / average_entry_price - 1`. Entry 100 and observed price 98 give `-0.02`.
+- Short: `1 - observed_price / average_entry_price`. Entry 50 and observed price 49 give `+0.02`.
+
+Scale-one values such as `+0.02` display as `+2.00%`. The native implementation owns validation
+and invalid-input behavior, and each consumer defines the source of the observed price.
 Conventional financial names such as `sharpe_ratio`, `sortino_ratio`, `omega_ratio`,
 `calmar_ratio`, and `sterling_ratio` remain useful. Document their actual estimators, sampling,
 annualization, floors and clipping; the familiar name alone does not establish those formulas.

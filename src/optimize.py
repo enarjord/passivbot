@@ -87,7 +87,7 @@ from config.overrides import parse_overrides
 from config.access import get_optional_config_value, require_config_value
 from config.gpu import GPU_TUNING_DEFAULT, resolve_gpu_search_cohort_size, resolve_gpu_tuning_mode
 from config.universe import require_side_universe_sources, set_side_universe_sources
-from config.limits import normalize_limit_entries, parse_limit_cli_entries
+from config.limits import normalize_limit_entries, parse_limit_cli_entries, parse_limit_cli_payload
 from config.param_paths import resolve_bound_selectors, require_existing_config_path
 from config.shared_bot import (
     flatten_shared_bot_side,
@@ -107,6 +107,9 @@ from config.scoring import (
 )
 from config.reducers import REDUCER_ALIASES, canonicalize_reducer_mapping
 from config.parse import load_raw_config as load_hjson_config
+from config.result_records import (
+    RESULT_VERSION_KEY, extract_result_config, result_config_view, result_provenance_view,
+)
 from config.schema import get_template_config
 from warmup_utils import compute_backtest_warmup_minutes
 from config_utils import (
@@ -117,8 +120,6 @@ from config_utils import (
     effective_config_payload,
     recursive_config_update,
     merge_negative_cli_values,
-    clean_config,
-    strip_config_metadata,
 )
 from pure_funcs import (
     denumpyize,
@@ -162,6 +163,7 @@ from optimizer_overrides import (
     materialize_coupled_scenario_spans,
 )
 from opt_utils import (
+    apply_result_delta,
     deep_updated,
     generate_incremental_diff,
     make_json_serializable,
@@ -217,6 +219,7 @@ from optimization.config_adapter import (
 from optimization.evaluation_payload import (
     build_evaluation_payload,
 )
+from optimization.callback import build_pymoo_record_entry
 from config.prefilter import prefilter_enabled
 from optimization.prefilter import prefilter_candidate, build_prefilter_payload, prefilter_config_for_exchange
 from optimization.prepared_dataset_identity import (
@@ -229,7 +232,6 @@ from optimization.evaluation_contract import (
     CONTRACT_CACHE_KEY,
     build_evaluation_contract,
     has_unresolved_override_files,
-    recorded_evaluation_contract,
 )
 from optimization.warmup import (
     build_optimizer_data_config,
@@ -533,12 +535,12 @@ class ResultRecorder:
     def record(self, data: dict) -> None:
         if self.write_all and self.results_file:
             if self.compress:
-                # The on-disk format is an overlay stream: readers apply every
-                # object to the preceding result.  A plain "full" object at a
-                # periodic boundary therefore cannot clear keys that existed
-                # only in the previous result.  Emit a diff after the first
-                # record so deletion markers remain explicit at every boundary.
-                if self.prev_data is None:
+                # A versioned full record starts a fresh overlay. Between
+                # boundaries, diffs explicitly delete absent fields.
+                if (
+                    self.prev_data is None
+                    or data.get(RESULT_VERSION_KEY) != self.prev_data.get(RESULT_VERSION_KEY)
+                ):
                     output_data = make_json_serializable(data)
                 else:
                     diff = generate_incremental_diff(self.prev_data, data)
@@ -748,43 +750,37 @@ def _clear_candidate_metrics(individual) -> None:
 
 
 def _record_individual_result(individual, evaluator_config, overrides_list, recorder):
-    metrics = getattr(individual, "evaluation_metrics", {}) or {}
-    suite_metrics = metrics.pop("suite_metrics", None)
+    metrics = dict(getattr(individual, "evaluation_metrics", {}) or {})
     config = individual_to_config(
         individual, optimizer_overrides, overrides_list, evaluator_config
     )
-    anchor_meta = config.get("_optimizer_anchor")
-    from config.universe import anchored_universe_source_view
-    entry = clean_config(strip_config_metadata(anchored_universe_source_view(config, candidate=True)))
-    # Prepared dataset membership is result provenance, not user configuration.
-    # Cleaning strips it, but single-run resume compares the exact membership.
-    if "coins" in config.get("backtest", {}):
-        entry["backtest"]["coins"] = deepcopy(config["backtest"]["coins"])
-    entry[CONTRACT_KEY] = recorded_evaluation_contract(evaluator_config)
-    if anchor_meta is not None:
-        entry["optimizer_anchor"] = anchor_meta
-    entry = optimizer_overrides(overrides_list, entry, None)
-    if suite_metrics is not None:
-        entry["suite_metrics"] = suite_metrics
-        bt = entry.get("backtest")
-        if isinstance(bt, dict):
-            bt.pop("coins", None)
-    if metrics:
-        if "constraint_violation" not in metrics:
-            violation = getattr(individual, "constraint_violation", None)
-            if violation is not None:
-                metrics["constraint_violation"] = violation
-        entry["metrics"] = metrics
-    recorder.record(entry)
+    if "constraint_violation" not in metrics and metrics.keys() - {"suite_metrics"}:
+        violation = getattr(individual, "constraint_violation", None)
+        if violation is not None:
+            metrics["constraint_violation"] = violation
+    recorder.record(build_pymoo_record_entry(
+        vector=individual,
+        metrics=metrics,
+        template=evaluator_config,
+        build_config_fn=individual_to_config,
+        overrides_fn=optimizer_overrides,
+        overrides_list=overrides_list,
+        prepared_config=config,
+    ))
     _clear_candidate_metrics(individual)
 
 
 def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     from config.inherited_bounds import optimize_bounds_source_view
     from config.bot_inheritance import get_side_field_catalog, resolve_bot_policy, reconciled_bot_policy
+    provenance = result_provenance_view(entry)
+    is_suite_result = entry.get("suite_metrics") is not None
+    entry = result_config_view(entry)
     old_source = optimize_bounds_source_view(entry)
     new_source = optimize_bounds_source_view(config)
     old_bt = deepcopy(entry.get("backtest") or {})
+    if "backtest_coins" in provenance:
+        old_bt["coins"] = deepcopy(provenance["backtest_coins"])
     new_bt = deepcopy(config.get("backtest") or {})
     for section, path in ((old_bt, "resume.backtest"), (new_bt, "config.backtest")):
         if any(alias in section for alias in REDUCER_ALIASES):
@@ -802,7 +798,6 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     new_bot = config.get("bot", config) or {}
 
     mismatches = []
-    is_suite_result = entry.get("suite_metrics") is not None
     backtest_keys = {
         "reducer",
         "balance_sample_divider",
@@ -897,7 +892,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         if old_en != new_en:
             mismatches.append(f"  - {side}.enabled: '{old_en}' -> '{new_en}'")
 
-    stored_contract = entry.get(CONTRACT_KEY)
+    stored_contract = provenance.get(CONTRACT_KEY)
     if stored_contract is not None and (
         not isinstance(stored_contract, dict)
         or stored_contract.get("version") != CONTRACT_VERSION
@@ -918,7 +913,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             "cannot be proven; start a fresh run to record its identity"
         )
     if stored_contract is None and (
-        entry.get("optimizer_anchor") is not None or get_anchor_plan(config)
+        provenance.get("optimizer_anchor") is not None or get_anchor_plan(config)
     ):
         mismatches.append(
             "  - optimizer_evaluation_contract: legacy anchored results lack fixed-anchor "
@@ -1093,7 +1088,7 @@ def _validate_resume_results(
                         f"Cannot resume: all_results.bin entry {previous_evals} is not a result object: "
                         f"{results_filename}"
                     )
-                previous_data = deep_updated(previous_data, entry)
+                previous_data = apply_result_delta(previous_data, entry)
                 mismatches = _resume_config_mismatches(previous_data, config)
                 if mismatches:
                     mismatch_str = "\n".join(mismatches)
@@ -2653,7 +2648,6 @@ def add_starting_config_selection_options(parser) -> None:
     )
     parser.add_argument(
         "--compress-starting-configs",
-        "--starting-configs-max",
         type=int,
         default=None,
         metavar="N",
@@ -2677,7 +2671,7 @@ def _resolve_cli_limits_override(args, existing_limits=None) -> list[dict] | Non
     if not clear_limits and raw_limits_payload is None and existing_limits is not None:
         replacement.extend(normalize_limit_entries(existing_limits))
     if raw_limits_payload is not None:
-        replacement.extend(normalize_limit_entries(raw_limits_payload))
+        replacement.extend(parse_limit_cli_payload(raw_limits_payload))
     if raw_limit_entries:
         replacement.extend(parse_limit_cli_entries(raw_limit_entries))
     return normalize_limit_entries(replacement)
@@ -3163,6 +3157,14 @@ def iter_extract_configs(path):
     if path.endswith(".json"):
         try:
             raw = load_hjson_config(path, log_errors=False)
+            if (
+                os.path.basename(path) == "index.json"
+                and isinstance(raw, dict)
+                and raw.get("tool") == "passivbot tool merge-paretos"
+                and isinstance(raw.get("files"), list)
+                and {"bot", "config", "config_version"}.isdisjoint(raw)
+            ):
+                return
             yield _extract_starting_config(raw, source=path)
         except StartingConfigSchemaError:
             raise
@@ -3296,9 +3298,7 @@ def _starting_live_numeric_seed(live):
 def _extract_starting_config(raw_config, *, source: str = "<memory>"):
     if not isinstance(raw_config, dict):
         raise TypeError(f"expected dict, got {type(raw_config).__name__}")
-    current = raw_config
-    if isinstance(current.get("config"), dict):
-        current = current["config"]
+    current = extract_result_config(raw_config, allow_unmarked_wrapper=True)
     bot_cfg = current.get("bot")
     if not isinstance(bot_cfg, dict):
         raise KeyError("missing bot config")
@@ -3625,11 +3625,15 @@ def configs_to_individuals_streaming(
             fcfg = _build_starting_seed_config(cfg)
             resolved_anchor_id = None
             if anchored_shape:
-                has_persisted_anchor = isinstance(cfg, dict) and any(
-                    key in cfg for key in ("_optimizer_anchor", "optimizer_anchor")
+                anchor_source = (
+                    result_provenance_view(cfg)
+                    if isinstance(cfg, dict) and RESULT_VERSION_KEY in cfg else cfg
+                )
+                has_persisted_anchor = isinstance(anchor_source, dict) and any(
+                    key in anchor_source for key in ("_optimizer_anchor", "optimizer_anchor")
                 )
                 resolved_anchor_id = (
-                    _optimizer_anchor_id(cfg) if has_persisted_anchor else anchor_idx
+                    _optimizer_anchor_id(anchor_source) if has_persisted_anchor else anchor_idx
                 )
                 if resolved_anchor_id is None:
                     raise ValueError("invalid persisted optimizer anchor id")

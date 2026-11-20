@@ -9,7 +9,7 @@ optimization and standalone CPU backtests. Prefer a strong foundation and cleare
 ownership over marginal speedups that add complexity.
 
 This document contains the current acceptance contract and evolving checklist.
-The [decision and progress log](gpu_optimizer_decision_log.md) records supporting
+The [archived decision log](https://github.com/enarjord/passivbot/blob/0acfeaae6d70dc5527dc1e6ff56cb6e2ace06655/docs/plans/gpu_optimizer_decision_log.md) records supporting
 design history and validation. Design choices may change when evidence supports
 simpler, more capable, or more efficient implementations. Acceptance scope must
 not be silently weakened.
@@ -409,5 +409,5 @@ fixed-candidate parity does not replace the evolving or old-pipeline comparison.
 
 ## Decision and progress log
 
-See the [decision and progress log](gpu_optimizer_decision_log.md) for the dated
+See the [archived decision log](https://github.com/enarjord/passivbot/blob/0acfeaae6d70dc5527dc1e6ff56cb6e2ace06655/docs/plans/gpu_optimizer_decision_log.md) for the dated
 implementation decisions, review outcomes, measurements and remaining limitations.

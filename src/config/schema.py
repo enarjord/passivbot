@@ -7,7 +7,6 @@ from .bot_defaults import get_common_bot_defaults
 from .strategy_spec import get_strategy_spec, get_supported_strategy_kinds
 
 CONFIG_SCHEMA_VERSION = "v9.0.0"
-SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset()
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long.json"
 STARTER_LIVE_USER = "passivbot_default"
 # A symbol suspension is temporary policy, not an indefinite timestamp. This

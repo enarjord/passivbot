@@ -559,7 +559,7 @@ def replace_retired_metrics(source, *, replacements, acknowledge, changes, best_
 
 def retire_deap_policy(config, *, acknowledge, changes, best_effort=False):
     """Preserve effective pymoo policy; DEAP algorithm changes require consent."""
-    from config.public_names import released_public_path
+    from .released_public_names import released_public_path
 
     def public_shared_target(key):
         return released_public_path(("optimize", "pymoo", "shared", key))[-1]
@@ -760,7 +760,7 @@ def canonical_released_v8_path(parts, *, strategy_kind=None):
             parts[-1] = new
     if parts[-2:-1] == ["trailing_martingale"] and parts[-1] in {"ema_span_0", "ema_span_1"}:
         parts.insert(len(parts) - 1, "entry")
-    from config.public_names import released_public_path
+    from .released_public_names import released_public_path
 
     from .released_v8_strategy import released_strategy_bound_path, released_strategy_selector
 
@@ -870,7 +870,7 @@ def released_runtime_selector(path, *, strategy_kind=None):
     authored override selectors must use the same conversion before lookup.
     """
     FLAT_BOT_KEY_TO_GROUP_PATH = released_shared_bot_paths()
-    from config.public_names import released_public_path
+    from .released_public_names import released_public_path
     from .operational_live import operational_live_selector
     from .shared_policy import shared_policy_selector
 
@@ -940,7 +940,7 @@ def finalize_v8_layout(source, *, span, changes, schema_version, acknowledge_sea
                                 minimum_cost_policy_targets, move_shared_policy, preserve_forced_normal_selection,
                                 preserve_forced_selection_overrides)
     from .operational_live import move_operational_live
-    from config.public_names import rewrite_released_public_names
+    from .released_public_names import rewrite_released_public_names
 
     result = deepcopy(source)
     from .released_v8_strategy import RELEASED_V8_STRATEGY_PATH_RENAMES, released_strategy_kind
@@ -1024,7 +1024,7 @@ def finalize_v8_layout(source, *, span, changes, schema_version, acknowledge_sea
             path = converted
         converted = released_runtime_selector(path, strategy_kind=released_kind)
         if parameter_selector:
-            from config.public_names import released_fixed_selector
+            from .released_public_names import released_fixed_selector
 
             converted = released_fixed_selector(converted, strategy_kind=released_kind)
         return converted
@@ -1256,7 +1256,7 @@ def finalize_v8_layout(source, *, span, changes, schema_version, acknowledge_sea
         rewrite_released_public_names(result, record=record, strategy_kind=released_kind)
         return result
     # All released-layout structural transforms run only inside this converter.
-    from . import apply_migrations, apply_backward_compatibility_renames
+    from .released_v8_layout import apply_released_v8_layout_transforms
     from .entry_cooldown import migrate_entry_cooldown
     from .entry_ema import migrate_entry_ema_spans
     from .unstuck_ema import migrate_unstuck_ema_spans
@@ -1276,8 +1276,7 @@ def finalize_v8_layout(source, *, span, changes, schema_version, acknowledge_sea
 
     rewrite_released_strategy_bounds(result, strategy_kind=released_kind, record=record)
     before = deepcopy(result)
-    apply_migrations(result, verbose=False)
-    apply_backward_compatibility_renames(result, verbose=False)
+    apply_released_v8_layout_transforms(result, base_config_path=base_config_path, record=record)
     migrate_entry_cooldown(result)
     move_shared_policy(result, record=record, base_config_path=base_config_path)
     migrate_entry_ema_spans(result)

@@ -382,9 +382,9 @@ def test_actual_optimizer_builder_saved_policy_reloads_outside_input_directory(t
         records = []
         optimize._record_individual_result(candidate, config, [], SimpleNamespace(record=records.append))
         entry = records[0]
-    assert entry['bot']['global']['universe']['approved_coins'] == str(coins)
-    assert entry['bot']['long']['universe']['approved_coins'] is None
-    assert entry['bot']['short']['universe']['approved_coins'] == [str(short)]
+    assert entry['config']['bot']['global']['universe']['approved_coins'] == str(coins)
+    assert entry['config']['bot']['long']['universe']['approved_coins'] is None
+    assert entry['config']['bot']['short']['universe']['approved_coins'] == [str(short)]
     assert config == before
     coins.write_text('["BTC"]')
     short.write_text('["ETH"]')
@@ -398,7 +398,7 @@ def test_actual_optimizer_builder_saved_policy_reloads_outside_input_directory(t
     reloaded['backtest']['coins'] = deepcopy(config['backtest']['coins'])
     reloaded[PREPARED_DATASET_KEY] = prepared_identity(reloaded)
     disk_record = json.loads(destination.read_text())
-    assert disk_record[CONTRACT_KEY] == build_evaluation_contract(reloaded)
+    assert disk_record['provenance'][CONTRACT_KEY] == build_evaluation_contract(reloaded)
     # Same prepared candles and coin union, but changed directional membership, cannot reuse fitness.
     coins.write_text('["ETH"]')
     short.write_text('["BTC"]')
@@ -543,7 +543,7 @@ def test_shared_file_never_demotes_malformed_mapping_to_plain_coins(tmp_path, co
         prepare_config(source(str(selected)), verbose=False)
 
 
-@pytest.mark.parametrize('fallback', ['repo', 'cwd', 'legacy_alias'])
+@pytest.mark.parametrize('fallback', ['repo', 'cwd'])
 def test_initial_explicit_file_fallback_is_bound_before_refresh_and_export(tmp_path, monkeypatch, fallback):
     import utils
     from config_utils import dump_config
@@ -555,7 +555,7 @@ def test_initial_explicit_file_fallback_is_bound_before_refresh_and_export(tmp_p
     selected = (cwd if fallback == 'cwd' else repo)/'configs'/'approved_coins.json'
     selected.parent.mkdir()
     selected.write_text('["BTC"]')
-    name = 'configs/approved_coins_topmcap.json' if fallback == 'legacy_alias' else 'configs/approved_coins.json'
+    name = 'configs/approved_coins.json'
     input_file = inputs/'config.json'
     text = json.dumps(source(name))
     input_file.write_text(text)
@@ -574,6 +574,33 @@ def test_initial_explicit_file_fallback_is_bound_before_refresh_and_export(tmp_p
     reloaded = prepare_config(json.loads(destination.read_text()), base_config_path=str(destination), verbose=False)
     assert resolve_universe_sources(reloaded, 'approved_coins')[0] == {'long':['ETH'],'short':['ETH']}
     assert input_file.read_text() == text
+
+
+@pytest.mark.parametrize('extension', ['json', 'txt'])
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_authored_relative_coin_file_requires_the_requested_basename(tmp_path, monkeypatch, extension, wrapped):
+    import utils
+
+    repo = tmp_path / 'repo'
+    decoy = repo / 'configs' / 'approved_coins.json'
+    decoy.parent.mkdir(parents=True)
+    decoy.write_text('["SOL"]')
+    monkeypatch.setattr(utils, 'PROJECT_ROOT', repo)
+    monkeypatch.chdir(tmp_path)
+    name = f'lists/approved_coins_topmcap.{extension}'
+    config_path = tmp_path / 'inputs' / 'config.json'
+    document = source([name] if wrapped else name)
+
+    live = prepare_config(document, base_config_path=str(config_path), live_only=True, verbose=False)
+    with pytest.raises(FileNotFoundError, match=f'approved_coins_topmcap.{extension}'):
+        resolve_universe_sources(live, 'approved_coins')
+    with pytest.raises(FileNotFoundError, match=f'approved_coins_topmcap.{extension}'):
+        prepare_config(document, base_config_path=str(config_path), verbose=False)
+
+    requested = config_path.parent / name
+    requested.parent.mkdir(parents=True)
+    requested.write_text('["BTC"]')
+    assert resolve_universe_sources(live, 'approved_coins')[0] == {'long': ['BTC'], 'short': ['BTC']}
 
 
 @pytest.mark.parametrize('command', ['live', 'backtest', 'optimize'])

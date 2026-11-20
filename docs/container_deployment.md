@@ -108,6 +108,9 @@ activation unchanged. Use a reviewed mounted or inline configuration for trading
   Override the monitor root directory, for example `/data/monitor`
 - `PB_LOG_DIR`
   Override `logging.dir` for container deployments that mount a persistent logs volume
+- `PB_STATE_DIR`
+  Host directory that Compose mounts at `/app/var`. Use the same absolute path across
+  release checkouts. By default, both Compose examples use the checkout's `var/` directory.
 
 When `PB_CONFIG_PATH` is set, these overrides are translated into normal `passivbot live` CLI flags so the original config path stays intact and config-relative sidecar semantics are preserved.
 
@@ -128,6 +131,18 @@ Container logs still go to stdout/stderr, and file persistence uses the same liv
 
 For containerized deployments, set `PB_LOG_DIR` to point `logging.dir` at a mounted volume such as `/data/logs`.
 
+## Persistent live state
+
+Keep `/app/var` on persistent storage that survives container replacement. Bitunix uses it for
+the journal of ordinary order creates whose outcomes still need exchange confirmation. Reuse the
+same volume and account alias when switching releases, and resolve pending attempts before rolling
+back to a build that cannot read the journal.
+
+If a previous container kept `/app/var` in its writable layer, stop the bot gracefully and copy
+that directory into the persistent host path before replacing the container. Verify the copied
+journal is readable before removing the old container. If its state is already gone, reconcile
+the outcomes of pending submissions with the exchange before resuming creates.
+
 ## Docker Run Example
 
 Using a mounted config and mounted API keys:
@@ -143,6 +158,7 @@ docker run --rm --stop-timeout 60 \
   -v "$(pwd)/api-keys.json:/data/api-keys.json:ro" \
   -v "$(pwd)/logs:/data/logs" \
   -v "$(pwd)/monitor:/data/monitor" \
+  -v "${PB_STATE_DIR:-$(pwd)/var}:/app/var" \
   passivbot-live:latest
 ```
 
@@ -170,4 +186,4 @@ process starts with an empty restart history.
 - The entrypoint uses `passivbot live`, not `python src/main.py`.
 - The runtime contract is intentionally thin and platform-agnostic.
 - File logging stays on the normal `logging.*` config path; the container wrapper does not implement its own parallel log persistence system.
-- Hosted platforms should reuse this image and env contract instead of introducing platform-specific config snapshots.
+- On hosted platforms, mount persistent storage at `/app/var` and reuse it across releases.

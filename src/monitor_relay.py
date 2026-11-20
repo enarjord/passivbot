@@ -473,10 +473,16 @@ class MonitorRelay:
             self._path_states[path] = _PathState(file_id[0], file_id[1], size)
             return []
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, "rb") as f:
                 f.seek(read_from)
                 lines = f.readlines()
                 new_offset = int(f.tell())
+                if lines and not lines[-1].endswith(b"\n"):
+                    try:
+                        json.loads(lines[-1])
+                    except ValueError:
+                        # Retry an unfinished append, including a split UTF-8 character.
+                        new_offset -= len(lines.pop())
         except FileNotFoundError:
             return []
         self._path_states[path] = _PathState(file_id[0], file_id[1], new_offset)
@@ -525,8 +531,8 @@ class MonitorRelay:
         if limit <= 0 or not path.exists():
             return []
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                lines = list(deque((line.rstrip("\n") for line in f), maxlen=limit))
+            with open(path, "rb") as f:
+                lines = list(deque(f, maxlen=limit))
         except FileNotFoundError:
             return []
         entries: list[dict] = []
@@ -537,7 +543,8 @@ class MonitorRelay:
             try:
                 entry = json.loads(line)
             except Exception as exc:
-                logging.warning("[monitor-relay] invalid JSON in %s: %s", path, exc)
+                if raw_line.endswith(b"\n"):
+                    logging.warning("[monitor-relay] invalid JSON in %s: %s", path, exc)
                 continue
             if isinstance(entry, dict):
                 entries.append(entry)
@@ -722,13 +729,13 @@ async def _handle_ws(request: web.Request) -> web.StreamResponse:
 
     ws = web.WebSocketResponse(heartbeat=30.0)
     await ws.prepare(request)
-    for message in snapshot_messages:
-        await ws.send_json(message)
     subscription = keys[0] if len(keys) == 1 else None
-    for message in relay.load_recent_messages(subscription):
-        await ws.send_json(message)
     queue = relay.subscribe(subscription)
     try:
+        for message in snapshot_messages:
+            await ws.send_json(message)
+        for message in relay.load_recent_messages(subscription):
+            await ws.send_json(message)
         while not ws.closed:
             message = await queue.get()
             await ws.send_json(message)

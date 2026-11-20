@@ -41,7 +41,7 @@ for the distinction between schema, package version and tags.
   GateIO's public 1m OHLCV endpoint only serves a recent window of roughly 10,000 candles; use `backtest.ohlcv_source_dir` or another candle source for older GateIO backtests.
 - **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic exchange selection when multiple exchanges are configured. Scenarios may add more overrides; conflicting assignments raise an error.
 - **market_settings_sources**: Optional mapping of `coin -> exchange` used specifically for exchange metadata such as `price_step`, `qty_step`, fees, and min-size rules. This is separate from `coin_sources`: you may source candles from one exchange while borrowing market settings from another.
-- **ohlcv_source_dir**: Optional path to a pre-populated OHLCV directory to read directly before using Passivbot's v2 raw OHLCV store or exchange archives. Expected structure: `<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz` or `.npy`. Coin keys are normalized to base coins, but CCXT-style symbol folder names are accepted (e.g., `ETH_USDC:USDC`). Passivbot still writes the final prepared HLCV dataset cache for the run, but it does not mirror explicit source-dir raw candles into `caches/ohlcvs/`. The explicitly selected folder defines the simulation data window: each coin/source begins at its first available real candle, online or offline, even when the requested warmup starts earlier. The first stored candle does not assert market inception. Offline snapshots record requested and actual ranges; this does not imply an online range-manifest guarantee. Internal-gap checks and complete offline tails remain required. An existing daily file that is unreadable or empty is an integrity error unless another healthy same-day source variant is available. Prepared caches include a filesystem revision of the selected coin and eligible BTC source files, so additions, edits, removals, or replacements invalidate prior automatic cache reuse. A source change during preparation or cache loading fails with a retry message rather than returning a mixed snapshot. These revision checks inspect file metadata; they are not candle-content hashes.
+- **ohlcv_source_dir**: Optional path to a pre-populated OHLCV directory to read directly before using Passivbot's v2 raw OHLCV store or exchange archives. Expected structure: `<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz` or `.npy`. Coin keys are normalized to base coins, but CCXT-style symbol folder names are accepted (e.g., `ETH_USDC:USDC`). Passivbot still writes the final prepared HLCV dataset cache for the run, but it does not mirror explicit source-dir raw candles into `caches/ohlcvs/`. The explicitly selected folder defines the simulation data window: each coin/source begins at its first available real candle, online or offline, even when the requested warmup starts earlier. The first stored candle does not assert market inception. Missing leading data is logged, and prepared market settings record each selected external coin's requested and available ranges in online and offline runs. Offline snapshots also retain range proofs. BTC benchmark data must cover the full prepared range before alignment. Internal-gap checks and complete offline tails remain required. An existing daily file that is unreadable or empty is an integrity error unless another healthy same-day source variant is available. Prepared caches include a filesystem revision of the selected coin and eligible BTC source files, so additions, edits, removals, or replacements invalidate prior automatic cache reuse. A source change during preparation or cache loading fails with a retry message rather than returning a mixed snapshot. Revision checks use filesystem metadata, including file identity, to detect same-size replacements with preserved modification times. Moving or copying the source to another filesystem may require rebuilding the prepared cache.
 - **hlcvs_data_dir**: Optional path to a prepared final HLCV dataset under
   `caches/hlcvs_data/`. The dataset must have a valid manifest whose hashes
   verify `hlcvs`, `timestamps`, `btc_usd_prices`, `coins`, and
@@ -336,8 +336,8 @@ Released v8 inputs require the [explicit v9 converter](v8_to_v9_migration.md).
   - A log-range coefficient of `0` disables that horizon for the affected threshold or retracement.
 - **strategy.trailing_martingale.entry.initial_ema_distance_fraction**:
   - Offset from lower/upper EMA band.
-  - Long initial entry/short unstuck close prices are lower EMA band minus offset.
-  - Short initial entry/long unstuck close prices are upper EMA band plus offset.
+  - Long initial entries use the lower EMA band times `1 - initial_ema_distance_fraction`.
+  - Short initial entries use the upper EMA band times `1 + initial_ema_distance_fraction`.
   - See `ema_span_0_minutes`/`ema_span_1_minutes`.
 - **strategy.trailing_martingale.entry.ema_gate_mode**:
   - Fixed enum, not optimized. Allowed values are `disabled`, `all`, `initial`, and `reentry`.
@@ -381,7 +381,10 @@ The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid`
 
 ### Unstuck Parameters
 
-If a position is stuck, the bot uses profits from other positions to realize losses for the stuck position. If multiple positions are stuck, the position with the lowest price action distance is selected for unstucking.
+If a position is stuck, the bot can spend its realized-loss allowance to reduce the position.
+When several positions are eligible, auto-unstuck prioritizes the highest
+[signed entry distance](ai/numeric_conventions.md#quantities). Positive means the current price
+has moved in favor of the position.
 
 These settings live under `bot.<side>.unstuck`. Effective WEL includes the resolved excess
 allowance: `effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_fraction)`.

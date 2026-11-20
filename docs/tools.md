@@ -92,13 +92,11 @@ non-`mean` limit statistics are unavailable in this mode. The rebuilt front cove
 the saved aggregate-suite Pareto front: candidates already discarded by the optimizer cannot be
 recovered, so it is not the complete scenario Pareto front across all evaluated candidates.
 
-For suite artifacts, an explicit limit `reducer` (or `stat` alias) reduces the saved values
+For suite artifacts, an explicit limit `reducer` reduces the saved values
 across the declared scenarios, even if that statistic was not saved by the original run.
 Missing or unavailable values in that population make the limit fail with an error. Without
 an explicit reducer, limits continue to use the stored aggregate. With `--scenario`, limits
 use that scenario's scalar value; set `scenario=null` on a limit to reduce the full suite.
-
-`passivbot tool pareto-explorer` is a CLI alias for the same tool.
 
 The terminal report shows the selected candidate and the next-ranked alternative by default.
 Objective arrows show the direction used for ranking. The default table shows exact metric
@@ -393,15 +391,20 @@ python3 src/pareto_store.py optimize_results/.../pareto/
 
 `passivbot tool pareto-analyze` inspects a Pareto front's config and metric distributions,
 including the strongest metric-to-metric correlations among the displayed metrics.
-`passivbot tool pareto-analysis` is an alias for the same command. `passivbot tool
-pareto-compress` selects a compact representative subset from a front, and
+`passivbot tool pareto-compress` selects a compact representative subset from a front, and
 `passivbot tool merge-paretos` merges Pareto fronts into starting configs.
 
 ```shell
 passivbot tool pareto-analyze optimize_results/.../pareto
 passivbot tool pareto-compress optimize_results/.../pareto 8 --output-dir selected_pareto_8
-passivbot tool merge-paretos optimize_results/run_a/pareto optimize_results/run_b/pareto
+passivbot tool merge-paretos optimize_results/run_a/pareto optimize_results/run_b/pareto merged_seeds
+passivbot optimize search-config.json --start merged_seeds
 ```
+
+Merge current v9 fronts that use the same strategy and HSL scope. The output retains each
+enabled side's inherited numeric settings and can seed a fresh search. The new search owns
+side activation, bounds, and scoring. Give the search independent long and short bounds for
+any tuned parameter whose values differ between the two merged sides.
 
 ## Optimizer starting-config preselection
 
@@ -420,7 +423,7 @@ passivbot optimize path/to/suite-config.json \
   -l '{"metric":"peak_recovery_max_days_strategy_equity","penalize_if":"greater_than","reducer":"max","value":120}'
 ```
 
-Optionally add `--compress-starting-configs N` (alias `--starting-configs-max N`) to retain at most
+Optionally add `--compress-starting-configs N` to retain at most
 `N` filtered candidates using the same `anchors-farthest` objective-anchor and diversity selection
 as `passivbot tool pareto-compress N`. Compression may also be used without filtering:
 
@@ -1195,7 +1198,7 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
 passivbot tool fetch-balance --user bybit_01
 ```
 
-Ticker probes inspect CCXT ticker support and latency without placing orders:
+Developer ticker probes remain directly callable. They inspect CCXT ticker support and latency without placing orders:
 
 - `passivbot tool ticker-probe` checks ticker capability behavior for one exchange/user context.
 - `passivbot tool ticker-endpoint-probe` compares CCXT ticker endpoint latency across configured
@@ -1224,9 +1227,8 @@ Ticker probes inspect CCXT ticker support and latency without placing orders:
 
 ## Hyperliquid live probes
 
-These probes were added to investigate live Hyperliquid balance/state quirks, especially HIP-3
-stock perps. They are intended to be reused for future live diagnostics instead of creating new
-one-off scripts.
+Invoke these developer probes directly for Hyperliquid balance and account-state diagnostics,
+including HIP-3 stock perpetuals.
 
 - `passivbot tool hyperliquid-balance-probe` is read-only. It fetches one wallet balance and prints
   a normalized summary.

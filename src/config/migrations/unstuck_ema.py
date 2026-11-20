@@ -129,11 +129,11 @@ def migrate_unstuck_ema_spans(
         load_override_config,
         _unwrap_override_document,
         nested_update,
-        parse_old_coin_flags,
     )
+    from .released_v8_coin_flags import parse_released_v8_coin_flags
 
     if not config.get("coin_overrides") and config.get("live", {}).get("coin_flags"):
-        config["coin_overrides"] = parse_old_coin_flags(config)
+        config["coin_overrides"] = parse_released_v8_coin_flags(config)
         if tracker is not None and config["coin_overrides"]:
             tracker.add(["coin_overrides"], deepcopy(config["coin_overrides"]))
 
