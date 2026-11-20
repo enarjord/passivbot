@@ -3651,12 +3651,24 @@ class CandlestickManager:
         return merged
 
     def _latest_cached_ts_before(
-        self, symbol: str, before_ts: int, *, timeframe: str, index: Optional[dict] = None
+        self,
+        symbol: str,
+        before_ts: int,
+        *,
+        timeframe: str,
+        index: Optional[dict] = None,
+        disk_rows: Optional[np.ndarray] = None,
     ) -> Optional[int]:
         """Return latest known cached candle timestamp before `before_ts` without remote fetch."""
         tf_norm = self._normalize_timeframe_arg(timeframe, None)
         threshold = int(before_ts)
         best: Optional[int] = None
+        if disk_rows is not None:
+            # Loaded shards can contain an earlier row on the same date even
+            # when the latest timestamp in the shard lies beyond the cutoff.
+            prior = int(np.searchsorted(disk_rows["ts"], threshold))
+            if prior:
+                best = int(disk_rows["ts"][prior - 1])
         if tf_norm == "1m":
             try:
                 cached = self._cache.get(symbol)
@@ -3665,7 +3677,8 @@ class CandlestickManager:
                     ts = arr["ts"].astype(np.int64, copy=False)
                     prior = ts[ts < threshold]
                     if prior.size:
-                        best = int(np.max(prior))
+                        prior_max = int(np.max(prior))
+                        best = prior_max if best is None else max(best, prior_max)
             except Exception:
                 pass
         try:
@@ -4837,16 +4850,17 @@ class CandlestickManager:
                 end_ts = int(latest_expected)
                 start_ts = int(max(0, end_ts - (required_candles - 1) * step_ms))
 
+            disk_rows = None
             disk_arr = np.empty((0,), dtype=CANDLE_DTYPE)
             runtime_arr = np.empty((0,), dtype=CANDLE_DTYPE)
             combined = np.empty((0,), dtype=CANDLE_DTYPE)
             if end_ts >= start_ts:
                 try:
-                    loaded = self._load_from_disk(
+                    disk_rows = self._load_from_disk(
                         symbol, start_ts, end_ts, timeframe=tf_norm, merge_memory_cache=False
                     )
-                    if loaded is not None and loaded.size:
-                        disk_arr = self._slice_ts_range(_ensure_dtype(loaded), start_ts, end_ts)
+                    if disk_rows is not None and disk_rows.size:
+                        disk_arr = self._slice_ts_range(_ensure_dtype(disk_rows), start_ts, end_ts)
                 except Exception as exc:
                     self._log(
                         "debug",
@@ -4995,7 +5009,7 @@ class CandlestickManager:
                         )
                         if prior_index == 0:
                             prior_ts = self._latest_cached_ts_before(
-                                symbol, gap_start, timeframe=tf_norm, index=index
+                                symbol, gap_start, timeframe=tf_norm, index=index, disk_rows=disk_rows
                             )
                             if prior_ts is None:
                                 continue
@@ -5097,7 +5111,7 @@ class CandlestickManager:
             )
             if open_tail_gap and last_cached_ts is None and end_ts >= start_ts:
                 prior_cached_ts = self._latest_cached_ts_before(
-                    symbol, start_ts, timeframe=tf_norm, index=index
+                    symbol, start_ts, timeframe=tf_norm, index=index, disk_rows=disk_rows
                 )
                 if prior_cached_ts is not None:
                     last_cached_ts = int(prior_cached_ts)
