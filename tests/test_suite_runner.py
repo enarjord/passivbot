@@ -1102,7 +1102,7 @@ def test_prepare_dataset_subset_clips_dates(monkeypatch):
         coin_exchange={coin: "combined" for coin in coins},
         available_exchanges=["combined"],
         hlcvs=hlcvs,
-        mss={coin: {} for coin in coins},
+        mss={**{coin: {} for coin in coins}, "__meta__": {"effective_requested_start_ts": 0}},
         btc_usd_prices=btc_prices,
         timestamps=timestamps,
         cache_dir="/tmp",
@@ -1134,6 +1134,8 @@ def test_prepare_dataset_subset_clips_dates(monkeypatch):
     meta = subset_mss["__meta__"]
     assert meta["requested_start_ts"] == 60_000
     assert meta["requested_end_ts"] == 180_000
+    assert "effective_requested_start_ts" not in meta
+    assert dataset.mss["__meta__"]["effective_requested_start_ts"] == 0
     assert "warmup_minutes_requested" in meta
 
 

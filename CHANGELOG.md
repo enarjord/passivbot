@@ -5,8 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Let ordinary live planning briefly join an in-flight required fill
-  confirmation before deferring for missing fills.
+- Use each suite scenario’s start for trading and scoring when reusing a
+  prepared OHLCV dataset.
 
 - Keep live forager RMS ranking available from complete local candles or a
   recent valid score when remote candle work times out. Repair missing RMS
@@ -224,6 +224,9 @@ its own version heading. See [release status](docs/releases.md).
 - Skip an unused gap scan when preparing provisional candle continuity.
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.
+
+- Let ordinary live planning briefly join an in-flight required fill
+  confirmation before deferring for missing fills.
 
 - Skip formatting and caller lookup for suppressed candle logs.
 

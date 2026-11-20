@@ -37,6 +37,7 @@ from suite_runner import (
     _prepare_dataset_subset,
     _compute_slice_indices,
     _normalize_date_to_ts,
+    _scenario_window_metadata,
     _determine_needed_individual_exchanges,
     _coalesce_master_coins,
     _prepare_scenario_universes,
@@ -47,7 +48,6 @@ from utils import (
     format_approved_ignored_coins,
     load_markets,
     reject_cross_exchange_market_identifier_collisions,
-    ts_to_date,
     utc_ms,
 )
 
@@ -264,22 +264,10 @@ async def prepare_suite_contexts(
         end_value = require_config_value(scenario_config, "backtest.end_date")
         start_ts = _normalize_date_to_ts(str(start_value))
         end_ts = _normalize_date_to_ts(str(end_value))
-        meta = deepcopy(dataset.mss.get("__meta__", {}))
-        meta["requested_start_ts"] = int(start_ts)
-        meta["requested_start_date"] = ts_to_date(int(start_ts))
-        meta["requested_end_ts"] = int(end_ts)
-        meta["requested_end_date"] = ts_to_date(int(end_ts))
-        if ts_window is not None and len(ts_window):
-            meta["effective_start_ts"] = int(ts_window[0])
-            meta["effective_start_date"] = ts_to_date(int(ts_window[0]))
-            meta["effective_end_ts"] = int(ts_window[-1])
-            meta["effective_end_date"] = ts_to_date(int(ts_window[-1]))
-            warmup_provided = max(0, int(max(0, start_ts - int(ts_window[0])) // 60_000))
-        else:
-            warmup_provided = int(compute_optimizer_backtest_warmup_minutes(scenario_config))
-        meta["warmup_minutes_requested"] = int(compute_optimizer_backtest_warmup_minutes(scenario_config))
-        meta["warmup_minutes_provided"] = warmup_provided
-        mss_slice["__meta__"] = meta
+        mss_slice["__meta__"] = _scenario_window_metadata(
+            dataset.mss.get("__meta__", {}), start_ts, end_ts, ts_window,
+            int(compute_optimizer_backtest_warmup_minutes(scenario_config)),
+        )
         return mss_slice
 
     for scenario in scenarios:
