@@ -3716,10 +3716,9 @@ async def test_shared_live_acquisition_budget_includes_rms_and_preserves_cached_
 
     rms_reads = []
 
-    async def rms_candles(symbol, **kwargs):
-        rms_reads.append(symbol)
-        if symbol == slow:
-            assert kwargs["allow_remote_fetch"]
+    async def rms_candles(symbol, *, allow_remote_fetch, **kwargs):
+        rms_reads.append((symbol, allow_remote_fetch))
+        if symbol == slow and allow_remote_fetch:
             manager._remote_fetch_time_remaining()
         rows = np.zeros(21, dtype=CANDLE_DTYPE)
         rows["ts"] = np.arange(21) * ONE_MIN_MS
@@ -3735,11 +3734,9 @@ async def test_shared_live_acquisition_budget_includes_rms_and_preserves_cached_
     assert result[0][slow] == {}
     assert set(result[0][ready].values()) == {123.0}
     assert bot._orchestrator_allow_missing_strategy_inputs_symbols == {slow}
-    assert rms_reads == symbols
-    assert bot._orchestrator_signed_rms_directionality == {slow: {}, ready: {1.0: 0.0}}
-    assert bot._orchestrator_rms_directionality_unavailable == {
-        slow: {"current": [1.0], "forager": []},
-    }
-    # An unavailable member stays in the original cohort. Rust receives explicit
-    # absence and retains its existing ranking/consumer readiness authority.
+    assert rms_reads == [(slow, True), (slow, False), (ready, True)]
+    assert bot._orchestrator_signed_rms_directionality == {slow: {1.0: 0.0}, ready: {1.0: 0.0}}
+    assert not bot._orchestrator_rms_directionality_unavailable
+    # The missing close EMA still belongs to the original cohort. Successful
+    # local RMS recovery has no effect on other strategy input readiness.
     assert bot._orchestrator_ema_unavailable_symbols == set()
