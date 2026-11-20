@@ -217,6 +217,84 @@ def _record_owner_pass(fixture, actions):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("late_calculation", [False, True], ids=["ordinary", "late"])
+@pytest.mark.parametrize("confirmed", [True, False], ids=["confirmed", "unavailable"])
+async def test_pending_required_fills_join_before_ordinary_preparation(
+    monkeypatch, late_calculation, confirmed
+):
+    from live import planning_gates
+
+    fixture = planning_bot(monkeypatch)
+    bot, owner = fixture.bot, fixture.owner
+    bot.config["bot"]["long"]["hsl"]["enabled"] = late_calculation
+    ledger = bot._ensure_freshness_ledger()
+    ledger.begin_epoch(now_ms=NOW)
+    bot._authoritative_pending_confirmations = {"fills": ledger.epoch}
+    bot._staged_planner_surface_min_epochs = (
+        lambda required: planning_gates.staged_planner_surface_min_epochs(bot, required)
+    )
+    bot._staged_planner_precondition_state = (
+        lambda **kwargs: planning_gates.staged_planner_precondition_state(bot, **kwargs)
+    )
+    bot._staged_execution_ready_state = (
+        lambda **kwargs: planning_gates.staged_execution_ready_state(bot, **kwargs)
+    )
+    fill_release = asyncio.Event()
+    preparation_started = asyncio.Event()
+    original_prepare = bot.prepare_planning_universe
+
+    async def prepare_universe():
+        preparation_started.set()
+        return await original_prepare()
+
+    async def refresh_fills():
+        await fill_release.wait()
+        if confirmed:
+            ledger.stamp("fills", now_ms=NOW, signature=("confirmed",))
+        return confirmed
+
+    bot.prepare_planning_universe = prepare_universe
+    bot._prepare_orchestrator_inputs = Passivbot._prepare_orchestrator_inputs.__get__(bot)
+    bot._get_last_position_change_anchors = lambda: {}
+    bot._completed_candle_health_now_ms = lambda: NOW
+    if late_calculation:
+        original_quotes = bot._get_orchestrator_market_snapshots
+
+        async def acquire_quotes(symbols, *, record_surface=False, refresh=False):
+            assert not record_surface and not refresh
+            return await original_quotes(symbols)
+
+        bot._get_orchestrator_market_snapshots = acquire_quotes
+    fixture.release.set()
+    fill_task = owner._fill_task = asyncio.create_task(refresh_fills())
+    prepare = owner._acquire_ordinary_inputs if late_calculation else owner._ordinary_plan
+    plan_task = asyncio.create_task(prepare())
+    try:
+        await asyncio.sleep(0)
+        assert not preparation_started.is_set(), fixture.defers
+        assert not fill_task.done() and not plan_task.done()
+        fill_release.set()
+        plan = await asyncio.wait_for(plan_task, 1.0)
+
+        assert owner._fill_task is fill_task
+        assert not fixture.calls, "joining fills must not trigger another account read"
+        if confirmed:
+            assert plan is not None
+            assert not fixture.defers
+            if late_calculation:
+                assert plan.account == owner.account_facts()
+        else:
+            assert plan is None
+            assert not fixture.captures
+            assert fixture.defers[-1]["defer_reason"] == "staged_inputs_unavailable"
+            assert fixture.defers[-1]["missing"] == ["fills"]
+    finally:
+        fill_release.set()
+        plan_task.cancel()
+        await asyncio.gather(plan_task, fill_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
 async def test_pending_fill_refresh_is_consumed_before_quotes_and_owner_handoff(monkeypatch):
     from dataclasses import replace
     from live.hsl_runtime import observe_fills

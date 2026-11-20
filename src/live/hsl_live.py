@@ -1045,9 +1045,13 @@ class Owner:
             # before yielding to waiters. Select the task after that handoff.
             async with self._refresh_lock:
                 pass
+        await self._wait_for_owned_fill_task(getattr(self, "_fill_task", None))
+
+    async def _wait_for_owned_fill_task(self, task):
+        import asyncio
+
         if self._shutdown_requested():
             raise OrdinaryPlanDeferred("shutdown")
-        task = getattr(self, "_fill_task", None)
         if task is None:
             return
         if not task.done():
@@ -1205,9 +1209,29 @@ class Owner:
             getattr(self.bot, "_trailing_reset_evidence", None),
         )
 
+    async def _ordinary_preparation_account(self):
+        account = self.account_facts()
+        required_fills = account[3]
+        task = getattr(self, "_fill_task", None)
+        if (
+            required_fills is not None
+            and not required_fills[1]
+            and task is not None
+            and not task.done()
+        ):
+            _, details = self.bot._staged_execution_ready_state(
+                include_market_snapshot=False, context="hsl ordinary planning"
+            )
+            if details.get("missing") == ["fills"]:
+                # Give this owned read a bounded chance to settle before the
+                # staged gate would discard preparation for missing fills.
+                await self._wait_for_owned_fill_task(task)
+                return self.account_facts()
+        return account
+
     async def _ordinary_plan(self):
         bot = self.bot
-        account = self.account_facts()
+        account = await self._ordinary_preparation_account()
         hsl_enabled = runtime.enabled(bot)
         initial_receipts = None if hsl_enabled else self.ordinary_receipts()
         plan = None
@@ -1264,7 +1288,7 @@ class Owner:
             )
             return None
         bot = self.bot
-        account = self.account_facts()
+        account = await self._ordinary_preparation_account()
         if not await self._prepare_ordinary_universe(account):
             return None
         try:
