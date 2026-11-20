@@ -377,7 +377,9 @@ can follow guarded submission.
 
 A current post-cancel positions and open-orders cohort may report `resting_close_observed` with
 `resting_coverage=full` when proven resting close quantity covers the current position, or
-`resting_coverage=partial` when it covers a known smaller quantity. A partial close can be
+`resting_coverage=partial` when it covers a known smaller quantity. For float roundoff, the
+comparison allows only the adjacent positive float below position size and only when the
+gap is below half a venue quantity step if the step is known. A partial close can be
 intentional. Both observations end replacement tracking. Only full coverage clears an earlier
 warning with a resolved log. The other terminal observations, `position_closed` and
 `no_close_in_plan`, end tracking without claiming resting coverage. Each tracked replacement

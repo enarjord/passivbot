@@ -309,6 +309,12 @@ def _resting_coverage(bot, scope, canceled_id, position_qty):
     known_qty = math.fsum(qty for qty in remaining.values() if qty is not None)
     if known_qty >= position_qty:
         return "full", known_qty
+    # Position size and order remainders are independently represented as floats.
+    # Accept only the immediately adjacent positive float, below half a known venue lot.
+    if 0.0 < known_qty == math.nextafter(position_qty, 0.0):
+        qty_step = getattr(bot, "qty_steps", {}).get(scope[0])
+        if not qty_step or position_qty - known_qty < qty_step * 0.5:
+            return "full", known_qty
     if None in remaining.values():
         return "unknown", None
     return ("partial" if known_qty else "zero"), known_qty

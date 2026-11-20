@@ -1,6 +1,7 @@
 """Operator visibility for proven close replacements using offline account facts."""
 
 import logging
+import math
 from types import SimpleNamespace
 
 import pytest
@@ -307,6 +308,8 @@ async def test_confirmed_coverage_waits_for_venue_observation_after_send(
     scenario, monkeypatch, caplog
 ):
     bot, old, new, cancel_wave = scenario
+    bot.positions[_SYMBOL]["long"]["size"] = 0.9
+    bot.qty_steps = {_SYMBOL: 0.1}
     cancel_wave["id"] = 4
     timings = _record_timings(bot)
     close_replacement_diagnostics.observe_plan(bot, cancel_wave, [old], [new], 900)
@@ -317,8 +320,8 @@ async def test_confirmed_coverage_waits_for_venue_observation_after_send(
     close_replacement_diagnostics.observe_create_sent(bot, create_wave, new, 3100)
 
     incomplete = {**new, "id": "unknown-qty", "amount": 1.5}
-    partial = {**new, "id": "partial", "remaining": 0.5}
-    complete = {**new, "id": "complete", "remaining": 1.5}
+    partial = {**new, "id": "partial", "remaining": 0.3}
+    complete = {**new, "id": "complete", "remaining": 0.6}
     with caplog.at_level(logging.INFO):
         _observe(bot, monkeypatch, now_ms=61_000, resting=[partial, incomplete])
         _observe(bot, monkeypatch, now_ms=62_000, resting=[partial, incomplete])
@@ -328,9 +331,9 @@ async def test_confirmed_coverage_waits_for_venue_observation_after_send(
         _observe(bot, monkeypatch, now_ms=65_000, resting=[partial, complete])
 
     assert [record.levelname for record in caplog.records] == ["WARNING", "INFO"]
-    assert "resting_close_qty=0/2" in caplog.messages[0]
+    assert "resting_close_qty=0/0.9" in caplog.messages[0]
     assert "close replacement resolved" in caplog.messages[1]
-    assert "resting_close_qty=2/2" in caplog.messages[1]
+    assert "resting_close_qty=0.9/0.9" in caplog.messages[1]
     assert [
         (timing["outcome"], timing.get("resting_coverage"), timing["cancel_wave_id"])
         for timing, _envelope in timings
@@ -341,6 +344,19 @@ async def test_confirmed_coverage_waits_for_venue_observation_after_send(
         ("resting_close_observed", "full", 4),
     ]
     assert not bot._console_close_replacements
+
+
+@pytest.mark.parametrize(
+    "remaining, qty_step",
+    [(0.8, 0.1), (math.nextafter(0.9, 0.0), math.ulp(0.9))],
+)
+def test_coverage_retains_one_lot_shortfall(scenario, remaining, qty_step):
+    bot, old, new, _wave = scenario
+    bot.qty_steps = {_SYMBOL: qty_step}
+    bot.fetched_open_orders = [{**new, "id": "partial", "remaining": remaining}]
+    assert close_replacement_diagnostics._resting_coverage(
+        bot, _SCOPE, old["id"], 0.9
+    ) == ("partial", remaining)
 
 
 def test_duplicate_order_rows_cannot_overstate_coverage(scenario):
