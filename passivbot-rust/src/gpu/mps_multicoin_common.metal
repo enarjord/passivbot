@@ -320,9 +320,16 @@ inline void configure_joint_realized_memory(
     bool unstuck_enabled, bool loss_gate_enabled, int interval_minutes
 ) {
     float alpha;
-    account.realized_decay_valid = account.realized_decay_valid
-        && hsl_decay_rate(unstuck_span, alpha, account.unstuck_memory.beta)
-        && hsl_decay_rate(loss_gate_span, alpha, account.loss_gate_memory.beta);
+    // A disabled memory is never consulted; mirror the CPU reference and fold
+    // only enabled policies' decay-rate validity into the account.
+    if (unstuck_enabled) {
+        account.realized_decay_valid = account.realized_decay_valid
+            && hsl_decay_rate(unstuck_span, alpha, account.unstuck_memory.beta);
+    }
+    if (loss_gate_enabled) {
+        account.realized_decay_valid = account.realized_decay_valid
+            && hsl_decay_rate(loss_gate_span, alpha, account.loss_gate_memory.beta);
+    }
     account.unstuck_memory.enabled = unstuck_enabled;
     account.loss_gate_memory.enabled = loss_gate_enabled;
     account.realized_decay_interval_minutes = interval_minutes;
@@ -339,6 +346,21 @@ inline void advance_realized_memory(
         memory.drawdown = fma(memory.beta, memory.drawdown, 0.0f);
     memory.minute = minute;
 }
+
+// Read-only variant of advance_realized_memory: returns the memory folded to
+// `minute` while leaving the account untouched. The fold is the same fma loop
+// in the same order, so the result is bit-identical to the mutating advance.
+inline RealizedDecayMemory advance_realized_memory_by_value(
+    RealizedDecayMemory memory, long minute, thread bool& valid
+) {
+    if (!memory.enabled) return memory;
+    if (minute < memory.minute) { valid = false; return memory; }
+    for (long m = memory.minute; m < minute; ++m)
+        memory.drawdown = fma(memory.beta, memory.drawdown, 0.0f);
+    memory.minute = minute;
+    return memory;
+}
+
 
 inline void advance_joint_realized_memory(thread JointPortfolioAccount& account, int bar_index) {
     const long minute = long(bar_index) * long(account.realized_decay_interval_minutes);

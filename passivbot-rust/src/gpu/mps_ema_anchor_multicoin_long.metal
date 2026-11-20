@@ -4124,8 +4124,19 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_one_way_order_blocked_mask
             );
         }
-        advance_joint_realized_memory(account, k + 1);
-        if (!account.realized_decay_valid) {
+        // Generation reads the allowance as if the end-of-bar fold to k+1 had
+        // already happened; the account itself stays at bar k so fills advance
+        // from the same minute Rust does.
+        const long gate_minute =
+            long(k + 1) * long(account.realized_decay_interval_minutes);
+        bool gate_valid = account.realized_decay_valid;
+        JointPortfolioAccount gate_account = account;
+        gate_account.unstuck_memory = advance_realized_memory_by_value(
+            account.unstuck_memory, gate_minute, gate_valid);
+        gate_account.loss_gate_memory = advance_realized_memory_by_value(
+            account.loss_gate_memory, gate_minute, gate_valid);
+        gate_account.realized_decay_valid = gate_valid;
+        if (!gate_account.realized_decay_valid) {
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
             return;
         }
@@ -4133,7 +4144,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         float short_entry_distance_fraction = -INFINITY;
         const int long_unstuck_candidate = long_can_generate
             ? select_ema_multicoin_unstuck_coin(
-                long_side, long_config, account,
+                long_side, long_config, gate_account,
                 bars, touch_ticks, coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_effective_n_positions,
                 long_entry_distance_fraction
@@ -4141,13 +4152,13 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             : -1;
         const int short_unstuck_candidate = short_can_generate
             ? select_ema_multicoin_unstuck_coin(
-                short_side, short_config, account,
+                short_side, short_config, gate_account,
                 bars, touch_ticks, coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_effective_n_positions,
                 short_entry_distance_fraction
             )
             : -1;
-        if (!account.realized_decay_valid) {
+        if (!gate_account.realized_decay_valid) {
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
             return;
         }
@@ -4176,7 +4187,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             );
             }
             generate_ema_multicoin_side_orders(
-                long_side, long_config, account,
+                long_side, long_config, gate_account,
                 bars, touch_ticks, coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_entries_enabled, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
@@ -4196,7 +4207,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             );
             }
             generate_ema_multicoin_side_orders(
-                short_side, short_config, account,
+                short_side, short_config, gate_account,
                 bars, touch_ticks, coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_entries_enabled, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
@@ -4204,7 +4215,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_unstuck_coin, short_one_way_order_blocked_mask
             );
         }
-        if (!account.realized_decay_valid) {
+        if (!gate_account.realized_decay_valid) {
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
             return;
         }
@@ -4252,6 +4263,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             if (first_fill_k < 0.0f) first_fill_k = float(k);
             last_fill_k = float(k);
         }
+
+        // Exactly one fold per bar, after every fill of this bar was recorded.
+        advance_joint_realized_memory(account, k + 1);
 
 #if PASSIVBOT_CORE_REQUEST_MASK != 0
         float core_gross_notional = 0.0f;
