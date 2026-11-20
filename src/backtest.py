@@ -132,6 +132,8 @@ from backtest_display import format_backtest_metrics
 from copy import deepcopy
 from hlcv_preparation import (
     HLCV_PREPARATION_ALGORITHM_VERSION,
+    _filter_forced_sources_for_coins,
+    _forced_hyperliquid_stock_perp_alias,
     _load_and_reconcile_combined_sources,
     prepare_hlcvs,
     prepare_hlcvs_combined,
@@ -1573,11 +1575,32 @@ def _cache_market_identities(config, exchange, coins=None):
             if str(venue).strip()
         }
     )
-    if config.get("backtest", {}).get("ohlcv_source_dir"):
+    has_external_source = bool(config.get("backtest", {}).get("ohlcv_source_dir"))
+    if has_external_source:
         _prime_external_source_symbol_maps(set(identity_exchanges) | {"binance"})
+    forced_stock_perp_aliases = set()
+    stock_perp_candidate_venues = {"hyperliquid"}
+    if has_external_source and exchange == "combined" and "hyperliquid" in identity_exchanges:
+        forced_sources = _filter_forced_sources_for_coins(
+            coin_sources, data_coins, defer_unavailable=True
+        )
+        forced_stock_perp_aliases = {
+            alias for coin in data_coins
+            if (alias := _forced_hyperliquid_stock_perp_alias(coin, forced_sources))
+        }
+        if config["backtest"].get("volume_normalization", True):
+            # Combined preparation also reads overlap candidates on other venues.
+            stock_perp_candidate_venues.update(
+                to_standard_exchange_name(venue)
+                for venue in [*exchanges_cfg, *forced_sources.values()]
+            )
     resolved_market_identities = []
     for venue in identity_exchanges:
-        for coin in data_coins:
+        venue_coins = (
+            sorted(set(data_coins) | forced_stock_perp_aliases)
+            if venue in stock_perp_candidate_venues and forced_stock_perp_aliases else data_coins
+        )
+        for coin in venue_coins:
             try:
                 symbol = coin_to_symbol(coin, venue, verbose=False)
             except MarketIdentifierResolutionError:

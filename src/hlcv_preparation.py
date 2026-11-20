@@ -5100,34 +5100,32 @@ async def _prepare_hlcvs_combined_impl(
     return chosen_mss_per_coin, timestamps, aligned_values_by_coin
 
 
+def _forced_hyperliquid_stock_perp_alias(coin: str, forced_sources: Dict[str, str]) -> str | None:
+    """Return the possible reader alias for a bare coin forced to Hyperliquid."""
+    if coin.startswith("xyz:"):
+        return None
+    alias = f"xyz:{coin}"
+    forced_exchange = forced_sources.get(coin)
+    if forced_exchange is None:
+        forced_exchange = forced_sources.get(alias)
+    return alias if to_standard_exchange_name(forced_exchange) == "hyperliquid" else None
+
+
 def _normalize_combined_coins(
     coins: Sequence[str],
     forced_sources: Dict[str, str],
     om_dict: Dict[str, HLCVManager],
 ) -> list[str]:
-    def normalize_stock_perp_coin(coin: str, forced_exchange: Optional[str]) -> str:
-        if forced_exchange != "hyperliquid":
-            return coin
-        if coin.startswith("xyz:"):
-            return coin
-        hl_om = om_dict.get("hyperliquid")
-        if hl_om and hl_om.markets:
-            xyz_coin = f"xyz:{coin}"
-            xyz_symbol = coin_to_symbol(xyz_coin, "hyperliquid")
-            if xyz_symbol and xyz_symbol in hl_om.markets:
-                logging.info(f"Normalizing stock perp coin: {coin} -> {xyz_coin}")
-                return xyz_coin
-        return coin
-
+    hl_om = om_dict.get("hyperliquid")
     normalized_coins = []
     for coin in coins:
-        forced_ex = forced_sources.get(coin)
-        if forced_ex is None and coin.startswith("xyz:"):
-            forced_ex = forced_sources.get(coin[4:])
-        elif forced_ex is None and not coin.startswith("xyz:"):
-            forced_ex = forced_sources.get(f"xyz:{coin}")
-        normalized_coin = normalize_stock_perp_coin(coin, forced_ex)
-        normalized_coins.append(normalized_coin)
+        alias = _forced_hyperliquid_stock_perp_alias(coin, forced_sources)
+        if alias and hl_om and hl_om.markets:
+            symbol = coin_to_symbol(alias, "hyperliquid")
+            if symbol and symbol in hl_om.markets:
+                logging.info("Normalizing stock perp coin: %s -> %s", coin, alias)
+                coin = alias
+        normalized_coins.append(coin)
     return sorted(set(normalized_coins))
 
 

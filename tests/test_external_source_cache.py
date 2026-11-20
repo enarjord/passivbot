@@ -78,6 +78,41 @@ def test_source_revision_ignores_unrelated_coins_and_includes_btc_fallback(cache
     assert bt.get_cache_hash(config,'bybit')!=initial
 
 
+@pytest.mark.parametrize("source_key", ["TSLA", "xyz:TSLA"])
+def test_combined_external_revision_tracks_forced_hyperliquid_stock_perp_directory(
+    cache_source, monkeypatch, source_key,
+):
+    from hlcv_preparation import HLCVManager, _normalize_combined_coins
+
+    config, root, _ = cache_source
+    config["bot"]["long"]["universe"]["approved_coins"] = ["TSLA"]
+    forced_sources = {source_key: "hyperliquid"}
+    config["backtest"].update(coin_sources=forced_sources, volume_normalization=False)
+    symbol = "xyz:TSLA/USDC:USDC"
+    hl = HLCVManager("hyperliquid", ohlcv_source_dir=root)
+    hl.markets = {symbol: {"symbol": symbol, "base": "xyz:TSLA"}}
+    monkeypatch.setattr("hlcv_preparation.coin_to_symbol", bt.coin_to_symbol)
+    assert _normalize_combined_coins(["TSLA"], forced_sources, {"hyperliquid": hl}) == ["xyz:TSLA"]
+
+    initial = bt.get_cache_hash(config, "combined")
+    # Volume normalization can use other venues for overlap, even for forced coins.
+    other_venue_day = source_day(root, coin="xyz:TSLA")
+    assert bt.get_cache_hash(config, "combined") == initial
+    config["backtest"]["volume_normalization"] = True
+    with_overlap = bt.get_cache_hash(config, "combined")
+    other_venue_day.unlink()
+    assert bt.get_cache_hash(config, "combined") != with_overlap
+    config["backtest"]["volume_normalization"] = False
+
+    path = root / "hyperliquid" / "1m" / "xyz:TSLA" / "2025-01-01.npy"
+    path.parent.mkdir(parents=True)
+    start_ts = 1_735_689_600_000
+    np.save(path, np.array([[start_ts, 101, 102, 100, 101, 1]], dtype=np.float64))
+    actual = hl._try_load_ohlcvs_from_source_dir("xyz:TSLA", symbol, start_ts, start_ts)
+    assert actual["close"].tolist() == [101]
+    assert bt.get_cache_hash(config, "combined") != initial
+
+
 @pytest.mark.asyncio
 async def test_external_revision_uses_cached_markets_before_symbol_map_exists(cache_source, monkeypatch):
     """Copying markets.json alone must not look like an external candle edit on first use."""
