@@ -243,6 +243,24 @@ def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
     ("Basic auth: dGlueQ==", "Basic auth: <redacted>"),
     ("Bearer token=short-secret", "Bearer token=<redacted>"),
     ("Basic authentication is required.", "Basic authentication is required."),
+    ("Authorization abc123", "Authorization <redacted>"),
+    ("authorization abc123 rejected", "authorization <redacted>"),
+    ("Authorization header abc123", "Authorization header <redacted>"),
+    ("Missing Authorization header", "Missing Authorization header"),
+    ("Cookie expired", "Cookie expired"),
+    ("Proxy-Authorization abc123", "Proxy-Authorization <redacted>"),
+    ("Set-Cookie abc123", "Set-Cookie <redacted>"),
+    ("KC-API-SIGN: shortsig", "KC-API-SIGN: <redacted>"),
+    ("Invalid key=shortsec", "Invalid key=<redacted>"),
+    ("Rejected credentials=shortsec", "Rejected credentials=<redacted>"),
+    ("x-a-b-c-d-e-Api-Key=shortsec", "x-a-b-c-d-e-Api-Key=<redacted>"),
+    ("Invalid API-key, IP, or permissions for action.",
+     "Invalid API-key, IP, or permissions for action."),
+    ("Signature for this request is not valid.", "Signature for this request is not valid."),
+    ("The API key does not have trade permission.", "The API key does not have trade permission."),
+    ("Your token balance is too low", "Your token balance is too low"),
+    ("Basic order validation failed: price tick 0.01", "Basic order validation failed: price tick 0.01"),
+    ("Basic order validation failed: price tick 0.01 secret", "<redacted-auth>"),
     ("Invalid api_key (short-secret)", "Invalid api_key <redacted>"),
     ("Invalid api_key(short-secret)", "Invalid api_key<redacted>"),
     ("Invalid access token short-secret", "Invalid access token <redacted>"),
@@ -253,6 +271,13 @@ def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
 def test_reason_distinguishes_credential_echoes_from_status_words(message, sanitized):
     assert bounded_exchange_error_context_from_mapping({"message": message}) == {
         "error_reason": sanitized,
+    }
+
+
+def test_long_noncredential_hyphenated_reason_uses_bounded_prefix_scan():
+    # Fill the parser's input budget without matching a credential label.
+    assert bounded_exchange_error_context_from_mapping({"message": "a-" * 4096}) == {
+        "error_reason": "<redacted>",
     }
 
 
