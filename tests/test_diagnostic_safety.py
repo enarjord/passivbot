@@ -231,9 +231,9 @@ def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
     ('Invalid "API key":"short-secret"', 'Invalid "API key":<redacted>'),
     ('Invalid "passphrase"short-secret', 'Invalid "passphrase"<redacted>'),
     ("Invalid passphrase'short-secret'", "Invalid passphrase<redacted>"),
-    ("'short-secret' is an invalid private key", "<redacted> is an invalid private key"),
+    ("'tiny123' is an invalid private key", "<redacted> is an invalid private key"),
     (
-        "'short-secret' is an invalid x-a-b-c-d-e-api-key",
+        "'tiny123' is an invalid x-a-b-c-d-e-api-key",
         "<redacted> is an invalid x-a-b-c-d-e-api-key",
     ),
     ("Invalid passphrase; supplied short-secret", "Invalid passphrase<redacted>"),
@@ -300,6 +300,20 @@ def test_reason_distinguishes_credential_echoes_from_status_words(message, sanit
 def test_credential_echoes_require_unambiguous_quotes(message, sanitized):
     assert bounded_exchange_error_context_from_mapping({"message": message}) == {
         "error_reason": sanitized,
+    }
+
+
+@pytest.mark.parametrize("message", [
+    "Invalid passphrase=\"first' violet rabbit API key\"",
+    "Invalid passphrase \"first' violet rabbit API key\"",
+    "Bearer \"first' violet rabbit API key\"",
+    "'first api_key=second' is not a valid passphrase",
+    "Invalid 'api_key' violet rabbit passphrase",
+    "'short-secret' is an invalid private key",
+])
+def test_overlapping_credential_echoes_drop_ambiguous_reason(message):
+    assert bounded_exchange_error_context_from_mapping({"message": message}) == {
+        "error_reason": "<redacted>",
     }
 
 

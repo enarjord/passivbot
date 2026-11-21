@@ -361,9 +361,32 @@ def _bounded_exchange_error_label(value: object) -> str | None:
 def _redact_reverse_credential_echoes(text: str) -> str:
     # Start with the status clause. An earlier quote inside the value must
     # not let a later quote become the apparent start of the credential.
+    matches = tuple(_EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE.finditer(text))
+    if not matches:
+        return text
+
+    # A forward-labelled value can itself contain a quote and words that look
+    # like a reverse clause. Drop the reason when these interpretations overlap.
+    for pattern in (
+        _EXCHANGE_ERROR_CREDENTIAL_RE,
+        _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE,
+        _EXCHANGE_ERROR_AUTH_HEADER_RE,
+        _EXCHANGE_ERROR_AUTH_SCHEME_RE,
+        _EXCHANGE_ERROR_PEM_RE,
+    ):
+        for forward in pattern.finditer(text):
+            start = (
+                forward.end("label") if "label" in pattern.groupindex else forward.start()
+            )
+            if any(
+                start < reverse.end() and reverse.start("clause") < forward.end()
+                for reverse in matches
+            ):
+                return "<redacted>"
+
     parts = []
     offset = 0
-    for match in _EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE.finditer(text):
+    for match in matches:
         close_quote = match["quote"]
         open_quote = _EXCHANGE_ERROR_REVERSE_OPEN_QUOTE.get(close_quote, close_quote)
         opening = text.find(open_quote, offset, match.start())
