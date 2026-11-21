@@ -367,8 +367,9 @@ Handling in Passivbot:
 Bitget's UTA [REST code 25203](https://www.bitget.com/docs/uta/error-code/restapi)
 is a definitive insufficient-margin rejection. For a position-increasing create,
 record a rejected order and delay new submissions for the same symbol and position
-side for 60 seconds. Retry only from a fresh plan after expiry. The interval is
-local to the current bot instance. Submitted orders still require account
+side for 60 seconds. Exclude matching entries before create-batch capacity is
+allocated, and recheck the interval at the connector. Retry only from a fresh
+plan after expiry. The interval is local to the current bot instance. Submitted orders still require account
 confirmation. This rejection does not count toward a bot restart. Closes,
 cancellations, and other failures retain their ordinary handling.
 

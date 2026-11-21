@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import ccxt
 import pytest
@@ -148,7 +149,74 @@ async def test_uta_margin_retry_is_recorded_in_execution_events(
         assert retry_skip.levelno == logging.DEBUG
         assert "retry_remaining=45s" in retry_skip.getMessage()
     else:
-        assert retry_records == []
+        retry_warning, = retry_records
+        assert retry_warning.levelno == logging.WARNING
+        assert "retry_delay=60s" in retry_warning.getMessage()
+
+
+@pytest.mark.parametrize("from_plan", [False, True])
+@pytest.mark.asyncio
+async def test_margin_deferred_entry_leaves_capacity_for_ordinary_close(
+    connector, monkeypatch, from_plan
+):
+    c = connector
+    bot = c.bot
+    bot.config["live"]["execution"]["max_n_creations_per_batch"] = 1
+    bot.debug_mode = False
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._log_order_action_summary = lambda *args: None
+    bot.add_to_recent_order_executions = lambda order: None
+    bot.add_new_order = lambda *args, **kwargs: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_order_payload = lambda *args, **kwargs: {}
+    bot._health_orders_placed = 0
+    bot.get_raw_balance = lambda: 100.0
+    bot.order_was_recently_updated = lambda order: 0
+    bot.state_change_detected_by_symbol = set()
+    bot.update_exchange_configs = AsyncMock(return_value={c.order["symbol"]})
+    bot._schedule_forager_candidate_candle_refresh = lambda: None
+    sink = ListEventSink()
+    pipeline = LiveEventPipeline(structured_sinks=[sink])
+    bot._live_event_pipeline = pipeline
+
+    async def admit_market_quotes(_bot, orders, **kwargs):
+        return orders
+
+    from passivbot import Passivbot
+
+    monkeypatch.setattr(
+        Passivbot, "_filter_fresh_market_snapshot_creations", admit_market_quotes
+    )
+    monkeypatch.setattr(
+        Passivbot, "_record_emitted_order_custom_id", lambda *args, **kwargs: None
+    )
+    close = dict(
+        c.order, side="sell", reduce_only=True, execution_priority="ordinary", price=105.0
+    )
+    try:
+        rejected, = await bot.execute_orders([c.order])
+        assert rejected["status"] == "rejected"
+        c.code[0] = None
+        c.clock[0] += 5.0
+        if from_plan:
+            await bot.execute_order_plan_to_exchange([], [c.order, close])
+        else:
+            created, = await bot.execute_orders_parent([c.order, close])
+            assert created["reduce_only"] is True
+    finally:
+        assert pipeline.close(timeout=2.0)
+
+    assert [request["side"] for request in c.calls] == ["buy", "sell"]
+    assert bot._health_orders_placed == 1
+    skipped, = [
+        event for event in sink.events
+        if event.event_type == EventTypes.EXECUTION_CREATE_SKIPPED
+    ]
+    assert skipped.reason_code == ReasonCodes.EXCHANGE_MARGIN_RETRY
+    assert skipped.data["retry_remaining_seconds"] == 55.0
+    assert not any(
+        event.reason_code == ReasonCodes.BATCH_CAPACITY for event in sink.events
+    )
 
 
 @pytest.mark.parametrize(

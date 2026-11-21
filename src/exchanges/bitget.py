@@ -61,25 +61,41 @@ class BitgetBot(CCXTBot):
         self._account_mode_detected = False
         self._entry_margin_retry_after: dict[tuple[str, str], float] = {}
 
-    async def execute_order(self, order: dict) -> dict | DeferredOrderCreation:
+    def _entry_margin_retry_scope(self, order: dict) -> tuple[str, str] | None:
         direction = (order.get("side"), order.get("position_side"))
         if (
-            not self.is_uta
-            or order.get("reduce_only") is not False
-            or direction not in {("buy", "long"), ("sell", "short")}
+            self.is_uta
+            and order.get("reduce_only") is False
+            and direction in {("buy", "long"), ("sell", "short")}
         ):
-            return await super().execute_order(order)
+            return order["symbol"], direction[1]
+        return None
 
-        scope = (order["symbol"], direction[1])
+    def _entry_margin_deferral(
+        self, scope: tuple[str, str]
+    ) -> DeferredOrderCreation | None:
         retry_after = self._entry_margin_retry_after.get(scope)
-        if retry_after is not None:
-            retry_remaining_seconds = retry_after - monotonic()
-            if retry_remaining_seconds > 0:
-                return DeferredOrderCreation(
-                    ReasonCodes.EXCHANGE_MARGIN_RETRY,
-                    retry_remaining_seconds=retry_remaining_seconds,
-                )
-            del self._entry_margin_retry_after[scope]
+        if retry_after is None:
+            return None
+        retry_remaining_seconds = retry_after - monotonic()
+        if retry_remaining_seconds > 0:
+            return DeferredOrderCreation(
+                ReasonCodes.EXCHANGE_MARGIN_RETRY,
+                retry_remaining_seconds=retry_remaining_seconds,
+            )
+        return None
+
+    def _create_order_deferral(self, order: dict) -> DeferredOrderCreation | None:
+        scope = self._entry_margin_retry_scope(order)
+        return self._entry_margin_deferral(scope) if scope is not None else None
+
+    async def execute_order(self, order: dict) -> dict | DeferredOrderCreation:
+        scope = self._entry_margin_retry_scope(order)
+        if scope is None:
+            return await super().execute_order(order)
+        if deferred := self._entry_margin_deferral(scope):
+            return deferred
+        self._entry_margin_retry_after.pop(scope, None)
 
         try:
             return await super().execute_order(order)

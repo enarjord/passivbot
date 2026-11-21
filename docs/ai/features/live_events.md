@@ -530,7 +530,7 @@ symbol and position side. The console warning projects that duration from the ev
 `execution.create_skipped` with `reason_code=exchange_margin_retry` reports a subsequent attempt
 withheld before submission. It carries the scoped symbol in `data.symbols`, `data.position_side`,
 and `data.retry_remaining_seconds` measured from the process-local monotonic deadline when the
-connector withheld the attempt. Skips retain DEBUG console visibility.
+batch filter or connector withheld the attempt. Skips retain DEBUG console visibility.
 
 ## Fill Confirmation Fallbacks
 
