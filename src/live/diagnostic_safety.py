@@ -19,21 +19,35 @@ _EXCHANGE_ERROR_LABEL_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}")
 # An unlabelled opaque value can still be a credential.
 _EXCHANGE_ERROR_SECRET_VALUE_RE = re.compile(r"[A-Za-z0-9+/_=-]{24,}")
 _PUBLIC_WALLET_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
+# Cap the prefix scan at each word boundary, even in long hyphenated input.
+_EXCHANGE_ERROR_FIELD_PREFIX = r"(?<![a-z0-9])(?:[a-z0-9]+[-_]+){0,4}"
+# A quote or status clause fixes the label start. Scan the full prefix
+# there without backtracking within its components.
+_EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX = r"(?:[a-z0-9]++[-_]++)*"
+_EXCHANGE_ERROR_AUTH_HEADER_LABEL = (
+    r"(?:authorization|cookie)(?>[-_ ]+header\b|)"
+)
 _EXCHANGE_ERROR_AUTH_HEADER_RE = re.compile(
-    r"""(?<![a-z0-9])(?:[a-z0-9]+[-_]+)*(?:authorization|cookie)['"]?\s*[:=].*""",
+    _EXCHANGE_ERROR_FIELD_PREFIX
+    + _EXCHANGE_ERROR_AUTH_HEADER_LABEL
+    + r"""['"]?\s*[:=].*""",
     re.IGNORECASE | re.DOTALL,
 )
 _EXCHANGE_ERROR_PEM_RE = re.compile(
     r"-----BEGIN [^\r\n]*PRIVATE KEY-----.*?(?:-----END [^\r\n]*PRIVATE KEY-----|\Z)",
     re.IGNORECASE | re.DOTALL,
 )
-_EXCHANGE_ERROR_CREDENTIAL_LABEL = (
-    r"(?<![a-z0-9])(?:[a-z0-9]+[-_]+)*"
-    r"(?:api[-_ ]?(?:key|secret|token|passphrase)|private[-_ ]?key|"
+_EXCHANGE_ERROR_CREDENTIAL_NAME = (
+    r"(?:"
+    + _EXCHANGE_ERROR_AUTH_HEADER_LABEL
+    + r"|api[-_ ]?(?:key|secret|token|passphrase)|private[-_ ]?key|"
     r"client[-_ ]?secret|access[-_ ]?(?:key|secret|sign(?:ature)?|token|passphrase)|"
     r"refresh[-_ ]?token|session[-_ ]?(?:id|key|token)|signing[-_ ]?key|"
     r"secret(?:[-_ ]?key)?|signature|passphrase|password|token|"
     r"listen[-_ ]?key|seed[-_ ]?phrase|mnemonic)(?![\w-])"
+)
+_EXCHANGE_ERROR_CREDENTIAL_LABEL = (
+    _EXCHANGE_ERROR_FIELD_PREFIX + _EXCHANGE_ERROR_CREDENTIAL_NAME
 )
 # A correctly quoted value has a known end. The rest of an unquoted or
 # malformed value is ambiguous: redact the suffix rather than guessing its end.
@@ -43,7 +57,7 @@ _EXCHANGE_ERROR_CREDENTIAL_VALUE = (
 _SAFE_CREDENTIAL_STATUS = (
     r"(?!(?:(?:is |was |has )?(?:expired|invalid|missing|rejected|revoked|disabled|"
     r"incorrect|required|not found|not recognized|does not exist)|"
-    r"for the configured private key)(?=\s*(?:[.!?](?:\s|$)|$)))"
+    r"for the configured private key|failed: <redacted-auth>)(?=\s*(?:[.!?](?:\s|$)|$)))"
 )
 _EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
     r"\b(?:bearer|basic)(?>\s+(?:authentication|auth|token)\b|)"
@@ -53,13 +67,16 @@ _EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
-    rf"""(?P<label>(?:{_EXCHANGE_ERROR_CREDENTIAL_LABEL}|\b(?:seed|session)(?![\w-])|"""
+    rf"""(?P<label>(?:{_EXCHANGE_ERROR_CREDENTIAL_LABEL}|"""
+    rf"""{_EXCHANGE_ERROR_FIELD_PREFIX}(?:key|sign|credentials?)(?![\w-])|"""
+    r"""\b(?:seed|session)(?![\w-])|"""
     r"""\b(?:basic|bearer)(?:[-_ ]+(?:auth(?:entication)?|token))?)['"]?\s*[:=]\s*)"""
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
-    rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?P=quote)\s*|"""
+    rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX}"""
+    rf"""{_EXCHANGE_ERROR_CREDENTIAL_NAME}(?P=quote)\s*|"""
     rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=['"(\[,;])))"""
     # Keep standalone diagnostic wording, including a credential followed by
     # a known status clause. Other trailing text may be a bare credential echo.
@@ -72,8 +89,21 @@ _EXCHANGE_ERROR_PREFIXED_CREDENTIAL_ECHO_RE = re.compile(
     r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')"""
     r"\s+(?P<clause>(?:is|was)\s+(?:(?:an?|the)\s+)?"
     r"(?:invalid|incorrect|expired|revoked)\s+"
-    + _EXCHANGE_ERROR_CREDENTIAL_LABEL + ")",
+    + _EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX
+    + _EXCHANGE_ERROR_CREDENTIAL_NAME + ")",
     re.IGNORECASE,
+)
+# Exact stock text with no echoed values. Keep the safety decision independent
+# of a potentially spoofed exchange code or message prefix.
+_SAFE_EXCHANGE_REJECTION_TEXT = frozenset({
+    "invalid api-key, ip, or permissions for action.",
+    "signature for this request is not valid.",
+    "the api key does not have trade permission.",
+    "your token balance is too low",
+})
+_BASIC_ORDER_PRICE_TICK_REASON_RE = re.compile(
+    r"Basic order validation failed: price tick \d{1,16}(?:\.\d{1,16})?\.?",
+    re.IGNORECASE | re.ASCII,
 )
 _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE = re.compile(r"\{|\[\s*[\[{\x22\x27]")
 _HYPERLIQUID_UNRECOGNIZED_WALLET_RE = re.compile(
@@ -81,7 +111,7 @@ _HYPERLIQUID_UNRECOGNIZED_WALLET_RE = re.compile(
 )
 HYPERLIQUID_UNRECOGNIZED_WALLET = "HYPERLIQUID_UNRECOGNIZED_WALLET"
 _EXCHANGE_ERROR_EMAIL_RE = re.compile(
-    r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"
+    r"(?i)\b[A-Z0-9._%+-]{1,64}@[A-Z0-9.-]{1,253}\.[A-Z]{2,63}\b"
 )
 _EXCHANGE_ERROR_URL_RE = re.compile(r"(?i)\bhttps?://[^\s]+")
 _EXCHANGE_ERROR_PAYLOAD_MAX_LEN = 8192
@@ -327,13 +357,20 @@ def _bounded_exchange_error_label(value: object) -> str | None:
 def _bounded_exchange_error_reason(value: object) -> str | None:
     if type(value) is not str or not value or len(value) > _EXCHANGE_ERROR_PAYLOAD_MAX_LEN:
         return None
+    text = value.strip()
+    if (
+        text.lower() in _SAFE_EXCHANGE_REJECTION_TEXT
+        or _BASIC_ORDER_PRICE_TICK_REASON_RE.fullmatch(text)
+    ):
+        return text
     try:
         # A nested request/response dump can contain short credentials or a
         # replayable action. Keep the reason preceding it and drop the dump.
         prefix, *payload = _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE.split(value, maxsplit=1)
         text = prefix.rstrip() + " <redacted-payload>" if payload else prefix
         text = _EXCHANGE_ERROR_URL_RE.sub("<redacted-url>", text)
-        text = _EXCHANGE_ERROR_EMAIL_RE.sub("<redacted-email>", text)
+        if "@" in text:
+            text = _EXCHANGE_ERROR_EMAIL_RE.sub("<redacted-email>", text)
         text = _EXCHANGE_ERROR_AUTH_HEADER_RE.sub("<redacted-header>", text)
         text = _EXCHANGE_ERROR_AUTH_SCHEME_RE.sub("<redacted-auth>", text)
         text = _EXCHANGE_ERROR_PEM_RE.sub("<redacted-key>", text)
