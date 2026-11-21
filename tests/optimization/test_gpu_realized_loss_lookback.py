@@ -149,24 +149,55 @@ def test_ema_shared_decaying_gate_matches_rust(sides, coins, memory_span, unstuc
     assert len(fills) > coins * len(sides)
 
 
-def test_ema_shared_decay_gate_close_boundary_matches_rust():
+@pytest.mark.parametrize("sides", [("long",), ("long", "short")])
+def test_ema_shared_decay_gate_close_boundary_matches_rust(sides):
     import numpy as np
     from backtest import run_backtest
 
-    proxy, inputs = loss_gate_proxy(("long",), coins=1, memory_span=9.0)
+    proxy, inputs = loss_gate_proxy(sides, coins=1, memory_span=9.0)
     fills, _, _ = run_backtest(*inputs)
     # Continuous decay must admit a real fee-only close at the same CPU/GPU cut.
-    assert len(fills) == 2
-    assert str(fills[-1, 13]).startswith("close_")
-    close_k = int(fills[-1, 0])
+    close_k = next(int(fill[0]) for fill in fills if str(fill[13]).startswith("close_"))
     for end in (close_k, close_k + 1):
         runner, output = raw(proxy, [{}], end_steps=np.array([end], dtype=np.int32))
         expected = [fill for fill in fills if int(fill[0]) < end]
-        assert len(expected) == (1 if end == close_k else 2)
+        assert len(expected) == len(sides) + (end > close_k)
         assert not hasattr(runner, "_unstuck_pnl_buffers")
         assert output["fill_count"].item() == len(expected)
         assert output["balance"].item() == pytest.approx(float(expected[-1][5]), abs=0.002)
-        assert output["psize"].item() == pytest.approx(abs(float(expected[-1][11])), abs=2e-5)
+        for side in sides:
+            size = sum(float(fill[9]) for fill in expected if fill[13].endswith(side))
+            key = "psize" if side == "long" else "short_psize"
+            assert output[key].item() == pytest.approx(abs(size), abs=2e-5)
+
+
+@pytest.mark.parametrize("policy", ["unstuck", "loss_gate"])
+@pytest.mark.parametrize("enabled", [False, True], ids=["inactive", "active"])
+def test_shader_validates_only_enabled_realized_memory(monkeypatch, policy, enabled):
+    proxy, _ = loss_gate_proxy(
+        ("long", "short"),
+        coins=1,
+        unstuck=policy == "unstuck" and enabled,
+        max_loss_pct=1.0 if policy == "loss_gate" and not enabled else None,
+    )
+    runner, expected = raw(proxy, [{}])
+    assert expected["fill_count"].item() > 0
+    pack_params = runner._pack_params
+    column = runner.parameter_keys.index(f"{policy}_memory_ema_span_minutes")
+
+    def pack_with_invalid_span(params):
+        matrix = pack_params(params).copy()
+        # Inject at the shader boundary after producing a valid host request.
+        matrix[:, column :: len(runner.parameter_keys)] = 0.5
+        return matrix
+
+    monkeypatch.setattr(runner, "_pack_params", pack_with_invalid_span)
+    if enabled:
+        with pytest.raises(ValueError, match="realized-loss memory or allowance"):
+            raw(proxy, [{}])
+    else:
+        _, output = raw(proxy, [{}])
+        compare(expected, output)
 
 
 @pytest.mark.parametrize("side", ["long", "short"])

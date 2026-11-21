@@ -148,6 +148,9 @@ its own version heading. See [release status](docs/releases.md).
 - Compile GPU optimizer replay on AMD ROCm with compatible PyTorch and CuPy
   builds. Select conservative tuning on ROCm.
 
+- Keep the second directional replay workspace thread-private on ROCm to avoid
+  corrupted fused GPU optimizer metrics.
+
 - Start automatic CUDA max with an admission window that preserves parallel
   candidate preparation when host memory allows. Use 16-thread blocks
   for intermediate single-sided EMA Anchor dispatches that can fill enough blocks.
@@ -242,6 +245,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Stream EMA Anchor tick inputs on CUDA when needed to fit long optimizer histories
   within the existing GPU memory limit.
+
+- Keep GPU replay running when an inactive realized-loss or auto-unstuck policy carries
+  an unused decay span.
 
 - Avoid copying unrelated configuration when calculating how much fill history live entry cooldowns require.
 

@@ -103,10 +103,12 @@ def test_shader_library_uses_vendor_source_and_compiler_flags(monkeypatch, is_hi
         assert "using ulong =" not in code
         assert code.count("using pb_ulong = unsigned long long;") == 1
         assert "pb_ulong my_ulong = i;" in code
+        assert "#define PASSIVBOT_HIP_PRIVATE_SECONDARY_REPLAY_SLOT 1" in code
         assert code.count("#define PASSIVBOT_HSL_LOOKBACK 1440") == 1
         assert captured["options"] == ("--std=c++17", "-ffp-contract=off", "-fno-unroll-loops")
     else:
         assert captured["code"] == cuda_source(source)
+        assert "#define PASSIVBOT_HIP_PRIVATE_SECONDARY_REPLAY_SLOT" not in captured["code"]
         assert captured["options"] == ("--std=c++17", "--fmad=false")
 
 

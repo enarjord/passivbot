@@ -76,8 +76,15 @@ __device__ inline PBFloat3 fma(PBFloat3 a, PBFloat3 b, PBFloat3 c) {
 }
 // At most two directional workspaces share a block. Keep their total within
 // CUDA's portable 48 KiB static shared-memory limit; larger states stay private.
-// Slot distinguishes long and short even when both have the same state type.
-template <typename T, int Slot, bool Shared = (sizeof(T) <= 24 * 1024)>
+// gfx1030 corrupts fused replay metrics with two shared side slots. Keep the
+// second slot private for HIP builds, including both fused strategy kernels.
+#if defined(PASSIVBOT_HIP_PRIVATE_SECONDARY_REPLAY_SLOT)
+constexpr bool PBShareSecondaryReplaySlot = false;
+#else
+constexpr bool PBShareSecondaryReplaySlot = true;
+#endif
+template <typename T, int Slot,
+          bool Shared = (sizeof(T) <= 24 * 1024 && (Slot == 0 || PBShareSecondaryReplaySlot))>
 struct PBReplaySideStorage;
 template <typename T, int Slot>
 struct PBReplaySideStorage<T, Slot, true> {
@@ -200,7 +207,11 @@ def _hipify(code: str) -> str:
     # CUDA's 64-bit semantics under a distinct name.
     code = re.sub(r"^\s*using\s+ulong\s*=\s*unsigned\s+long\s+long\s*;\s*$", "", code, flags=re.M)
     code = re.sub(r"\bulong\b", "pb_ulong", code)
-    return "using pb_ulong = unsigned long long;\n" + code
+    return (
+        "#define PASSIVBOT_HIP_PRIVATE_SECONDARY_REPLAY_SLOT 1\n"
+        "using pb_ulong = unsigned long long;\n"
+        + code
+    )
 
 
 def shader_vendor(cupy_module=None) -> str:
