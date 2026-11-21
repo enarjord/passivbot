@@ -63,6 +63,7 @@ from live import (
     reconciler,
     state_refresh,
 )
+from live.create_failure_guard import CreateFailureGuard
 from live.diagnostic_safety import bounded_traceback_detail as _bounded_traceback_detail
 from live import balance_validation, hsl_live
 from live.order_churn_gate import (
@@ -126,7 +127,11 @@ from live.market_snapshot import (
     SHARED_QUOTE_CANCEL_GRACE_SECONDS,
 )
 from live.planning_snapshot import PlanningSnapshot
-from passivbot_exceptions import RestartBotException, FatalBotException
+from passivbot_exceptions import (
+    FatalBotException,
+    FatalOrderWriteError,
+    RestartBotException,
+)
 from live import exchange_params
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
@@ -1249,11 +1254,16 @@ class Passivbot:
         for _action, _order, error in failures:
             if isinstance(error, FatalBotException):
                 raise error
+        guard = getattr(self, "_create_failure_guard", None)
         for action, order, error in failures:
+            if guard is not None:
+                guard.check_write_error(self, action, error)
             symbol = order.get("symbol") if isinstance(order, dict) else None
             if symbol:
                 self._activate_exchange_symbol_unavailable_cooldown(str(symbol), error)
             self._log_order_write_failure(action=action, order=order, error=error)
+        if guard is not None and any(action == "create" for action, _, _ in failures):
+            guard.check(self)
         try:
             await self.restart_bot_on_too_many_errors()
         except BaseException:
@@ -1320,6 +1330,7 @@ class Passivbot:
         require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
         require_live_balance_support(config)
         self.config = config
+        self._create_failure_guard = CreateFailureGuard()
         try:
             lvl_raw = get_optional_config_value(config, "logging.level", 1)
             lvl = int(float(lvl_raw)) if lvl_raw is not None else 1
@@ -12785,6 +12796,15 @@ class Passivbot:
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
+            guard = getattr(self, "_create_failure_guard", None)
+            if guard is not None and fill_fetch_completed:
+                guard.confirm(
+                    self,
+                    (
+                        (event.symbol, getattr(event, "client_order_id", ""))
+                        for event in reversed(all_events)
+                    ),
+                )
             flush_enriched_events()
             # Trailing fill confirmation only needs proof that a fill-cache
             # refresh completed after the position snapshot. Keep this
@@ -14494,6 +14514,15 @@ class Passivbot:
         if not hasattr(self, "state_change_detected_by_symbol"):
             self.state_change_detected_by_symbol = set()
         self.fetched_open_orders = open_orders
+        guard = getattr(self, "_create_failure_guard", None)
+        if guard is not None:
+            guard.confirm(
+                self,
+                (
+                    (order.get("symbol"), reconciler.extract_order_custom_id(order))
+                    for order in open_orders
+                ),
+            )
         self._record_authoritative_surface(
             "open_orders", self._open_orders_signature(open_orders)
         )
@@ -20448,8 +20477,20 @@ class Passivbot:
             action="create",
             connector_route="base",
         )
-        executed = await self.cca.create_order(**params)
-        return executed
+        guard = getattr(self, "_create_failure_guard", None)
+        try:
+            executed = await self.cca.create_order(**params)
+        except Exception as exc:
+            if guard is not None:
+                guard.completed(self, order, error=exc)
+            raise
+        else:
+            if guard is not None:
+                guard.completed(self, order, result=executed)
+            return executed
+        finally:
+            if guard is not None:
+                guard.cancelled(order)
 
     async def execute_orders(self, orders: [dict]) -> [dict]:
         """Execute a batch of order creations using the helper pipeline."""
@@ -20795,6 +20836,7 @@ async def _run_live(startup_context: dict):
     cooldown_secs = 60
     restarts = []
     failure_state = {}
+    create_failure_guard = CreateFailureGuard()
     while True:
 
         startup_context["stage"] = "setup_bot"
@@ -20802,6 +20844,7 @@ async def _run_live(startup_context: dict):
         bot = setup_bot(config)
         globals()["bot"] = bot
         bot._process_failure_state = failure_state
+        bot._create_failure_guard = create_failure_guard
         startup_context["stage"] = "bot_lifecycle"
         fatal_error = None
         try:
@@ -20841,6 +20884,8 @@ async def _run_live(startup_context: dict):
         if bot.stop_signal_received:
             logging.info("Bot stopped via signal; exiting main loop.")
             break
+        if isinstance(fatal_error, FatalOrderWriteError):
+            raise SystemExit(1)
         if fatal_error is not None:
             break
 
