@@ -88,15 +88,15 @@ _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
 )
+# A short phrase between a closing quote and a credential label is an
+# ambiguous echo. Bound the phrase without assuming a fixed exchange wording.
 _EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE = re.compile(
-    r"""(?P<quote>['"])\s+(?P<clause>(?:"""
-    r"(?:is|was)\s+(?:(?:an?|the)\s+)?(?:invalid|incorrect|expired|revoked)|"
-    r"(?:(?:is|was)\s+not|isn't|wasn't)\s+(?:(?:an?|the)\s+)?"
-    r"(?:valid|correct|recognized|accepted))\s+"
+    r"""(?P<quote>['"\x60’”])\s+(?P<clause>(?:[a-z'’]++\s+){1,6}?"""
     + _EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX
     + _EXCHANGE_ERROR_CREDENTIAL_NAME + ")",
     re.IGNORECASE,
 )
+_EXCHANGE_ERROR_REVERSE_OPEN_QUOTE = {"’": "‘", "”": "“"}
 # Exact stock text with no echoed values. Keep the safety decision independent
 # of a potentially spoofed exchange code or message prefix.
 _SAFE_EXCHANGE_REJECTION_TEXT = frozenset({
@@ -364,7 +364,9 @@ def _redact_reverse_credential_echoes(text: str) -> str:
     parts = []
     offset = 0
     for match in _EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE.finditer(text):
-        opening = text.find(match["quote"], offset, match.start())
+        close_quote = match["quote"]
+        open_quote = _EXCHANGE_ERROR_REVERSE_OPEN_QUOTE.get(close_quote, close_quote)
+        opening = text.find(open_quote, offset, match.start())
         if opening >= 0:
             parts.append(text[offset:opening])
         parts.extend(("<redacted> ", match["clause"]))
