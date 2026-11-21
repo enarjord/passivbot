@@ -223,6 +223,21 @@ def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
     }) == {"error_reason": f"Rejected {label}: <redacted>"}
 
 
+@pytest.mark.parametrize(("message", "sanitized"), [
+    ("Invalid passphrase 'short-secret'", "Invalid passphrase <redacted>"),
+    ("Invalid api_key (short-secret)", "Invalid api_key <redacted>"),
+    ("Invalid api_key(short-secret)", "Invalid api_key<redacted>"),
+    ("Invalid access token short-secret", "Invalid access token <redacted>"),
+    ("Invalid private key\nshort-secret", "Invalid private key <redacted>"),
+    ("The API key is expired.", "The API key is expired."),
+    ("Invalid signature for the configured private key.", "Invalid signature for the configured private key."),
+])
+def test_reason_distinguishes_credential_echoes_from_status_words(message, sanitized):
+    assert bounded_exchange_error_context_from_mapping({"message": message}) == {
+        "error_reason": sanitized,
+    }
+
+
 def test_bounded_exchange_error_context_redacts_urls_and_email_addresses():
     error = RuntimeError(
         'gate {"message":"contact trader@example.com or visit '

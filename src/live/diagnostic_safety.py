@@ -30,17 +30,32 @@ _EXCHANGE_ERROR_PEM_RE = re.compile(
     r"-----BEGIN [^\r\n]*PRIVATE KEY-----.*?(?:-----END [^\r\n]*PRIVATE KEY-----|\Z)",
     re.IGNORECASE | re.DOTALL,
 )
-_EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
-    r"(?P<label>\b(?:api[-_ ]?(?:key|secret|token|passphrase)|private[-_ ]?key|"
+_EXCHANGE_ERROR_CREDENTIAL_LABEL = (
+    r"\b(?:api[-_ ]?(?:key|secret|token|passphrase)|private[-_ ]?key|"
     r"client[-_ ]?secret|access[-_ ]?(?:key|secret|sign(?:ature)?|token|passphrase)|"
-    r"refresh[-_ ]?token|"
-    r"session(?:[-_ ]?(?:id|key|token))?|signing[-_ ]?key|"
+    r"refresh[-_ ]?token|session[-_ ]?(?:id|key|token)|signing[-_ ]?key|"
     r"secret(?:[-_ ]?key)?|signature|passphrase|password|token|"
-    r"listen[-_ ]?key|seed(?:[-_ ]?phrase)?|mnemonic)(?![\w-])"
-    r"(?:['\"])?\s*[:=]\s*)"
-    # A correctly quoted value has a known end. The rest of an unquoted or
-    # malformed value is ambiguous: redact the suffix rather than guessing its end.
-    r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[\s\S]+)""",
+    r"listen[-_ ]?key|seed[-_ ]?phrase|mnemonic)(?![\w-])"
+)
+# A correctly quoted value has a known end. The rest of an unquoted or
+# malformed value is ambiguous: redact the suffix rather than guessing its end.
+_EXCHANGE_ERROR_CREDENTIAL_VALUE = (
+    r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[\s\S]+)"""
+)
+_EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
+    rf"""(?P<label>(?:{_EXCHANGE_ERROR_CREDENTIAL_LABEL}|\b(?:seed|session)(?![\w-]))['"]?\s*[:=]\s*)"""
+    + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
+    re.IGNORECASE,
+)
+_EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
+    rf"""(?P<label>{_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=['"(\[])))"""
+    # Keep standalone diagnostic wording, including a credential followed by
+    # a known status clause. Other trailing text may be a bare credential echo.
+    r"(?![\s.,!?;]|<redacted)"
+    r"(?!(?:(?:is |was |has )?(?:expired|invalid|missing|rejected|revoked|disabled|"
+    r"incorrect|required|not found|not recognized|does not exist)|"
+    r"for the configured private key)(?=\s*(?:[.!?](?:\s|$)|$)))"
+    + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE = re.compile(r"\{|\[\s*[\[{\x22\x27]")
@@ -306,6 +321,7 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
         text = _EXCHANGE_ERROR_AUTH_SCHEME_RE.sub("<redacted-auth>", text)
         text = _EXCHANGE_ERROR_PEM_RE.sub("<redacted-key>", text)
         text = _EXCHANGE_ERROR_CREDENTIAL_RE.sub(r"\g<label><redacted>", text)
+        text = _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE.sub(r"\g<label><redacted>", text)
         text = _EXCHANGE_ERROR_SECRET_VALUE_RE.sub(
             lambda match: (
                 match[0] if _PUBLIC_WALLET_ADDRESS_RE.fullmatch(match[0]) else "<redacted>"
