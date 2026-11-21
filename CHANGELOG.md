@@ -21,6 +21,10 @@ since the latest release tag; these features may already be available when insta
   other side's unused forager volatility span no longer count as proxy/exact
   constraint disagreement.
 
+- Include sanitized Hyperliquid rejection reasons in live order events, including an
+  unrecognized API wallet. Preserve useful rejection wording and redact authentication
+  values and embedded request payloads.
+
 - Sign Lighter cancels and modifications with the exact order index. Indexes above the
   binary64 integer range are no longer rounded before they reach the signer.
 

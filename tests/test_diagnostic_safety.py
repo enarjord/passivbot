@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from live.diagnostic_safety import (
     bounded_exception_code,
     bounded_exception_status,
@@ -126,7 +130,76 @@ def test_bounded_exchange_error_context_redacts_long_tokens_and_sensitive_reason
         "error_reason": "bad client id <redacted>",
     }
     assert bounded_exchange_error_context(sensitive) == {
-        "error_label": "INVALID_PARAM_VALUE"
+        "error_label": "INVALID_PARAM_VALUE",
+        "error_reason": "api_key=<redacted>",
+    }
+
+
+@pytest.mark.parametrize("prefix", ["", "L1 error: "])
+def test_hyperliquid_signer_rejection_has_stable_label_and_safe_reason(prefix):
+    payload = {
+        "status": "err",
+        "response": f"{prefix}User or API Wallet 0x{'a' * 40} does not exist.",
+    }
+    assert bounded_exchange_error_context(RuntimeError("hyperliquid " + json.dumps(payload))) == {
+        "error_label": "HYPERLIQUID_UNRECOGNIZED_WALLET",
+        "error_reason": "Hyperliquid does not recognize the API wallet.",
+    }
+
+
+@pytest.mark.parametrize("action", ["order", "cancel"])
+def test_hyperliquid_per_order_reason_reaches_the_structured_event(action):
+    from types import SimpleNamespace
+
+    from live.event_bus import EventTypes, LiveEvent, format_console_event
+    from live.event_emitters import emit_execution_order_event
+
+    events = []
+    bot = SimpleNamespace(
+        _current_live_event_cycle_id=lambda: "cy_1",
+        _emit_live_event=lambda event_type, **fields: events.append(LiveEvent(event_type, **fields)),
+    )
+    error = RuntimeError("hyperliquid " + json.dumps({
+        "status": "ok",
+        "response": {
+            "type": action,
+            "data": {
+                "statuses": [{"resting": {"oid": 1}}, {"error": "Order has invalid size."}],
+            },
+        },
+    }))
+
+    emit_execution_order_event(
+        bot,
+        event_type=EventTypes.EXECUTION_AMBIGUOUS,
+        order={"symbol": "ETH/USDC:USDC"},
+        action="create" if action == "order" else "cancel",
+        status="degraded",
+        error=error,
+    )
+
+    assert len(events) == 1
+    assert events[0].data["error_reason"] == "Order has invalid size."
+    assert "reason=Order has invalid size." in format_console_event(events[0])
+
+
+@pytest.mark.parametrize(("message", "sanitized"), [
+    ("API key expired. Generate a new token.", "API key expired. Generate a new token."),
+    ("Invalid signature for the configured private key.", "Invalid signature for the configured private key."),
+    ('Could not authenticate api_key="short value", retry later',
+     "Could not authenticate api_key=<redacted>, retry later"),
+    ("Rejected. X-MBX-APIKEY: tiny", "Rejected. X-MBX-APIKEY: <redacted>"),
+    ("Invalid token. Bearer ab.c.d", "Invalid token. <redacted-auth>"),
+    ("Rejected. Authorization: Basic aGk=", "Rejected. <redacted-header>"),
+    ("Rejected. Cookie: session=hidden; second=value", "Rejected. <redacted-header>"),
+    ('Request invalid {"action":{"type":"order"},"signature":{"r":"short","s":"secret"}}',
+     "Request invalid <redacted-payload>"),
+    ("Unable to verify signature=0x" + "a" * 130, "Unable to verify signature=<redacted>"),
+    ("Check wallet 0x" + "c" * 40, "Check wallet 0x" + "c" * 40),
+])
+def test_error_reason_preserves_words_and_redacts_authentication_values(message, sanitized):
+    assert bounded_exchange_error_context_from_mapping({"message": message}) == {
+        "error_reason": sanitized,
     }
 
 
