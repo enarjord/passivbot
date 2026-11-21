@@ -64,7 +64,7 @@ _SAFE_CREDENTIAL_STATUS = (
 )
 # Punctuation attached to text can start a credential. A completed sentence
 # has whitespace or ends the reason, optionally inside closing punctuation.
-_EXCHANGE_ERROR_CREDENTIAL_LABEL_END = r"""(?:\s+|(?=['"(\[,;.!?]))"""
+_EXCHANGE_ERROR_CREDENTIAL_LABEL_END = r"""(?:\s+|(?=['"\x60‘’“”«»<(\[,;.!?]))"""
 _EXCHANGE_ERROR_CREDENTIAL_VALUE_START = (
     r"""(?!\s|[:=：＝]|<redacted|[.!?]+(?=\s|\Z|["')\]]+\Z))"""
 )
@@ -96,8 +96,8 @@ _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
 )
-# A short phrase between a closing quote and a credential label is an
-# ambiguous echo. Bound the phrase without assuming a fixed exchange wording.
+# A quoted value directly before a credential label is an echo. Match a
+# short intervening phrase as well, without assuming fixed exchange wording.
 _EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE = re.compile(
     r"""(?P<quote>['"\x60’”»])(?:\s*[:,;(.\-–—]\s*|\s+)"""
     r"""(?P<clause>(?:[a-z]++(?:['’][a-z]++)*+\s+){0,6}?"""
@@ -435,13 +435,18 @@ def _payload_prefix_has_open_quote(text: str) -> bool:
             continue
         if (
             char in {"'", "’"}
-            and 0 < index < len(text) - 1
+            and index > 0
             and text[index - 1].isalnum()
-            and text[index + 1].isalnum()
+            and (
+                closing_quote is None
+                or (index + 1 < len(text) and text[index + 1].isalnum())
+            )
         ):
             continue
         if closing_quote is None:
             closing_quote = _EXCHANGE_ERROR_QUOTE_CLOSE.get(char)
+            if closing_quote is None and char in _EXCHANGE_ERROR_QUOTE_OPEN:
+                closing_quote = char
         elif char == closing_quote:
             closing_quote = None
         elif char == "\\":
