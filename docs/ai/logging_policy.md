@@ -4,6 +4,26 @@ This document owns stable logging, redaction, and sink behavior. Event values ar
 `generated/live_event_registry.md`; event-family payload contracts live in
 `features/live_events.md`. Migration progress belongs under `docs/plans/`.
 
+## Event Stream First
+
+The centralized event stream is the source of truth for runtime telemetry. The console and
+human-readable text logs show a selected projection of that stream.
+
+Record every new or changed diagnostic fact as bounded, queryable event data before exposing it
+to a sink. Reuse the event that owns the observation when one exists. Make display-only changes
+in the sink using the event's fields and visibility signals. Direct logging from a producer must
+never be the only source for a diagnostic fact, even in code that still uses legacy logging.
+Console suppression must not suppress the event.
+
+Pure presentation such as a decorative startup banner may be console-only. Startup phases,
+configuration failures, decisions, observed state, and retry context are telemetry. A documented
+fallback may display the same facts when the structured console or event pipeline is unavailable.
+It must not add information missing from the event or run alongside a healthy console projection.
+
+Telemetry changes require a regression check that asserts the diagnostic fields in the event
+stream independently of console output. When the console changes, also check the sink's
+projection. Reject a change if any new diagnostic fact can only be found in console or text logs.
+
 ## Audiences And Levels
 
 | Level | Audience | Content |
@@ -79,9 +99,7 @@ Routine flat-universe diagnostics, high-frequency progress, and debug payload sh
 structured or debug sinks. Account magnitudes can appear on the local console; do not forward
 stdout to shared aggregation without a deliberate redaction policy.
 
-Legacy stdlib lines may temporarily serve as fallback when structured console projection is
-disabled or unavailable. New work should not duplicate an event in both paths without an explicit
-migration reason.
+Legacy console fallbacks follow [Event Stream First](#event-stream-first).
 
 ### Admission Rules
 
@@ -222,12 +240,14 @@ visibly rather than being ignored.
 
 ## Review Questions
 
-1. Can operators tail INFO for long periods without noise overload?
-2. Can they distinguish waiting, degraded operation, and failure?
-3. Can developers correlate a decision without exposing secrets or unbounded payloads?
-4. Does sink failure remain isolated from trading behavior?
-5. Is each INFO record a new operator fact, transition, action, or bounded summary?
-6. Do steady-state logical-record and displayed-row measurements satisfy the console budget?
+1. Does every new diagnostic fact originate in the event stream and reach the console only
+   through its projection or documented fallback?
+2. Can operators tail INFO for long periods without noise overload?
+3. Can they distinguish waiting, degraded operation, and failure?
+4. Can developers correlate a decision without exposing secrets or unbounded payloads?
+5. Does sink failure remain isolated from trading behavior?
+6. Is each INFO record a new operator fact, transition, action, or bounded summary?
+7. Do steady-state logical-record and displayed-row measurements satisfy the console budget?
 
 Numbered failures that advance the finite risk-input recovery budget each emit one warning (the
 final attempt emits an error), even within five minutes. Readiness polls during backoff do not

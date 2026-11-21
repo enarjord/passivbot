@@ -69,7 +69,9 @@ or `optimize` section. Resolve defaults in canonical config loading. See
 
 ## Readable Output
 
-Use bounded, actionable logs with repetitive noise suppressed. Follow [logging policy](logging_policy.md).
+Publish diagnostic telemetry in the centralized event stream. Derive console diagnostics from
+that stream and keep them bounded and actionable. Follow the
+[event-stream-first logging policy](logging_policy.md#event-stream-first).
 Use streamlined JSON for human-authored or human-edited configs and normal JSON for tool outputs.
 
 ## Scope, Testing, And Compatibility
