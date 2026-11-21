@@ -534,6 +534,12 @@ withheld before submission. It carries the scoped symbol in `data.symbols`, `dat
 and `data.retry_remaining_seconds` measured from the process-local monotonic deadline when the
 batch filter or connector withheld the attempt. Skips retain DEBUG console visibility.
 
+`execution.create_health` reports degradation after five unacknowledged create outcomes,
+recovery on acceptance, or the fatal stop decision. Its bounded fields distinguish total
+failed creates from unconfirmed outcomes and include elapsed seconds, the affected write
+action, the next action, and the latest safe failure details where available. A confirmed
+API-wallet rejection may stop on a create or a cancel with zero preceding create failures.
+
 ## Fill Confirmation Fallbacks
 
 `fill.position_price_tolerance_used` records the accepted bounded numeric difference

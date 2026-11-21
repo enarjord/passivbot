@@ -206,6 +206,23 @@ Approved and ignored coin state is an entry-eligibility input. Stale or unreadab
 blocks affected initial entries but not protective management. With
 `live.modes.disapproved_position=graceful_stop`, removal of a held coin is handled as graceful stop.
 
+## Sustained Create Failure
+
+Count individual create outcomes after actual transport admission, independent of the hourly
+failed-batch restart counter and event delivery. An acknowledged create or an authoritative
+open order/fill matching the exact submitted symbol and client ID clears the failure streak.
+Internal replacements of the bot preserve the streak for the current process. Cancellation
+and read outcomes do not advance or clear it. Skipped and never-submitted orders are excluded.
+
+A failed create at least 60 minutes after the first failure is fatal if five or more creates
+have failed in the streak. An inconclusive transport result or missing acknowledgement can
+contribute after allowing up to 60 seconds for positive confirmation on the regular account
+and fill refreshes. Preserve the difference between a rejection and an unconfirmed outcome.
+Once the threshold is reached, further ambiguous attempts cannot extend that deadline.
+An exact Hyperliquid rejection of the configured API wallet on create or cancel is immediately
+fatal. Both fatal paths emit actionable execution health diagnostics and exit unsuccessfully
+after local process cleanup, bypassing internal restart.
+
 ## Fill And PnL Inputs
 
 Structural fill history and realized-PnL quality are separate readiness facts. Fill-dependent

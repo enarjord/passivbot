@@ -4642,11 +4642,27 @@ async def test_update_pnls_shared_memory_backfills_bounded_origin_when_coverage_
 
 
 @pytest.mark.asyncio
-async def test_update_pnls_shared_memory_uses_incremental_refresh_when_cache_is_full_history():
+@pytest.mark.parametrize("matches_unconfirmed_create", [False, True])
+async def test_update_pnls_shared_memory_uses_incremental_refresh_when_cache_is_full_history(
+    matches_unconfirmed_create,
+):
+    from ccxt.base.errors import RequestTimeout
+    from live.create_failure_guard import CreateFailureGuard
     bot = _unit_bot()
     bot._live_risk_uses_authoritative_pnl = lambda: True
+    symbol = "BTC/USDT:USDT"
+    guard = bot._create_failure_guard = CreateFailureGuard()
+    unconfirmed = {"symbol": symbol, "custom_id": "submitted-id"}
+    guard.submitted(unconfirmed)
+    guard.completed(bot, unconfirmed, error=RequestTimeout())
     cached_events = [
-        SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
+        SimpleNamespace(
+            timestamp=1_700_000_000_000,
+            id="fill-1",
+            source_ids=["fill-1"],
+            symbol=symbol,
+            client_order_id="submitted-id" if matches_unconfirmed_create else "other-id",
+        )
     ]
 
     class _Manager:
@@ -4687,6 +4703,7 @@ async def test_update_pnls_shared_memory_uses_incremental_refresh_when_cache_is_
     result = await bot.update_pnls()
 
     assert result is True
+    assert guard.failures == (0 if matches_unconfirmed_create else 1)
     bot._pnls_manager.refresh.assert_not_awaited()
     bot._pnls_manager.refresh_latest.assert_awaited_once_with(
         overlap=20,

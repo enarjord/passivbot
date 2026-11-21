@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 import passivbot as pb
-from passivbot_exceptions import FatalBotException, RestartBotException
+from passivbot_exceptions import FatalBotException, FatalOrderWriteError, RestartBotException
 
 
 def crash():
@@ -381,7 +381,11 @@ async def test_recovery_waits_for_admitted_ordinary_execution(outcome, caplog):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["fatal", "restart_budget", "sigterm_startup", "sigterm_active", "sigterm_cooldown"])
+@pytest.mark.parametrize(
+    "failure",
+    ["fatal", "fatal_write_stop", "restart_budget", "sigterm_startup",
+     "sigterm_active", "sigterm_cooldown"],
+)
 async def test_live_lifecycle_terminal_outcomes(caplog, monkeypatch, failure):
     from unittest.mock import AsyncMock, Mock
 
@@ -413,7 +417,34 @@ async def test_live_lifecycle_terminal_outcomes(caplog, monkeypatch, failure):
     monkeypatch.setattr(pb, "load_markets", AsyncMock())
     monkeypatch.setattr(pb, "parse_overrides", lambda config, **kw: config)
     monkeypatch.setattr(pb, "compile_runtime_config", lambda config, **kw: config)
-    monkeypatch.setattr(pb, "setup_bot", Mock(return_value=bot))
+    write_bots = []
+
+    def setup(_config):
+        if failure != "fatal_write_stop":
+            return bot
+        from ccxt.base.errors import InvalidOrder
+
+        instance = SimpleNamespace(
+            config=config,
+            stop_signal_received=False,
+            cleanup_for_restart=AsyncMock(),
+            _log_silence_watchdog_stage="execution_loop",
+        )
+
+        async def start():
+            guard = instance._create_failure_guard
+            order = {"symbol": "BTC/USDC:USDC"}
+            guard.submitted(order)
+            guard.completed(instance, order, error=InvalidOrder())
+            if len(write_bots) == 2:
+                raise FatalOrderWriteError("sustained create failure")
+            raise RuntimeError("password=RESTART_SECRET")
+
+        instance.start_bot = start
+        write_bots.append(instance)
+        return instance
+
+    monkeypatch.setattr(pb, "setup_bot", Mock(side_effect=setup))
     monkeypatch.setattr(pb, "bot", None, raising=False)
     handlers = {}
 
@@ -453,14 +484,26 @@ async def test_live_lifecycle_terminal_outcomes(caplog, monkeypatch, failure):
                 await pb.main()
             assert exc.value.code == 1
 
-    expected_starts = {"restart_budget": 2, "sigterm_startup": 0}.get(failure, 1)
+    expected_starts = {
+        "fatal_write_stop": 2,
+        "restart_budget": 2,
+        "sigterm_startup": 0,
+    }.get(failure, 1)
     assert pb.setup_bot.call_count == expected_starts
-    assert bot.cleanup_for_restart.await_count == expected_starts - (failure == "sigterm_active")
+    if failure == "fatal_write_stop":
+        first, second = write_bots
+        assert first._create_failure_guard is second._create_failure_guard
+        assert second._create_failure_guard.failures == 2
+        first.cleanup_for_restart.assert_awaited_once()
+        second.cleanup_for_restart.assert_awaited_once()
+        assert "action=stop" in caplog.text
+    else:
+        assert bot.cleanup_for_restart.await_count == expected_starts - (failure == "sigterm_active")
     if failure == "sigterm_active":
         bot.shutdown_gracefully.assert_awaited_once()
     if failure == "fatal":
         assert "passivbot fatal error" in caplog.text
-    if failure in {"sigterm_cooldown", "restart_budget"}:
+    if failure in {"sigterm_cooldown", "restart_budget", "fatal_write_stop"}:
         sleep.assert_awaited_once_with(60)
     else:
         sleep.assert_not_awaited()

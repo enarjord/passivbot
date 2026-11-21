@@ -1276,6 +1276,9 @@ def record_create_connector_admission(bot, order: dict) -> None:
         ),
         None,
     )
+    guard = getattr(bot, "_create_failure_guard", None)
+    if guard is not None:
+        guard.submitted(order)
     passivbot_cls._record_emitted_order_custom_id(bot, order, status="submitted")
     passivbot_cls._record_order_churn_allowance_attempts(bot, 1, action_kind="create")
     passivbot_cls._emit_execution_order_event(
@@ -1441,6 +1444,9 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             res = await bot.execute_orders(orders)
         else:
             res = await _execute_ordinary_creates_serially(bot, orders, create_wave)
+        guard = getattr(bot, "_create_failure_guard", None)
+        if guard is not None:
+            guard.check(bot)
     except (RestartBotException, FatalBotException):
         # Batch results were not classified; do not publish a partial cycle trace.
         bot._fresh_entry_eligibility_trace = None
