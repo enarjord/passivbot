@@ -231,9 +231,9 @@ def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
     ('Invalid "API key":"short-secret"', 'Invalid "API key":<redacted>'),
     ('Invalid "passphrase"short-secret', 'Invalid "passphrase"<redacted>'),
     ("Invalid passphrase'short-secret'", "Invalid passphrase<redacted>"),
-    ("'short-secret' is an invalid private key", "<redacted> is an invalid private key"),
+    ("'tiny123' is an invalid private key", "<redacted> is an invalid private key"),
     (
-        "'short-secret' is an invalid x-a-b-c-d-e-api-key",
+        "'tiny123' is an invalid x-a-b-c-d-e-api-key",
         "<redacted> is an invalid x-a-b-c-d-e-api-key",
     ),
     ("Invalid passphrase; supplied short-secret", "Invalid passphrase<redacted>"),
@@ -252,6 +252,8 @@ def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
     ("authorization abc123 rejected", "authorization <redacted>"),
     ("Authorization header abc123", "Authorization header <redacted>"),
     ("Missing Authorization header", "Missing Authorization header"),
+    ("Authorization failed.", "Authorization failed."),
+    ("Authorization denied", "Authorization denied"),
     ("Cookie expired", "Cookie expired"),
     ("Proxy-Authorization abc123", "Proxy-Authorization <redacted>"),
     ("Set-Cookie abc123", "Set-Cookie <redacted>"),
@@ -276,6 +278,63 @@ def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
 def test_reason_distinguishes_credential_echoes_from_status_words(message, sanitized):
     assert bounded_exchange_error_context_from_mapping({"message": message}) == {
         "error_reason": sanitized,
+    }
+
+
+@pytest.mark.parametrize(("message", "sanitized"), [
+    ("Invalid passphrase 'abc'def'", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase 'abc' def'", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase 'abc'.def'", "Invalid passphrase <redacted>"),
+    ('Rejected api_key="abc"def"', "Rejected api_key=<redacted>"),
+    ('Malformed Bearer "abc"def"', "Malformed <redacted-auth>"),
+    (r'Invalid passphrase "abc\"def", retry later', "Invalid passphrase <redacted>, retry later"),
+    ("'tiny123' is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ('"tiny123" is not the correct password', "<redacted> is not the correct password"),
+    ("'tiny123' isn't a valid passphrase", "<redacted> isn't a valid passphrase"),
+    ("'tiny123' is no longer a valid passphrase", "<redacted> is no longer a valid passphrase"),
+    ("'tiny123' is an invalid or expired API key", "<redacted> is an invalid or expired API key"),
+    ("'tiny123' has expired api key", "<redacted> has expired api key"),
+    ("'tiny123' does not match any API key", "<redacted> does not match any API key"),
+    ("‘tiny123’ is next to an expired API key", "<redacted> is next to an expired API key"),
+    ("`tiny123` is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ('"tiny123" wasn\'t a recognized API key', "<redacted> wasn't a recognized API key"),
+    ("Rejected: 'abc'def' was not the correct private key",
+     "Rejected: <redacted> was not the correct private key"),
+    ("Rejected: 'abc' violet rabbit' was not the correct private key",
+     "Rejected: <redacted> was not the correct private key"),
+    ("'a' b 'c' is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ("‘abc’ def’ is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ("User 'bob' sent 'hunter' which is invalid passphrase",
+     "User <redacted> which is invalid passphrase"),
+    ("'tiny123': invalid API key", "<redacted> invalid API key"),
+    ("'tiny123', invalid API key", "<redacted> invalid API key"),
+    ("'tiny123' - invalid API key", "<redacted> invalid API key"),
+    ("«tiny123» is not a valid passphrase", "<redacted> is not a valid passphrase"),
+])
+def test_credential_echoes_require_unambiguous_quotes(message, sanitized):
+    assert bounded_exchange_error_context_from_mapping({"message": message}) == {
+        "error_reason": sanitized,
+    }
+
+
+@pytest.mark.parametrize("message", [
+    "Invalid passphrase=\"first' violet rabbit API key\"",
+    "Invalid passphrase \"first' violet rabbit API key\"",
+    "Bearer \"first' violet rabbit API key\"",
+    "'first api_key=second' is not a valid passphrase",
+    "Invalid 'api_key' violet rabbit passphrase",
+    "'short-secret' is an invalid private key",
+    "'abc' my token' is not a valid passphrase",
+    "'abc' my token.' is not a valid passphrase",
+    "tiny123 is an invalid passphrase",
+    "tiny123 is not a valid passphrase",
+    "tiny123 has expired API key",
+    "tiny123 does not match any API key",
+    "tiny123 is an invalid passphrase; 'other' is an invalid API key",
+])
+def test_credential_echoes_with_ambiguous_boundaries_drop_reason(message):
+    assert bounded_exchange_error_context_from_mapping({"message": message}) == {
+        "error_reason": "<redacted>",
     }
 
 
