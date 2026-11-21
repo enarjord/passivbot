@@ -66,7 +66,7 @@ _SAFE_CREDENTIAL_STATUS = (
 # has whitespace or ends the reason, optionally inside closing punctuation.
 _EXCHANGE_ERROR_CREDENTIAL_LABEL_END = r"""(?:\s+|(?=['"\x60‘’“”«»<(\[,;.!?]))"""
 _EXCHANGE_ERROR_CREDENTIAL_VALUE_START = (
-    r"""(?!\s|[:=：＝]|<redacted|[.!?]+(?=\s|\Z|["')\]]+\Z))"""
+    r"""(?!\s|[:=：＝]|[.!?]+(?=\s|\Z|["')\]]+\Z))"""
 )
 _EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
     r"\b(?:bearer|basic)(?>\s+(?:authentication|auth|token)\b|)"
