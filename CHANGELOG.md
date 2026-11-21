@@ -15,6 +15,10 @@ its own version heading. See [release status](docs/releases.md).
   for other orders. Structured execution events report the retry interval and the
   time remaining on skipped submissions.
 
+- Include sanitized Hyperliquid rejection reasons in live order events, including an
+  unrecognized API wallet. Preserve useful rejection wording and redact authentication
+  values and embedded request payloads.
+
 - Use each suite scenario’s start for trading and scoring when reusing a
   prepared OHLCV dataset.
 

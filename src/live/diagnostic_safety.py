@@ -16,7 +16,70 @@ _SENSITIVE_EXCEPTION_TYPE_RE = re.compile(
 _EXCEPTION_STATUS_RE = re.compile(r"[0-9]{1,3}")
 _EXCEPTION_CODE_RE = re.compile(r"-?[0-9]{1,12}")
 _EXCHANGE_ERROR_LABEL_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}")
+# An unlabelled opaque value can still be a credential.
 _EXCHANGE_ERROR_SECRET_VALUE_RE = re.compile(r"[A-Za-z0-9+/_=-]{24,}")
+_PUBLIC_WALLET_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
+_EXCHANGE_ERROR_AUTH_HEADER_RE = re.compile(
+    r"""(?<![a-z0-9])(?:[a-z0-9]+[-_]+)*(?:authorization|cookie)['"]?\s*[:=].*""",
+    re.IGNORECASE | re.DOTALL,
+)
+_EXCHANGE_ERROR_PEM_RE = re.compile(
+    r"-----BEGIN [^\r\n]*PRIVATE KEY-----.*?(?:-----END [^\r\n]*PRIVATE KEY-----|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+_EXCHANGE_ERROR_CREDENTIAL_LABEL = (
+    r"(?<![a-z0-9])(?:[a-z0-9]+[-_]+)*"
+    r"(?:api[-_ ]?(?:key|secret|token|passphrase)|private[-_ ]?key|"
+    r"client[-_ ]?secret|access[-_ ]?(?:key|secret|sign(?:ature)?|token|passphrase)|"
+    r"refresh[-_ ]?token|session[-_ ]?(?:id|key|token)|signing[-_ ]?key|"
+    r"secret(?:[-_ ]?key)?|signature|passphrase|password|token|"
+    r"listen[-_ ]?key|seed[-_ ]?phrase|mnemonic)(?![\w-])"
+)
+# A correctly quoted value has a known end. The rest of an unquoted or
+# malformed value is ambiguous: redact the suffix rather than guessing its end.
+_EXCHANGE_ERROR_CREDENTIAL_VALUE = (
+    r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[\s\S]+)"""
+)
+_SAFE_CREDENTIAL_STATUS = (
+    r"(?!(?:(?:is |was |has )?(?:expired|invalid|missing|rejected|revoked|disabled|"
+    r"incorrect|required|not found|not recognized|does not exist)|"
+    r"for the configured private key)(?=\s*(?:[.!?](?:\s|$)|$)))"
+)
+_EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
+    r"\b(?:bearer|basic)(?>\s+(?:authentication|auth|token)\b|)"
+    r"\s+(?![\s.!?,;:=])"
+    + _SAFE_CREDENTIAL_STATUS
+    + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
+    re.IGNORECASE,
+)
+_EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
+    rf"""(?P<label>(?:{_EXCHANGE_ERROR_CREDENTIAL_LABEL}|\b(?:seed|session)(?![\w-])|"""
+    r"""\b(?:basic|bearer)(?:[-_ ]+(?:auth(?:entication)?|token))?)['"]?\s*[:=]\s*)"""
+    + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
+    re.IGNORECASE,
+)
+_EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
+    rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?P=quote)\s*|"""
+    rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=['"(\[,;])))"""
+    # Keep standalone diagnostic wording, including a credential followed by
+    # a known status clause. Other trailing text may be a bare credential echo.
+    r"(?![\s.!?:=]|<redacted)"
+    + _SAFE_CREDENTIAL_STATUS
+    + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
+    re.IGNORECASE,
+)
+_EXCHANGE_ERROR_PREFIXED_CREDENTIAL_ECHO_RE = re.compile(
+    r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')"""
+    r"\s+(?P<clause>(?:is|was)\s+(?:(?:an?|the)\s+)?"
+    r"(?:invalid|incorrect|expired|revoked)\s+"
+    + _EXCHANGE_ERROR_CREDENTIAL_LABEL + ")",
+    re.IGNORECASE,
+)
+_EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE = re.compile(r"\{|\[\s*[\[{\x22\x27]")
+_HYPERLIQUID_UNRECOGNIZED_WALLET_RE = re.compile(
+    r"(?:L1 error: )?User or API Wallet 0x[0-9a-fA-F]{40} does not exist\.?"
+)
+HYPERLIQUID_UNRECOGNIZED_WALLET = "HYPERLIQUID_UNRECOGNIZED_WALLET"
 _EXCHANGE_ERROR_EMAIL_RE = re.compile(
     r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"
 )
@@ -264,12 +327,27 @@ def _bounded_exchange_error_label(value: object) -> str | None:
 def _bounded_exchange_error_reason(value: object) -> str | None:
     if type(value) is not str or not value or len(value) > _EXCHANGE_ERROR_PAYLOAD_MAX_LEN:
         return None
-    if _SENSITIVE_EXCEPTION_TYPE_RE.search(value):
-        return None
     try:
-        text = _EXCHANGE_ERROR_URL_RE.sub("<redacted-url>", value)
+        # A nested request/response dump can contain short credentials or a
+        # replayable action. Keep the reason preceding it and drop the dump.
+        prefix, *payload = _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE.split(value, maxsplit=1)
+        text = prefix.rstrip() + " <redacted-payload>" if payload else prefix
+        text = _EXCHANGE_ERROR_URL_RE.sub("<redacted-url>", text)
         text = _EXCHANGE_ERROR_EMAIL_RE.sub("<redacted-email>", text)
-        text = _EXCHANGE_ERROR_SECRET_VALUE_RE.sub("<redacted>", text)
+        text = _EXCHANGE_ERROR_AUTH_HEADER_RE.sub("<redacted-header>", text)
+        text = _EXCHANGE_ERROR_AUTH_SCHEME_RE.sub("<redacted-auth>", text)
+        text = _EXCHANGE_ERROR_PEM_RE.sub("<redacted-key>", text)
+        text = _EXCHANGE_ERROR_CREDENTIAL_RE.sub(r"\g<label><redacted>", text)
+        text = _EXCHANGE_ERROR_PREFIXED_CREDENTIAL_ECHO_RE.sub(
+            r"<redacted> \g<clause>", text
+        )
+        text = _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE.sub(r"\g<label><redacted>", text)
+        text = _EXCHANGE_ERROR_SECRET_VALUE_RE.sub(
+            lambda match: (
+                match[0] if _PUBLIC_WALLET_ADDRESS_RE.fullmatch(match[0]) else "<redacted>"
+            ),
+            text,
+        )
         text = " ".join(text.split())
         text = "".join(
             char if char.isascii() and char.isprintable() and char not in {"|"} else "_"
@@ -302,18 +380,44 @@ def _bounded_payload_scalar(
     return None
 
 
-def bounded_exchange_error_context_from_mapping(payload: dict) -> dict[str, str]:
-    """Extract bounded diagnostics from a CCXT result mapping.
+def _hyperliquid_error_details(envelopes: tuple[dict, ...]) -> dict[str, str]:
+    """Read the two Hyperliquid error envelopes without exposing their bodies."""
+    for envelope in envelopes:
+        response = envelope.get("response")
+        status = envelope.get("status")
+        if status == "err" and type(response) is str:
+            reason = _bounded_exchange_error_reason(response)
+            if reason is None:
+                continue
+            if _HYPERLIQUID_UNRECOGNIZED_WALLET_RE.fullmatch(response):
+                return {
+                    "error_label": HYPERLIQUID_UNRECOGNIZED_WALLET,
+                    "error_reason": "Hyperliquid does not recognize the API wallet.",
+                }
+            return {"error_reason": reason}
+        if status != "ok" or type(response) is not dict:
+            continue
+        if response.get("type") not in ("order", "cancel"):
+            continue
+        data = response.get("data")
+        statuses = data.get("statuses") if type(data) is dict else None
+        if type(statuses) is list:
+            for member in statuses[:8]:
+                if type(member) is dict:
+                    reason = _bounded_exchange_error_reason(member.get("error"))
+                    if reason is not None:
+                        return {"error_reason": reason}
+    return {}
 
-    Only the normalized result, its exact ``info`` mapping, and a bounded number
-    of exact OKX per-order ``data`` mappings are inspected. Raw payloads are
-    never retained.
-    """
+
+def bounded_exchange_error_context_from_mapping(payload: dict) -> dict[str, str]:
+    """Extract bounded diagnostics from normalized results and known exchange envelopes."""
     result: dict[str, str] = {}
     if type(payload) is not dict:
         return result
     info = payload.get("info")
     envelopes = (payload, info) if type(info) is dict else (payload,)
+    result.update(_hyperliquid_error_details(envelopes))
     order_details: list[dict] = []
     for envelope in envelopes:
         data = envelope.get("data")
@@ -346,21 +450,18 @@ def bounded_exchange_error_context_from_mapping(payload: dict) -> dict[str, str]
             result["error_code"] = code
             break
     for candidate in payloads:
-        for key in ("label", "error", "name"):
-            label = _bounded_exchange_error_label(candidate.get(key))
-            if label is not None:
-                result["error_label"] = label
-                break
-        if "error_label" in result:
-            break
-    for candidate in payloads:
-        for key in ("sMsg", "message", "msg", "retMsg", "detail", "reason"):
-            reason = _bounded_exchange_error_reason(candidate.get(key))
-            if reason is not None:
-                result["error_reason"] = reason
-                break
-        if "error_reason" in result:
-            break
+        if "error_label" not in result:
+            for key in ("label", "error", "name"):
+                label = _bounded_exchange_error_label(candidate.get(key))
+                if label is not None:
+                    result["error_label"] = label
+                    break
+        if "error_reason" not in result:
+            for key in ("sMsg", "message", "msg", "retMsg", "detail", "reason"):
+                reason = _bounded_exchange_error_reason(candidate.get(key))
+                if reason is not None:
+                    result["error_reason"] = reason
+                    break
     return result
 
 
