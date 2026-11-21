@@ -213,6 +213,16 @@ def test_error_reason_preserves_words_and_redacts_authentication_values(message,
     }
 
 
+@pytest.mark.parametrize(
+    "label",
+    ["api_passphrase", "API key", "OK-ACCESS-PASSPHRASE", "session_id", "private key", "seed phrase"],
+)
+def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
+    assert bounded_exchange_error_context_from_mapping({
+        "message": f"Rejected {label}: synthetic multiword secret",
+    }) == {"error_reason": f"Rejected {label}: <redacted>"}
+
+
 def test_bounded_exchange_error_context_redacts_urls_and_email_addresses():
     error = RuntimeError(
         'gate {"message":"contact trader@example.com or visit '

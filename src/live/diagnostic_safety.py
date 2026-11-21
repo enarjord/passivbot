@@ -30,11 +30,6 @@ _EXCHANGE_ERROR_PEM_RE = re.compile(
     r"-----BEGIN [^\r\n]*PRIVATE KEY-----.*?(?:-----END [^\r\n]*PRIVATE KEY-----|\Z)",
     re.IGNORECASE | re.DOTALL,
 )
-_EXCHANGE_ERROR_MULTIPLE_WORD_CREDENTIAL_RE = re.compile(
-    r"(?P<label>\b(?:mnemonic|seed[-_ ]?phrase|password|passphrase)"
-    r"(?:['\"])?\s*[:=]\s*)(?!['\"])\S.*",
-    re.IGNORECASE | re.DOTALL,
-)
 _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
     r"(?P<label>\b(?:api[-_ ]?(?:key|secret|token|passphrase)|private[-_ ]?key|"
     r"client[-_ ]?secret|access[-_ ]?(?:key|secret|sign(?:ature)?|token|passphrase)|"
@@ -43,7 +38,9 @@ _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
     r"secret(?:[-_ ]?key)?|signature|passphrase|password|token|"
     r"listen[-_ ]?key|seed(?:[-_ ]?phrase)?|mnemonic)(?![\w-])"
     r"(?:['\"])?\s*[:=]\s*)"
-    r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|["'][\s\S]*|[^\s,;|]+)""",
+    # A correctly quoted value has a known end. The rest of an unquoted or
+    # malformed value is ambiguous: redact the suffix rather than guessing its end.
+    r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[\s\S]+)""",
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE = re.compile(r"\{|\[\s*[\[{\x22\x27]")
@@ -308,7 +305,6 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
         text = _EXCHANGE_ERROR_AUTH_HEADER_RE.sub("<redacted-header>", text)
         text = _EXCHANGE_ERROR_AUTH_SCHEME_RE.sub("<redacted-auth>", text)
         text = _EXCHANGE_ERROR_PEM_RE.sub("<redacted-key>", text)
-        text = _EXCHANGE_ERROR_MULTIPLE_WORD_CREDENTIAL_RE.sub(r"\g<label><redacted>", text)
         text = _EXCHANGE_ERROR_CREDENTIAL_RE.sub(r"\g<label><redacted>", text)
         text = _EXCHANGE_ERROR_SECRET_VALUE_RE.sub(
             lambda match: (
