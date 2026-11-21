@@ -231,6 +231,12 @@ def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
     ('Invalid "API key":"short-secret"', 'Invalid "API key":<redacted>'),
     ('Invalid "passphrase"short-secret', 'Invalid "passphrase"<redacted>'),
     ("Invalid passphrase'short-secret'", "Invalid passphrase<redacted>"),
+    ("Invalid passphrase !tiny123", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase .tiny123", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase ?tiny123", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase!tiny123", "Invalid passphrase<redacted>"),
+    ("Invalid passphrase! Rotate it.", "Invalid passphrase! Rotate it."),
+    ("Invalid api_key：tiny123", "Invalid api_key_<redacted>"),
     ("'tiny123' is an invalid private key", "<redacted> is an invalid private key"),
     (
         "'tiny123' is an invalid x-a-b-c-d-e-api-key",
@@ -304,10 +310,10 @@ def test_reason_distinguishes_credential_echoes_from_status_words(message, sanit
      "Rejected: <redacted> was not the correct private key"),
     ("'a' b 'c' is not a valid passphrase", "<redacted> is not a valid passphrase"),
     ("‘abc’ def’ is not a valid passphrase", "<redacted> is not a valid passphrase"),
-    ("User 'bob' sent 'hunter' which is invalid passphrase",
-     "User <redacted> which is invalid passphrase"),
     ("'tiny123': invalid API key", "<redacted> invalid API key"),
     ("'tiny123', invalid API key", "<redacted> invalid API key"),
+    ("'tiny123' (invalid API key)", "<redacted> invalid API key)"),
+    ("'tiny123'. invalid API key", "<redacted> invalid API key"),
     ("'tiny123' - invalid API key", "<redacted> invalid API key"),
     ("«tiny123» is not a valid passphrase", "<redacted> is not a valid passphrase"),
 ])
@@ -326,6 +332,12 @@ def test_credential_echoes_require_unambiguous_quotes(message, sanitized):
     "'short-secret' is an invalid private key",
     "'abc' my token' is not a valid passphrase",
     "'abc' my token.' is not a valid passphrase",
+    "User 'bob' sent 'hunter' which is invalid passphrase",
+    "'abc' and hunter is not a valid passphrase",
+    "Key 'main' hunter is not a valid passphrase",
+    "'tiny{secret' is not a valid passphrase",
+    "'tiny{secret' is not a valid passphrase {payload: canary}",
+    "'tiny[{\"secret\"}]' is not a valid passphrase",
     "tiny123 is an invalid passphrase",
     "tiny123 is not a valid passphrase",
     "tiny123 has expired API key",
@@ -335,6 +347,13 @@ def test_credential_echoes_require_unambiguous_quotes(message, sanitized):
 def test_credential_echoes_with_ambiguous_boundaries_drop_reason(message):
     assert bounded_exchange_error_context_from_mapping({"message": message}) == {
         "error_reason": "<redacted>",
+    }
+
+
+@pytest.mark.parametrize("label", ["pass", "pwd", "auth", "creds", "sig", "hmac", "jwt", "otp"])
+def test_short_authentication_field_aliases_are_redacted(label):
+    assert bounded_exchange_error_context_from_mapping({"message": f"Rejected {label}=tiny123"}) == {
+        "error_reason": f"Rejected {label}=<redacted>",
     }
 
 

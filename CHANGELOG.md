@@ -24,6 +24,9 @@ since the latest release tag; these features may already be available when insta
   other side's unused forager volatility span no longer count as proxy/exact
   constraint disagreement.
 
+- Prevent credential values starting with punctuation or containing a payload delimiter
+  from appearing in live exchange diagnostics.
+
 - Redact ambiguously quoted credentials and credentials echoed before negative validity
   messages in live exchange diagnostics.
 
