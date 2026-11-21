@@ -225,6 +225,10 @@ def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
 
 @pytest.mark.parametrize(("message", "sanitized"), [
     ("Invalid passphrase 'short-secret'", "Invalid passphrase <redacted>"),
+    ('Invalid "passphrase" "short-secret"', 'Invalid "passphrase" <redacted>'),
+    ("Invalid 'API key' ('short-secret')", "Invalid 'API key' <redacted>"),
+    ('Invalid "passphrase". Rotate it.', 'Invalid "passphrase". Rotate it.'),
+    ('Invalid "API key":"short-secret"', 'Invalid "API key":<redacted>'),
     ("Invalid api_key (short-secret)", "Invalid api_key <redacted>"),
     ("Invalid api_key(short-secret)", "Invalid api_key<redacted>"),
     ("Invalid access token short-secret", "Invalid access token <redacted>"),

@@ -48,7 +48,8 @@ _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
-    rf"""(?P<label>{_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=['"(\[])))"""
+    rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?P=quote)(?:\s+|(?=['"(\[]))|"""
+    rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=[(\[])))"""
     # Keep standalone diagnostic wording, including a credential followed by
     # a known status clause. Other trailing text may be a bare credential echo.
     r"(?![\s.,!?;]|<redacted)"
