@@ -432,15 +432,13 @@
                   "coins": [
                     "AAVE",
                     "APT",
-                    "ATOM",
                     "BNB",
-                    "CC",
                     "ENA",
+                    "ETC",
                     "GRAM",
                     "INJ",
                     "LTC",
                     "ONDO",
-                    "RENDER",
                     "TAO",
                     "XLM",
                     "ZEC"
@@ -456,7 +454,6 @@
                     "DOGE",
                     "ETH",
                     "HBAR",
-                    "KAS",
                     "MORPHO",
                     "POL",
                     "SOL",
@@ -470,7 +467,6 @@
                     "ALGO",
                     "ASTER",
                     "BCH",
-                    "BTW",
                     "DOT",
                     "FIL",
                     "HYPE",
@@ -478,6 +474,7 @@
                     "NEAR",
                     "QNT",
                     "SUI",
+                    "TRX",
                     "WLD",
                     "XRP"
                   ]

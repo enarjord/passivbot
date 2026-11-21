@@ -1422,7 +1422,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     for order in orders:
         bot.log_order_action(
             order,
-            "posting order",
+            "selecting create",
             context=order.get("_context", "plan_sync"),
             level=logging.DEBUG,
             delta=order.get("_delta"),
@@ -1432,7 +1432,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 order, context=order.get("_context", "plan_sync")
             )
         grouped_orders[order["symbol"]].append(order)
-    bot._log_order_action_summary(grouped_orders, "submit")
+    bot._log_order_action_summary(grouped_orders, "create candidate")
     connector_call_context = {
         "action": "create",
         "orders": orders,

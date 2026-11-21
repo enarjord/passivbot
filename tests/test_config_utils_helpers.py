@@ -145,6 +145,12 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
 def test_default_trailing_martingale_long_example_matches_template_and_rust_defaults():
     raw = json.loads(Path(DEFAULT_EXAMPLE_CONFIG_PATH).read_text())
     assert raw == get_starter_config()
+
+    approved = raw["bot"]["global"]["universe"]["approved_coins"]
+    subset_coins = [
+        coin for scenario in raw["backtest"]["scenarios"] for coin in scenario.get("coins", [])
+    ]
+    assert sorted(subset_coins) == sorted(approved)
     template_common = get_template_config()["bot"]["global"]
 
     assert raw["bot"]["long"] == {"enabled": True}

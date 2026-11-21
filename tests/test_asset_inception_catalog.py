@@ -1,5 +1,6 @@
 import pytest
 
+from asset_inception import resolve_asset_inception
 from asset_inception_catalog import (
     asset_venue_bindings,
     is_non_crypto_instrument,
@@ -73,3 +74,16 @@ def test_reused_okx_market_code_cannot_supply_previous_asset_identity():
     assert resolve_asset_identity("okx", reviewed).cmc_id == 39158
     changed = market("BTW", "BTW-USDT-SWAP", {"instIdCode": 999000})
     assert resolve_asset_identity("okx", changed) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exchange", ["binanceusdm", "bybit"])
+async def test_trx_perpetual_resolves_reviewed_age_offline(exchange, tmp_path):
+    instrument = market("TRX", "TRXUSDT")
+    facts = await resolve_asset_inception(
+        {"TRX": [(exchange, instrument)]}, allow_remote=False, cache_dir=tmp_path
+    )
+
+    assert facts["TRX"].asset_id == "coinmarketcap:1958"
+    assert facts["TRX"].timestamp_ms == 1509422520000
+    assert not facts["TRX"].is_provisional

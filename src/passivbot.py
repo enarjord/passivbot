@@ -1385,7 +1385,7 @@ class Passivbot:
         self.action_str_max_len = max(
             len(a)
             for a in [
-                "posting order",
+                "selecting create",
                 "cancelling order",
                 "removed order",
                 "added order",
@@ -7337,7 +7337,7 @@ class Passivbot:
     def _log_market_execution_notice(
         self, order, *, context: str | None = None
     ) -> None:
-        """Emit an unsuppressed INFO log for every live market order submission."""
+        """Flag market orders selected before final connector admission."""
 
         def _fmt(val):
             try:
@@ -7348,7 +7348,7 @@ class Passivbot:
         symbol = order.get("symbol", "?") if isinstance(order, dict) else "?"
         coin = symbol_to_coin(symbol, verbose=False) or symbol
         msg = (
-            "[order] MARKET order submission | "
+            "[order] MARKET create candidate | "
             f"symbol={coin} side={order.get('side', '?')} "
             f"pside={order.get('position_side', '?')} qty={_fmt(order.get('qty', '?'))} "
             f"ref_price={_fmt(order.get('price', '?'))} "
