@@ -49,10 +49,13 @@ _EXCHANGE_ERROR_CREDENTIAL_NAME = (
 _EXCHANGE_ERROR_CREDENTIAL_LABEL = (
     _EXCHANGE_ERROR_FIELD_PREFIX + _EXCHANGE_ERROR_CREDENTIAL_NAME
 )
-# A correctly quoted value has a known end. The rest of an unquoted or
-# malformed value is ambiguous: redact the suffix rather than guessing its end.
+# A closing quote must be followed by a boundary. Another quote of the same
+# kind in the remainder makes the value ambiguous, so redact the whole suffix.
 _EXCHANGE_ERROR_CREDENTIAL_VALUE = (
-    r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[\s\S]+)"""
+    r"(?:"
+    r"""(?:"(?:\\.|[^"\\\r\n])*"(?=[^"]*\Z)|'(?:\\.|[^'\\\r\n])*'(?=[^']*\Z))"""
+    r"(?=\Z|\s|[.,!?;:)\]](?=\Z|\s))"
+    r"|[\s\S]+)"
 )
 _SAFE_CREDENTIAL_STATUS = (
     r"(?!(?:(?:is |was |has )?(?:expired|invalid|missing|rejected|revoked|disabled|"
@@ -85,10 +88,11 @@ _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
 )
-_EXCHANGE_ERROR_PREFIXED_CREDENTIAL_ECHO_RE = re.compile(
-    r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')"""
-    r"\s+(?P<clause>(?:is|was)\s+(?:(?:an?|the)\s+)?"
-    r"(?:invalid|incorrect|expired|revoked)\s+"
+_EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE = re.compile(
+    r"""(?P<quote>['"])\s+(?P<clause>(?:"""
+    r"(?:is|was)\s+(?:(?:an?|the)\s+)?(?:invalid|incorrect|expired|revoked)|"
+    r"(?:(?:is|was)\s+not|isn't|wasn't)\s+(?:(?:an?|the)\s+)?"
+    r"(?:valid|correct|recognized|accepted))\s+"
     + _EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX
     + _EXCHANGE_ERROR_CREDENTIAL_NAME + ")",
     re.IGNORECASE,
@@ -354,6 +358,21 @@ def _bounded_exchange_error_label(value: object) -> str | None:
     return text
 
 
+def _redact_reverse_credential_echoes(text: str) -> str:
+    # Start with the status clause. An earlier quote inside the value must
+    # not let a later quote become the apparent start of the credential.
+    parts = []
+    offset = 0
+    for match in _EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE.finditer(text):
+        opening = text.find(match["quote"], offset, match.start())
+        if opening >= 0:
+            parts.append(text[offset:opening])
+        parts.extend(("<redacted> ", match["clause"]))
+        offset = match.end()
+    parts.append(text[offset:])
+    return "".join(parts)
+
+
 def _bounded_exchange_error_reason(value: object) -> str | None:
     if type(value) is not str or not value or len(value) > _EXCHANGE_ERROR_PAYLOAD_MAX_LEN:
         return None
@@ -368,6 +387,7 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
         # replayable action. Keep the reason preceding it and drop the dump.
         prefix, *payload = _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE.split(value, maxsplit=1)
         text = prefix.rstrip() + " <redacted-payload>" if payload else prefix
+        text = _redact_reverse_credential_echoes(text)
         text = _EXCHANGE_ERROR_URL_RE.sub("<redacted-url>", text)
         if "@" in text:
             text = _EXCHANGE_ERROR_EMAIL_RE.sub("<redacted-email>", text)
@@ -375,9 +395,6 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
         text = _EXCHANGE_ERROR_AUTH_SCHEME_RE.sub("<redacted-auth>", text)
         text = _EXCHANGE_ERROR_PEM_RE.sub("<redacted-key>", text)
         text = _EXCHANGE_ERROR_CREDENTIAL_RE.sub(r"\g<label><redacted>", text)
-        text = _EXCHANGE_ERROR_PREFIXED_CREDENTIAL_ECHO_RE.sub(
-            r"<redacted> \g<clause>", text
-        )
         text = _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE.sub(r"\g<label><redacted>", text)
         text = _EXCHANGE_ERROR_SECRET_VALUE_RE.sub(
             lambda match: (

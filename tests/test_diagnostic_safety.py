@@ -279,6 +279,24 @@ def test_reason_distinguishes_credential_echoes_from_status_words(message, sanit
     }
 
 
+@pytest.mark.parametrize(("message", "sanitized"), [
+    ("Invalid passphrase 'abc'def'", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase 'abc' def'", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase 'abc'.def'", "Invalid passphrase <redacted>"),
+    ('Rejected api_key="abc"def"', "Rejected api_key=<redacted>"),
+    ('Malformed Bearer "abc"def"', "Malformed <redacted-auth>"),
+    (r'Invalid passphrase "abc\"def", retry later', "Invalid passphrase <redacted>, retry later"),
+    ("'tiny123' is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ('"tiny123" wasn\'t a recognized API key', "<redacted> wasn't a recognized API key"),
+    ("Rejected: 'abc'def' was not the correct private key",
+     "Rejected: <redacted> was not the correct private key"),
+])
+def test_credential_echoes_require_unambiguous_quotes(message, sanitized):
+    assert bounded_exchange_error_context_from_mapping({"message": message}) == {
+        "error_reason": sanitized,
+    }
+
+
 def test_long_noncredential_hyphenated_reason_uses_bounded_prefix_scan():
     # Fill the parser's input budget without matching a credential label.
     assert bounded_exchange_error_context_from_mapping({"message": "a-" * 4096}) == {

@@ -24,6 +24,9 @@ since the latest release tag; these features may already be available when insta
   other side's unused forager volatility span no longer count as proxy/exact
   constraint disagreement.
 
+- Redact ambiguously quoted credentials and credentials echoed before negative validity
+  messages in live exchange diagnostics.
+
 - Redact authorization and cookie values echoed without field separators in exchange errors.
   Bound credential-label matching on long reasons and preserve common stock rejection messages.
 
