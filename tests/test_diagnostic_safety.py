@@ -296,6 +296,16 @@ def test_reason_distinguishes_credential_echoes_from_status_words(message, sanit
     ('"tiny123" wasn\'t a recognized API key', "<redacted> wasn't a recognized API key"),
     ("Rejected: 'abc'def' was not the correct private key",
      "Rejected: <redacted> was not the correct private key"),
+    ("Rejected: 'abc' violet rabbit' was not the correct private key",
+     "Rejected: <redacted> was not the correct private key"),
+    ("'a' b 'c' is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ("‘abc’ def’ is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ("User 'bob' sent 'hunter' which is invalid passphrase",
+     "User <redacted> which is invalid passphrase"),
+    ("'tiny123': invalid API key", "<redacted> invalid API key"),
+    ("'tiny123', invalid API key", "<redacted> invalid API key"),
+    ("'tiny123' - invalid API key", "<redacted> invalid API key"),
+    ("«tiny123» is not a valid passphrase", "<redacted> is not a valid passphrase"),
 ])
 def test_credential_echoes_require_unambiguous_quotes(message, sanitized):
     assert bounded_exchange_error_context_from_mapping({"message": message}) == {
@@ -310,6 +320,8 @@ def test_credential_echoes_require_unambiguous_quotes(message, sanitized):
     "'first api_key=second' is not a valid passphrase",
     "Invalid 'api_key' violet rabbit passphrase",
     "'short-secret' is an invalid private key",
+    "'abc' my token' is not a valid passphrase",
+    "'abc' my token.' is not a valid passphrase",
 ])
 def test_overlapping_credential_echoes_drop_ambiguous_reason(message):
     assert bounded_exchange_error_context_from_mapping({"message": message}) == {

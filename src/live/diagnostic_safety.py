@@ -91,12 +91,13 @@ _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
 # A short phrase between a closing quote and a credential label is an
 # ambiguous echo. Bound the phrase without assuming a fixed exchange wording.
 _EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE = re.compile(
-    r"""(?P<quote>['"\x60’”])\s+(?P<clause>(?:[a-z'’]++\s+){1,6}?"""
+    r"""(?P<quote>['"\x60’”»])(?:\s*[:,;\-–—])?\s+"""
+    r"""(?P<clause>(?:[a-z]++(?:['’][a-z]++)*+\s+){1,6}?"""
     + _EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX
     + _EXCHANGE_ERROR_CREDENTIAL_NAME + ")",
     re.IGNORECASE,
 )
-_EXCHANGE_ERROR_REVERSE_OPEN_QUOTE = {"’": "‘", "”": "“"}
+_EXCHANGE_ERROR_REVERSE_OPEN_QUOTE = {"’": "‘", "”": "“", "»": "«"}
 # Exact stock text with no echoed values. Keep the safety decision independent
 # of a potentially spoofed exchange code or message prefix.
 _SAFE_EXCHANGE_REJECTION_TEXT = frozenset({
@@ -379,7 +380,7 @@ def _redact_reverse_credential_echoes(text: str) -> str:
                 forward.end("label") if "label" in pattern.groupindex else forward.start()
             )
             if any(
-                start < reverse.end() and reverse.start("clause") < forward.end()
+                start <= reverse.end() and reverse.start("clause") < forward.end()
                 for reverse in matches
             ):
                 return "<redacted>"
@@ -390,8 +391,9 @@ def _redact_reverse_credential_echoes(text: str) -> str:
         close_quote = match["quote"]
         open_quote = _EXCHANGE_ERROR_REVERSE_OPEN_QUOTE.get(close_quote, close_quote)
         opening = text.find(open_quote, offset, match.start())
-        if opening >= 0:
-            parts.append(text[offset:opening])
+        if opening < 0:
+            return "<redacted>"
+        parts.append(text[offset:opening])
         parts.extend(("<redacted> ", match["clause"]))
         offset = match.end()
     parts.append(text[offset:])
