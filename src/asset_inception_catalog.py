@@ -22,6 +22,7 @@ Only verified replacement assets inherit a predecessor's price observations:
 - TON to GRAM: https://ton.org/media/
 - MATIC to POL: https://forum.polygon.technology/t/pip-46-matic-to-pol-migration/19672
 - RNDR to RENDER: https://know.rendernetwork.com/basics/migrating-tokens
+- ERC-20 TRX to native TRX: https://www.binance.com/en/support/announcement/detail/360006871472
 - LEND to AAVE: https://governance.aave.com/t/welcome-to-aaves-governance-discussion/7
 
 Lifecycle bounds for rejecting pre-launch quotes and contract-only history:
@@ -69,6 +70,7 @@ _KRAKEN_DOT_TRADES = "https://api.kraken.com/0/public/Trades?pair=DOTUSD&count=5
 _BINANCE_AVAX_PRICES = "https://data.binance.vision/data/spot/monthly/klines/AVAXUSDT/1m/AVAXUSDT-1m-2020-09.zip"
 _BINANCE_FIL_PRICES = "https://data.binance.vision/data/spot/monthly/klines/FILUSDT/1m/FILUSDT-1m-2020-10.zip"
 _BINANCE_MATIC_PRICES = "https://data.binance.vision/data/spot/monthly/klines/MATICBTC/1m/MATICBTC-1m-2019-04.zip"
+_BINANCE_TRX_PRICES = "https://data.binance.vision/data/spot/monthly/klines/TRXBTC/1m/TRXBTC-1m-2017-10.zip"
 _BINANCE_LEND_PRICES = "https://data.binance.vision/data/spot/monthly/klines/LENDBTC/1m/LENDBTC-1m-2017-12.zip"
 
 
@@ -155,6 +157,7 @@ _ASSETS = {
     "SUI": _asset("SUI", "Sui", 20947, "2023-05-03T12:05:00Z"),
     "TAO": _asset("TAO", "Bittensor", 22974, "2023-03-05T23:55:00Z"),
     "TRB": _asset("TRB", "Tellor", 4944, "2019-11-19T01:45:00Z"),
+    "TRX": _asset("TRX", "TRON", 1958, "2017-10-31T04:02:00Z", _BINANCE_TRX_PRICES),
     "UNI": _asset("UNI", "Uniswap", 7083, "2020-09-17T01:10:00Z"),
     "WLD": _asset("WLD", "Worldcoin", 13502, "2023-07-24T07:25:00Z"),
     "XLM": _asset("XLM", "Stellar", 512, "2014-08-05T05:40:00Z"),
@@ -596,6 +599,10 @@ _MARKET_IDS = {
         "kucoin": "TRBUSDTM",
         "okx": "TRB-USDT-SWAP",
         "weex": "TRBUSDT",
+    },
+    "TRX": {
+        "binance": "TRXUSDT",
+        "bybit": "TRXUSDT",
     },
     "UNI": {
         "binance": "UNIUSDT",
