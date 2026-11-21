@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Label pre-submit live order summaries as create candidates, including market orders.
+  Use execution outcomes to see which orders were acknowledged, skipped, or deferred.
+
 - Preserve completed planning, ordinary execution and protective work across all
   bounded internal passes of an offline fake-live replay step. This prevents
   scheduler-dependent repeatability failures while retaining strict readiness,
