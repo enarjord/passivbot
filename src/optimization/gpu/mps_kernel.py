@@ -1980,11 +1980,10 @@ class _MulticoinReplayRunner:
         state_key = (batch_size, self._replay_state_bytes)
         if state_key not in self._replay_states:
             self._replay_states.clear()
-            # The replay kernel only writes the fields it reaches on a given
-            # path; any field it skips must still read as zero (MPS zero-fills
-            # fresh allocations, CUDA/ROCm do not), so allocate deterministically.
+            # Each kernel initializes replay state on the first chunk. Only
+            # continuation chunks consume retained rows, so reuse needs no clear.
             self._replay_states = {
-                state_key: torch.zeros(
+                state_key: torch.empty(
                     (batch_size, self._replay_state_bytes),
                     dtype=torch.uint8,
                     device=gpu_device(),
