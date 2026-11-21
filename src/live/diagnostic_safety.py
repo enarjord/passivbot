@@ -30,7 +30,7 @@ _EXCHANGE_ERROR_AUTH_HEADER_LABEL = (
 _EXCHANGE_ERROR_AUTH_HEADER_RE = re.compile(
     _EXCHANGE_ERROR_FIELD_PREFIX
     + _EXCHANGE_ERROR_AUTH_HEADER_LABEL
-    + r"""['"]?\s*[:=].*""",
+    + r"""['"]?\s*[:=：＝].*""",
     re.IGNORECASE | re.DOTALL,
 )
 _EXCHANGE_ERROR_PEM_RE = re.compile(
@@ -71,19 +71,20 @@ _EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
 )
 _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
     rf"""(?P<label>(?:{_EXCHANGE_ERROR_CREDENTIAL_LABEL}|"""
-    rf"""{_EXCHANGE_ERROR_FIELD_PREFIX}(?:key|sign|credentials?)(?![\w-])|"""
+    rf"""{_EXCHANGE_ERROR_FIELD_PREFIX}(?:key|sign|credentials?|pass|pwd|auth|"""
+    r"""creds|sig|hmac|jwt|otp)(?![\w-])|"""
     r"""\b(?:seed|session)(?![\w-])|"""
-    r"""\b(?:basic|bearer)(?:[-_ ]+(?:auth(?:entication)?|token))?)['"]?\s*[:=]\s*)"""
+    r"""\b(?:basic|bearer)(?:[-_ ]+(?:auth(?:entication)?|token))?)['"]?\s*[:=：＝]\s*)"""
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
     rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX}"""
     rf"""{_EXCHANGE_ERROR_CREDENTIAL_NAME}(?P=quote)\s*|"""
-    rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=['"(\[,;])))"""
-    # Keep standalone diagnostic wording, including a credential followed by
-    # a known status clause. Other trailing text may be a bare credential echo.
-    r"(?![\s.!?:=]|<redacted)"
+    rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=['"(\[,;.!?])))"""
+    # Sentence punctuation has a boundary. Attached punctuation can be the
+    # first character of a credential value.
+    r"(?!\s|[.!?](?=\s|\Z)|[:=：＝]|<redacted)"
     + _SAFE_CREDENTIAL_STATUS
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
@@ -91,7 +92,7 @@ _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
 # A short phrase between a closing quote and a credential label is an
 # ambiguous echo. Bound the phrase without assuming a fixed exchange wording.
 _EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE = re.compile(
-    r"""(?P<quote>['"\x60’”»])(?:\s*[:,;\-–—])?\s+"""
+    r"""(?P<quote>['"\x60’”»])(?:\s*[:,;(.\-–—]\s*|\s+)"""
     r"""(?P<clause>(?:[a-z]++(?:['’][a-z]++)*+\s+){1,6}?"""
     + _EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX
     + _EXCHANGE_ERROR_CREDENTIAL_NAME + ")",
@@ -374,7 +375,7 @@ def _redact_reverse_credential_echoes(text: str) -> str:
     matches = tuple(_EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE.finditer(text))
     for bare in _EXCHANGE_ERROR_BARE_REVERSE_RE.finditer(text):
         if not any(
-            match.start("clause") <= bare.start() and bare.end() <= match.end()
+            match.start("clause") == bare.start() and bare.end() <= match.end()
             for match in matches
         ):
             # Without a quoted value, there is no reliable start to the echo.
@@ -426,11 +427,14 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
     ):
         return text
     try:
-        # A nested request/response dump can contain short credentials or a
-        # replayable action. Keep the reason preceding it and drop the dump.
-        prefix, *payload = _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE.split(value, maxsplit=1)
-        text = prefix.rstrip() + " <redacted-payload>" if payload else prefix
-        text = _redact_reverse_credential_echoes(text)
+        # Check reverse echoes against the full reason. A brace inside a
+        # value can otherwise hide the closing quote and credential label.
+        text = _redact_reverse_credential_echoes(value)
+        if payload := _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE.search(value):
+            if text != value:
+                return "<redacted>"
+            # Use the original delimiter so sanitizing cannot expose the dump.
+            text = value[:payload.start()].rstrip() + " <redacted-payload>"
         text = _EXCHANGE_ERROR_URL_RE.sub("<redacted-url>", text)
         if "@" in text:
             text = _EXCHANGE_ERROR_EMAIL_RE.sub("<redacted-email>", text)
