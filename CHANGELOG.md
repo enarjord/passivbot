@@ -22,6 +22,9 @@ its own version heading. See [release status](docs/releases.md).
   for other orders. Structured execution events report the retry interval and the
   time remaining on skipped submissions.
 
+- Prevent credential values starting with punctuation or containing a payload delimiter
+  from appearing in live exchange diagnostics.
+
 - Redact ambiguously quoted credentials and credentials echoed before negative validity
   messages in live exchange diagnostics.
 
