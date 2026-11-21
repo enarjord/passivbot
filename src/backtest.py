@@ -82,9 +82,7 @@ from asset_inception import (
     market_inception_identity,
     resolve_asset_inception,
 )
-from config.risk_memory import (
-    normalize_memory_ema_span_minutes,
-)
+from config.risk_memory import require_loss_realization_policy
 from metrics_schema import build_standalone_metrics
 from config.result_records import build_result_record
 from config.coerce import normalize_hsl_signal_mode
@@ -272,8 +270,8 @@ def _resolve_backtest_hsl(config, coin_policies):
     return {
         "engine": "hsl",
         "mode": mode,
-        "sides": [native_hsl_policy(config["bot"][side]["hsl"]) for side in POSITION_SIDES],
-        "portfolio": native_hsl_policy({key: deepcopy(value) for key, value in config["bot"]["portfolio"]["hsl"].items()
+        "sides": [native_hsl_policy(config["bot"][side]["risk"]["hsl"]) for side in POSITION_SIDES],
+        "portfolio": native_hsl_policy({key: deepcopy(value) for key, value in config["bot"]["portfolio"]["risk"]["hsl"].items()
                       if key != "scope"}) if mode == "portfolio" else None,
         "coins": {coin: [native_hsl_policy(policy) for policy in policies]
                   for coin, policies in coin_policies.items()} if mode == "coin" else {},
@@ -283,7 +281,7 @@ def _resolve_backtest_hsl(config, coin_policies):
 def _resolve_backtest_hsl_signal_mode(config: dict) -> str:
     from config.hsl import native_hsl_mode
 
-    return native_hsl_mode(require_config_value(config, "bot.portfolio.hsl.scope"))
+    return native_hsl_mode(require_config_value(config, "bot.portfolio.risk.hsl.scope"))
 
 
 def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
@@ -953,8 +951,9 @@ class BacktestExecutionSettings:
     market_order_near_touch_fraction: float
     market_order_slippage_fraction: float
     limit_order_fill_buffer_fraction: float
-    unstuck_memory_ema_span_minutes: float
-    loss_gate_memory_ema_span_minutes: float
+    realized_loss_memory_ema_span_minutes: float
+    loss_gate_enabled: bool
+    loss_gate_max_drawdown_fraction: float | None
 
 
 @dataclass
@@ -2725,21 +2724,15 @@ def get_backtest_execution_settings(
     )
     if market_order_near_touch_fraction < 0.0:
         raise ValueError("bot.portfolio.execution.market_order_near_touch_fraction must be >= 0.0")
-    unstuck_memory_span = normalize_memory_ema_span_minutes(
-        require_config_value(config, "bot.portfolio.unstuck.memory_ema_span_minutes"),
-        field="bot.portfolio.unstuck.memory_ema_span_minutes",
-    )
-    loss_gate_memory_span = normalize_memory_ema_span_minutes(
-        require_config_value(config, "bot.portfolio.loss_gate.memory_ema_span_minutes"),
-        field="bot.portfolio.loss_gate.memory_ema_span_minutes",
-    )
+    memory_span, loss_gate_enabled, loss_gate_cap = require_loss_realization_policy(config)
     return BacktestExecutionSettings(
         market_orders_allowed=market_orders_allowed,
         market_order_near_touch_fraction=market_order_near_touch_fraction,
         market_order_slippage_fraction=market_order_slippage_fraction,
         limit_order_fill_buffer_fraction=limit_order_fill_buffer_fraction,
-        unstuck_memory_ema_span_minutes=unstuck_memory_span,
-        loss_gate_memory_ema_span_minutes=loss_gate_memory_span,
+        realized_loss_memory_ema_span_minutes=memory_span,
+        loss_gate_enabled=loss_gate_enabled,
+        loss_gate_max_drawdown_fraction=loss_gate_cap,
     )
 
 
@@ -2766,12 +2759,10 @@ def log_backtest_execution_settings(
         execution_settings.limit_order_fill_buffer_fraction,
     )
     logging.info(
-        "[backtest]   unstuck_memory_ema_span_minutes = %s (bot.portfolio.unstuck)",
-        execution_settings.unstuck_memory_ema_span_minutes,
-    )
-    logging.info(
-        "[backtest]   loss_gate_memory_ema_span_minutes = %s (bot.portfolio.loss_gate)",
-        execution_settings.loss_gate_memory_ema_span_minutes,
+        "[backtest]   realized_loss_memory_ema_span_minutes = %s | gate_enabled=%s gate_cap=%s",
+        execution_settings.realized_loss_memory_ema_span_minutes,
+        execution_settings.loss_gate_enabled,
+        execution_settings.loss_gate_max_drawdown_fraction,
     )
 
 
@@ -2902,8 +2893,8 @@ def prep_backtest_args(
             )
         hsl_coin_policies[coin] = [
             {
-                **deepcopy(bot_params_template[side]["hsl"]),
-                **deepcopy(coin_override_bot.get(side, {}).get("hsl", {})),
+                **deepcopy(bot_params_template[side]["risk"]["hsl"]),
+                **deepcopy(coin_override_bot.get(side, {}).get("risk", {}).get("hsl", {})),
             }
             for side in POSITION_SIDES
         ]
@@ -3025,11 +3016,9 @@ def prep_backtest_args(
                 require_config_value(config, "backtest.dynamic_wel_by_tradability")
             ),
             "hedge_mode": bool(require_config_value(config, 'bot.portfolio.hedge_mode')),
-            "loss_gate_max_drawdown_fraction": float(
-                require_config_value(config, "bot.portfolio.loss_gate.max_drawdown_fraction")
-            ),
-            "unstuck_memory_ema_span_minutes": execution_settings.unstuck_memory_ema_span_minutes,
-            "loss_gate_memory_ema_span_minutes": execution_settings.loss_gate_memory_ema_span_minutes,
+            "loss_gate_enabled": execution_settings.loss_gate_enabled,
+            "loss_gate_max_drawdown_fraction": execution_settings.loss_gate_max_drawdown_fraction,
+            "realized_loss_memory_ema_span_minutes": execution_settings.realized_loss_memory_ema_span_minutes,
             "equity_hard_stop_loss": hard_stop_cfg_long,
             "market_order_slippage_fraction": execution_settings.market_order_slippage_fraction,
             "limit_order_fill_buffer_fraction": execution_settings.limit_order_fill_buffer_fraction,

@@ -161,7 +161,6 @@ def bot_params(**overrides):
         "risk_we_excess_allowance_fraction": 0.0,
         "risk_entry_cooldown_minutes": 0.0,
         "unstuck_ema_gating_enabled": True,
-        "unstuck_close_fraction": 0.0,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_ema_span_0_minutes": 10.0,
         "unstuck_ema_span_1_minutes": 20.0,
@@ -268,6 +267,7 @@ def make_symbol(
         short_strategy = adaptive_strategy_params(**short_strategy_overrides)
     return {
         "symbol_idx": symbol_idx,
+        "symbol": f"symbol_{symbol_idx}",
         "order_book": {"bid": bid, "ask": ask},
         "exchange": exchange_params(),
         "tradable": tradable,
@@ -329,12 +329,12 @@ def make_input(
             "forager_score_hysteresis": {"long": 0.0, "short": 0.0},
             "filter_by_min_effective_cost": {"long": False, "short": False},
             "auto_unstuck_allowed": True,
-            # Each independently initialized realized memory starts empty.
-            "unstuck_realized_pnl_drawdown": 0.0,
-            "loss_gate_realized_pnl_drawdown": 0.0,
+            "realized_pnl_drawdown": 0.0,
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
-            "loss_gate_max_drawdown_fraction": 1.0,
+            "loss_gate_enabled": False,
+            "loss_gate_max_drawdown_fraction": None,
+            "limit_orders_post_only": False,
             "sort_global": True,
             "global_bot_params": global_bp or bot_params_pair(),
             "strategy_kind": strategy_kind,
@@ -349,8 +349,8 @@ def compute(pbr, inp: dict) -> dict:
     return json.loads(out_json)
 
 
-@pytest.mark.parametrize("field", ["unstuck_realized_pnl_drawdown", "loss_gate_realized_pnl_drawdown"])
-def test_independent_realized_drawdown_is_required_instead_of_reconstructed(field):
+@pytest.mark.parametrize("field", ["realized_pnl_drawdown", "loss_gate_enabled", "loss_gate_max_drawdown_fraction"])
+def test_risk_inputs_are_explicit(field):
     import passivbot_rust as pbr
 
     inp = make_input(balance=1000.0, symbols=[make_symbol(0, bid=100.0, ask=100.0)])
@@ -360,7 +360,7 @@ def test_independent_realized_drawdown_is_required_instead_of_reconstructed(fiel
 
 
 
-@pytest.mark.parametrize("retired", ["realized_pnl_drawdown", "realized_pnl_cumsum_max", "realized_pnl_cumsum_last"])
+@pytest.mark.parametrize("retired", ["unstuck_realized_pnl_drawdown", "loss_gate_realized_pnl_drawdown", "realized_pnl_cumsum_max", "realized_pnl_cumsum_last"])
 def test_json_rejects_retired_shared_realized_memory_fields(retired):
     import passivbot_rust as pbr
 
@@ -3337,7 +3337,7 @@ def test_json_rejects_invalid_global_hsl_risk_unstuck_values(overrides, match):
         compute(pbr, inp)
 
 
-def test_json_rejects_invalid_symbol_hsl_risk_unstuck_values():
+def test_json_rejects_retired_unstuck_sizing():
     import passivbot_rust as pbr
 
     inp = make_input(
@@ -3353,7 +3353,7 @@ def test_json_rejects_invalid_symbol_hsl_risk_unstuck_values():
     )
 
     with pytest.raises(
-        ValueError, match=r"symbols\[0\]\.long\.bot_params\.unstuck_close_fraction"
+        ValueError, match=r"unknown field `unstuck_close_fraction`"
     ):
         compute(pbr, inp)
 
@@ -3749,7 +3749,6 @@ def test_unstuck_and_ordinary_close_coexist_and_are_capped():
 
     balance = 1_000.0
     long_bp = {
-        "unstuck_close_fraction": 0.5,
         "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_loss_allowance_fraction": 0.01,
@@ -3791,11 +3790,10 @@ def test_unstuck_and_ordinary_close_coexist_and_are_capped():
     assert total_close_qty <= 10.0 + 1e-9
 
 
-def test_unstuck_allowance_uses_only_its_independent_realized_memory():
+def test_unstuck_uses_shared_drawdown_with_the_gate_disabled():
     import passivbot_rust as pbr
 
     params = {
-        "unstuck_close_fraction": 0.5,
         "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_gating_enabled": False,
         "unstuck_loss_allowance_fraction": 0.01,
@@ -3813,10 +3811,7 @@ def test_unstuck_allowance_uses_only_its_independent_realized_memory():
     fresh = compute(pbr, inp)
     assert any(order["order_type"] == "close_unstuck_long" for order in fresh["orders"])
 
-    # A disabled loss gate's drawdown cannot spend unstuck's independent memory.
-    inp["global"]["loss_gate_realized_pnl_drawdown"] = 1_000.0
-    assert compute(pbr, inp)["orders"] == fresh["orders"]
-    inp["global"]["unstuck_realized_pnl_drawdown"] = 1_000.0
+    inp["global"]["realized_pnl_drawdown"] = 1_000.0
     spent = compute(pbr, inp)
     assert not any(order["order_type"] == "close_unstuck_long" for order in spent["orders"])
 
@@ -3830,7 +3825,6 @@ def test_trailing_martingale_emits_compatible_unstuck_and_trailing_closes_togeth
         "risk_wel_enforcer_enabled": False,
         "risk_twel_enforcer_enabled": False,
         "unstuck_ema_gating_enabled": False,
-        "unstuck_close_fraction": 0.0195,
         "unstuck_exposure_trigger_ratio": 0.9,
         "unstuck_loss_allowance_fraction": 0.01,
     }
@@ -3867,7 +3861,8 @@ def test_trailing_martingale_emits_compatible_unstuck_and_trailing_closes_togeth
         if order["pside"] == "long" and order["qty"] < 0.0
     }
 
-    assert closes["close_unstuck_long"]["qty"] == pytest.approx(-1.95)
+    assert closes["close_unstuck_long"]["qty"] == pytest.approx(-5.62)
+    assert out["diagnostics"]["unstuck"][0]["projected_exposure_ratio"] >= 0.9
     assert closes["close_trailing_long"]["qty"] == pytest.approx(-26.24)
     assert sum(abs(order["qty"]) for order in closes.values()) <= 95.6 + 1e-9
 
@@ -3879,7 +3874,6 @@ def test_unstuck_uses_symbol_loss_allowance_pct_for_loss_cap():
     long_bp = {
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_fraction": 0.5,
         "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_loss_allowance_fraction": 0.005,
@@ -3929,7 +3923,6 @@ def test_auto_unstuck_quantizes_off_tick_book_price_before_live_validation(
         "n_positions": 1,
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_fraction": 0.5,
         "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_gating_enabled": False,
         "unstuck_loss_allowance_fraction": 0.005,
@@ -3968,7 +3961,6 @@ def test_auto_unstuck_allowed_gate_blocks_symbol_allowance():
     long_bp = {
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_fraction": 0.5,
         "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_loss_allowance_fraction": 0.005,
@@ -3999,7 +3991,6 @@ def test_unstuck_ema_gating_disabled_skips_missing_ema_requirement():
     long_bp = {
         "total_wallet_exposure_limit_ratio": 1.5,
         "wallet_exposure_limit_ratio": 1.5,
-        "unstuck_close_fraction": 0.5,
         "unstuck_ema_gating_enabled": False,
         "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_distance_fraction": 0.0,
@@ -4584,8 +4575,7 @@ def test_larger_wel_auto_reduce_wins_over_unstuck_for_same_position():
         "risk_twel_enforcer_enabled": False,
         "total_wallet_exposure_limit_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_fraction": 0.5,
-        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_exposure_trigger_ratio": 1.25,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_loss_allowance_fraction": 0.01,
     }
@@ -4626,8 +4616,7 @@ def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
         "risk_twel_enforcer_enabled": False,
         "total_wallet_exposure_limit_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_fraction": 0.5,
-        "unstuck_exposure_trigger_ratio": 0.001,
+        "unstuck_exposure_trigger_ratio": 1.25,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_loss_allowance_fraction": 0.01,
     }
@@ -4666,7 +4655,7 @@ def test_larger_short_wel_auto_reduce_wins_over_unstuck_for_same_position():
     )
 
 
-def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
+def test_joint_sizing_reserves_winning_wel_and_skips_unstuck():
     import passivbot_rust as pbr
 
     long_bp = {
@@ -4675,7 +4664,6 @@ def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
         "risk_twel_enforcer_enabled": False,
         "total_wallet_exposure_limit_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_fraction": 0.4,
         "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_loss_allowance_fraction": 0.01,
@@ -4691,21 +4679,24 @@ def test_loss_gate_falls_back_from_larger_wel_to_smaller_unstuck():
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["global"]["unstuck_allowance_long"] = 1e9
+    inp["global"]["loss_gate_enabled"] = True
     inp["global"]["loss_gate_max_drawdown_fraction"] = 0.019
 
     out = compute(pbr, inp)
     reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     order_types = [o["order_type"] for o in out["orders"]]
-
-    assert "close_unstuck_long" in order_types
-    assert "close_auto_reduce_wel_long" not in order_types
+    assert "close_auto_reduce_wel_long" in order_types
+    assert "close_unstuck_long" not in order_types
     assert any(
-        block["order_type"] == "close_auto_reduce_wel_long"
-        for block in out["diagnostics"]["loss_gate_blocks"]
+        row["order_type"] == "close_auto_reduce_wel_long"
+        and row["outcome"] == "trimmed"
+        and row["headroom_after"] == 0.0
+        for row in out["diagnostics"]["close_allocations"]
     )
 
 
-def test_loss_gate_checks_wel_reducer_after_dust_is_absorbed():
+
+def test_loss_gate_reprojects_wel_reducer_after_dust_normalization():
     import passivbot_rust as pbr
 
     long_bp = {
@@ -4728,22 +4719,22 @@ def test_loss_gate_checks_wel_reducer_after_dust_is_absorbed():
         {"qty_step": 0.01, "min_qty": 10.0, "min_cost": 0.0, "maker_fee_fraction": 0.0}
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["global"]["loss_gate_enabled"] = True
     inp["global"]["loss_gate_max_drawdown_fraction"] = 0.105
 
     out = compute(pbr, inp)
-
-    assert all(o["order_type"] != "close_auto_reduce_wel_long" for o in out["orders"])
-    block = next(
-        block
-        for block in out["diagnostics"]["loss_gate_blocks"]
-        if block["order_type"] == "close_auto_reduce_wel_long"
+    row = next(
+        row for row in out["diagnostics"]["close_allocations"]
+        if row["order_type"] == "close_auto_reduce_wel_long"
     )
-    assert block["qty"] == pytest.approx(-11.0)
-    assert block["projected_balance_after"] == pytest.approx(890.0)
-    assert block["balance_floor"] == pytest.approx(895.0)
+    assert row["proposed_qty"] == pytest.approx(-11.0)
+    assert row["final_qty"] == pytest.approx(-10.45)
+    assert row["headroom_after"] == 0.0
+    assert row["overshoot"] <= 0.11
 
 
-def test_loss_gate_prioritizes_larger_wel_reducer_across_symbols():
+
+def test_loss_gate_allocates_same_touch_reducers_in_stable_symbol_order():
     import passivbot_rust as pbr
 
     long_bp = {
@@ -4773,27 +4764,19 @@ def test_loss_gate_prioritizes_larger_wel_reducer_across_symbols():
     sym0["exchange"]["maker_fee_fraction"] = 0.0
     sym1["exchange"]["maker_fee_fraction"] = 0.0
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
+    inp["global"]["loss_gate_enabled"] = True
     inp["global"]["loss_gate_max_drawdown_fraction"] = 0.07
 
     out = compute(pbr, inp)
-    wel_orders = [
-        order
-        for order in out["orders"]
-        if order["order_type"] == "close_auto_reduce_wel_long"
+    rows = [
+        row for row in out["diagnostics"]["close_allocations"]
+        if row["order_type"] == "close_auto_reduce_wel_long"
     ]
+    assert [row["symbol_idx"] for row in rows] == [0, 1]
+    assert rows[0]["outcome"] == "admitted"
+    assert rows[1]["outcome"] == "trimmed"
+    assert rows[1]["headroom_after"] == 0.0
 
-    assert len(wel_orders) == 1
-    assert wel_orders[0]["symbol_idx"] == 1
-    assert wel_orders[0]["qty"] == pytest.approx(-6.01)
-    block = next(
-        block
-        for block in out["diagnostics"]["loss_gate_blocks"]
-        if block["order_type"] == "close_auto_reduce_wel_long"
-    )
-    assert block["symbol_idx"] == 0
-    assert block["balance_before"] == pytest.approx(939.9)
-    assert block["projected_balance_after"] == pytest.approx(899.8)
-    assert block["balance_floor"] == pytest.approx(930.0)
 
 
 def test_larger_unstuck_wins_over_twel_auto_reduce_for_same_position():
@@ -4806,7 +4789,6 @@ def test_larger_unstuck_wins_over_twel_auto_reduce_for_same_position():
         "risk_twel_enforcer_policy": "reduce_portfolio",
         "risk_twel_enforcer_threshold_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_fraction": 0.5,
         "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_loss_allowance_fraction": 0.01,
@@ -4849,7 +4831,6 @@ def test_larger_short_unstuck_wins_over_twel_auto_reduce_for_same_position():
         "risk_twel_enforcer_policy": "reduce_portfolio",
         "risk_twel_enforcer_threshold_ratio": 1.0,
         "n_positions": 1,
-        "unstuck_close_fraction": 0.5,
         "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_loss_allowance_fraction": 0.01,
@@ -5098,8 +5079,9 @@ def test_twel_loss_gate_block_emits_twel_specific_warning():
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 1_000.0
+    inp["global"]["loss_gate_enabled"] = True
     inp["global"]["loss_gate_max_drawdown_fraction"] = 0.0
-    inp["global"]["loss_gate_realized_pnl_drawdown"] = 0.0
+    inp["global"]["realized_pnl_drawdown"] = 0.0
 
     out = compute(pbr, inp)
 
@@ -5133,8 +5115,7 @@ def test_twel_loss_gate_block_emits_twel_specific_warning():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("unstuck_drawdown", [0.0, 1_000_000.0])
-def test_realized_loss_gate_uses_balance_raw(unstuck_drawdown):
+def test_realized_loss_gate_uses_balance_raw():
     """Realized-loss gate peak/floor uses balance_raw, not snapped balance."""
     import passivbot_rust as pbr
 
@@ -5162,11 +5143,12 @@ def test_realized_loss_gate_uses_balance_raw(unstuck_drawdown):
     # so a negative projected close is blocked without using snapped balance.
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 980.0
+    inp["global"]["loss_gate_enabled"] = True
     inp["global"]["loss_gate_max_drawdown_fraction"] = 0.001  # very tight gate
-    inp["global"]["loss_gate_realized_pnl_drawdown"] = 70.0
-    inp["global"]["unstuck_realized_pnl_drawdown"] = unstuck_drawdown
+    inp["global"]["realized_pnl_drawdown"] = 70.0
 
     out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
     loss_gate_blocks = out.get("diagnostics", {}).get("loss_gate_blocks", [])
     assert len(loss_gate_blocks) > 0, (
         "expected tight loss gate (0.001) to block close orders on underwater position, "
@@ -5199,7 +5181,7 @@ def test_balance_raw_is_required_even_when_sizing_balance_is_supplied():
         ),
         (
             lambda inp: inp["global"].__setitem__("loss_gate_max_drawdown_fraction", -0.01),
-            r"global\.loss_gate_max_drawdown_fraction must be finite and >= 0",
+            r"loss_gate_max_drawdown_fraction must be finite",
         ),
         (
             lambda inp: inp["global"].__setitem__("unstuck_allowance_long", -1.0),
@@ -5210,12 +5192,8 @@ def test_balance_raw_is_required_even_when_sizing_balance_is_supplied():
             r"global\.unstuck_allowance_short must be finite and >= 0",
         ),
         (
-            lambda inp: inp["global"].__setitem__("loss_gate_realized_pnl_drawdown", -1.0),
-            r"global\.loss_gate_realized_pnl_drawdown",
-        ),
-        (
-            lambda inp: inp["global"].__setitem__("unstuck_realized_pnl_drawdown", -1.0),
-            r"global\.unstuck_realized_pnl_drawdown",
+            lambda inp: inp["global"].__setitem__("realized_pnl_drawdown", -1.0),
+            r"global\.realized_pnl_drawdown",
         ),
     ],
 )
@@ -5252,8 +5230,9 @@ def test_balance_raw_zero_rejected():
 
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = 0.0
+    inp["global"]["loss_gate_enabled"] = True
     inp["global"]["loss_gate_max_drawdown_fraction"] = 0.05
-    inp["global"]["loss_gate_realized_pnl_drawdown"] = 5.0
+    inp["global"]["realized_pnl_drawdown"] = 5.0
 
     with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
         compute(pbr, inp)
@@ -5279,8 +5258,9 @@ def test_balance_raw_negative_rejected():
 
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     inp["balance_raw"] = -1.0
+    inp["global"]["loss_gate_enabled"] = True
     inp["global"]["loss_gate_max_drawdown_fraction"] = 0.05
-    inp["global"]["loss_gate_realized_pnl_drawdown"] = 5.0
+    inp["global"]["realized_pnl_drawdown"] = 5.0
 
     with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
         compute(pbr, inp)
@@ -5338,23 +5318,23 @@ def test_loss_gate_uses_balance_raw_when_snapped_and_raw_diverge():
             "n_positions": 1,
         },
     )
-    inp_blocked = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
-    inp_blocked["global"]["loss_gate_max_drawdown_fraction"] = 0.01
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["global"].update(loss_gate_enabled=True, loss_gate_max_drawdown_fraction=0.01)
 
-    out_blocked = compute(pbr, inp_blocked)
-    blocked_types = [o["order_type"] for o in out_blocked["orders"]]
-    assert "close_auto_reduce_wel_long" not in blocked_types
-    assert any(
-        b.get("order_type") == "close_auto_reduce_wel_long"
-        for b in out_blocked.get("diagnostics", {}).get("loss_gate_blocks", [])
-    )
+    def allocation(payload):
+        rows = compute(pbr, payload)["diagnostics"]["close_allocations"]
+        return next(row for row in rows if row["order_type"] == "close_auto_reduce_wel_long")
 
-    inp_allowed = copy.deepcopy(inp_blocked)
-    inp_allowed["balance_raw"] = 1_000_000.0
-    out_allowed = compute(pbr, inp_allowed)
-    allowed_types = [o["order_type"] for o in out_allowed["orders"]]
-    assert "close_auto_reduce_wel_long" in allowed_types
-    assert not out_allowed.get("diagnostics", {}).get("loss_gate_blocks")
+    reduced = allocation(inp)
+    assert reduced["outcome"] == "trimmed"
+    assert reduced["headroom_before"] == pytest.approx(10.0)
+    assert reduced["headroom_after"] == 0.0
+
+    inp["balance_raw"] = 1_000_000.0
+    admitted = allocation(inp)
+    assert admitted["outcome"] == "admitted"
+    assert admitted["headroom_before"] == pytest.approx(10_000.0)
+    assert abs(admitted["final_qty"]) > abs(reduced["final_qty"])
 
 
 def test_twel_enforcer_uses_balance_raw_not_snapped():
@@ -5412,6 +5392,7 @@ def test_loss_gate_rejects_non_positive_raw_balance():
         },
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["global"]["loss_gate_enabled"] = True
     inp["global"]["loss_gate_max_drawdown_fraction"] = 0.01
 
     for raw_balance in [0.0, -1.0]:
@@ -5428,7 +5409,6 @@ def test_unstuck_uses_independent_spans_and_scopes_missing_emas(side):
     params = dict(
         n_positions=1,
         total_wallet_exposure_limit_ratio=1.0,
-        unstuck_close_fraction=0.1,
         unstuck_exposure_trigger_ratio=0.001,
         unstuck_loss_allowance_fraction=0.01,
         unstuck_ema_distance_fraction=0.0,

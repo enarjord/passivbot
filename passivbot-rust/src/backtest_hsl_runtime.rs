@@ -456,11 +456,8 @@ impl<const ORGANILLO: bool> super::BacktestEngine<'_, ORGANILLO> {
     ) -> Result<(), String> {
         let timestamp = i64::try_from(self.fill_timestamp_ms(k, exec)?)
             .map_err(|_| "risk fill timestamp overflow")?;
-        if self.unstuck_memory_enabled {
-            self.unstuck_memory.fill(timestamp, net)?;
-        }
-        if self.loss_gate_memory_enabled {
-            self.loss_gate_memory.fill(timestamp, net)?;
+        if self.realized_loss_memory_enabled {
+            self.realized_loss_memory.fill(timestamp, net)?;
         }
         if !self.hsl_enabled() {
             return Ok(());
@@ -622,9 +619,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: false,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 3.0,
-            loss_gate_memory_ema_span_minutes: 3.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 3.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: crate::types::EquityHardStopLossConfig { hsl: Some(config) },
             market_orders_allowed: true,
@@ -644,7 +641,6 @@ mod tests {
                     side.n_positions = coins;
                     side.total_wallet_exposure_limit_ratio = 1.0;
                     side.unstuck_loss_allowance_fraction = 0.01;
-                    side.unstuck_close_fraction = 0.1;
                     side.unstuck_exposure_trigger_ratio = 0.95;
                     side.ema_span_0_minutes = 1.0;
                     side.ema_span_1_minutes = 2.0;
@@ -702,7 +698,7 @@ mod tests {
         let d = bt.hsl_scopes[0].state.current(60_000);
         assert_eq!(d.drawdown_memory_usd as f32, 0.1_f32);
         assert_eq!(d.action, Action::Normal);
-        assert_eq!(bt.unstuck_memory.drawdown() as f32, 0.1_f32);
+        assert_eq!(bt.realized_loss_memory.drawdown() as f32, 0.1_f32);
         bt.update_hsl(1).unwrap();
         assert_eq!(bt.hsl_action(LONG, 0), Action::Panic);
         assert!(bt.hsl_scopes[0].state.current(120_000).drawdown_memory_usd > 99.0);
@@ -849,7 +845,7 @@ mod tests {
         assert!(after.exposed);
         assert_eq!(after.cooldown_until, None);
         assert!((bt.balance.usd_total_balance - 994.855).abs() < 1e-10);
-        assert_eq!(bt.unstuck_memory.drawdown() as f32, 0.05_f32 - (-5.045_f32));
+        assert_eq!(bt.realized_loss_memory.drawdown() as f32, 0.05_f32 - (-5.045_f32));
     }
 
     #[test]
@@ -925,7 +921,7 @@ mod tests {
         )
         .unwrap();
         assert!(bt.hsl_scopes[0].state.current(60_000).exposed);
-        assert_eq!(bt.unstuck_memory.drawdown() as f32, 0.2_f32);
+        assert_eq!(bt.realized_loss_memory.drawdown() as f32, 0.2_f32);
         bt.process_close_fill_long(
             2,
             0,
@@ -934,7 +930,7 @@ mod tests {
         )
         .unwrap();
         assert!(bt.hsl_scopes[0].state.current(120_000).exposed);
-        assert!(bt.unstuck_memory.drawdown() > 20.0);
+        assert!(bt.realized_loss_memory.drawdown() > 20.0);
         bt.process_close_fill_short(
             2,
             0,
@@ -943,7 +939,7 @@ mod tests {
         )
         .unwrap();
         assert!(!bt.hsl_scopes[0].state.current(120_000).exposed);
-        assert!(bt.unstuck_memory.drawdown() > 0.0);
+        assert!(bt.realized_loss_memory.drawdown() > 0.0);
     }
 
     #[test]
@@ -991,7 +987,8 @@ mod tests {
         let values = candles(2, 100.0);
         let btc = Array1::from_elem(6, 20_000.0);
         let mut p = params("coin", 2);
-        p.loss_gate_max_drawdown_fraction = 0.05;
+        p.loss_gate_enabled = true;
+        p.loss_gate_max_drawdown_fraction = Some(0.05);
         p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
         let mut bot_params = bots(2);
         for pair in &mut bot_params {
@@ -1005,8 +1002,7 @@ mod tests {
             vec![ExchangeParams::default(); 2],
             &p,
         );
-        assert!(bt.loss_gate_memory_enabled);
-        assert!(!bt.unstuck_memory_enabled);
+        assert!(bt.realized_loss_memory_enabled);
         assert!(!bt.hsl_enabled());
         bt.process_entry_fill_long(
             0,
@@ -1022,7 +1018,7 @@ mod tests {
             execution(100.0),
         )
         .unwrap();
-        assert_eq!(bt.loss_gate_memory.drawdown(), 0.2_f32 as f64);
+        assert_eq!(bt.realized_loss_memory.drawdown(), 0.2_f32 as f64);
         // Profit clips only the already-realized loss. The later loss is fully
         // debited; netting this same-time pair would incorrectly hide it.
         bt.process_close_fill_short(
@@ -1039,8 +1035,7 @@ mod tests {
             execution(80.0),
         )
         .unwrap();
-        assert_eq!(bt.loss_gate_memory.drawdown(), 20.08_f32 as f64);
-        assert_eq!(bt.unstuck_memory.drawdown(), 0.0);
+        assert_eq!(bt.realized_loss_memory.drawdown(), 20.08_f32 as f64);
         assert_eq!(bt.positions.long[0].size, 0.0);
         assert_eq!(bt.positions.short[1].size, 0.0);
         let net_ledger: f64 = bt.fills.iter().map(|fill| fill.pnl + fill.fee_paid).sum();
@@ -1049,18 +1044,18 @@ mod tests {
         assert_eq!(bt.pnl_cumsum_running_net_pside[SHORT], 19.8 + 0.02);
         let before = bt.get_orchestrator_input_cached(0, None, None);
         assert_eq!(
-            before.global.loss_gate_realized_pnl_drawdown,
+            before.global.realized_pnl_drawdown,
             20.08_f32 as f64
         );
         bt.orchestrator_input_cache = Some(before);
 
         // Cash balance and HSL episode state never mutate the realized memory.
         bt.balance.usd_total_balance += 100.0;
-        assert_eq!(bt.loss_gate_memory.drawdown(), 20.08_f32 as f64);
-        bt.loss_gate_memory.advance_to(60_000).unwrap();
+        assert_eq!(bt.realized_loss_memory.drawdown(), 20.08_f32 as f64);
+        bt.realized_loss_memory.advance_to(60_000).unwrap();
         let after = bt.get_orchestrator_input_cached(1, None, None);
         assert_eq!(
-            after.global.loss_gate_realized_pnl_drawdown,
+            after.global.realized_pnl_drawdown,
             10.04_f32 as f64
         );
         assert_eq!(after.balance_raw, bt.balance.usd_total_balance);
@@ -1070,15 +1065,16 @@ mod tests {
         rebate.fee_fraction = -0.001;
         bt.process_entry_fill_long(1, 0, &order(1.0, OrderType::EntryInitialNormalLong), rebate)
             .unwrap();
-        assert_eq!(bt.loss_gate_memory.drawdown(), (10.04_f32 - 0.1_f32) as f64);
+        assert_eq!(bt.realized_loss_memory.drawdown(), (10.04_f32 - 0.1_f32) as f64);
     }
 
     #[test]
-    fn actual_loss_restricts_unstuck_and_gate_from_equal_span_memories() {
+    fn actual_loss_restricts_unstuck_and_gate_from_the_same_memory() {
         let values = candles(1, 90.0);
         let btc = Array1::from_elem(6, 20_000.0);
         let mut p = params("coin", 1);
-        p.loss_gate_max_drawdown_fraction = 0.15;
+        p.loss_gate_enabled = true;
+        p.loss_gate_max_drawdown_fraction = Some(0.15);
         p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
         let mut bot_params = bots(1);
         bot_params[0].short.unstuck_enabled = false;
@@ -1086,7 +1082,6 @@ mod tests {
         long.unstuck_enabled = true;
         long.unstuck_ema_gating_enabled = false;
         long.unstuck_loss_allowance_fraction = 0.02;
-        long.unstuck_close_fraction = 0.5;
         long.unstuck_exposure_trigger_ratio = 0.5;
         long.wallet_exposure_limit_ratio = 0.5;
         long.risk_wel_enforcer_enabled = false;
@@ -1106,14 +1101,13 @@ mod tests {
         exit.fee_fraction = 0.0;
         bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
             .unwrap();
-        assert_eq!(bt.loss_gate_memory.drawdown(), 50.0);
+        assert_eq!(bt.realized_loss_memory.drawdown(), 50.0);
         let input = bt.get_orchestrator_input_cached(0, None, None);
         assert_eq!(input.balance_raw, 950.0);
-        assert_eq!(input.global.loss_gate_realized_pnl_drawdown, 50.0);
-        assert_eq!(input.global.unstuck_realized_pnl_drawdown, 50.0);
+        assert_eq!(input.global.realized_pnl_drawdown, 50.0);
         assert_eq!(bt.unstuck_allowance_for_position(0, LONG).unwrap(), 0.0);
         assert_eq!(
-            crate::hsl_decay::allowance(input.balance_raw, p.loss_gate_max_drawdown_fraction, 50.0)
+            crate::hsl_decay::allowance(input.balance_raw, p.loss_gate_max_drawdown_fraction.unwrap(), 50.0)
                 .unwrap(),
             0.15_f32.mul_add(1000.0, -50.0) as f64,
         );
@@ -1123,14 +1117,13 @@ mod tests {
             .iter()
             .all(|order| order.order_type != OrderType::CloseUnstuckLong));
         let mut without_loss_memory = input.clone();
-        without_loss_memory.global.unstuck_realized_pnl_drawdown = 0.0;
-        without_loss_memory.global.loss_gate_realized_pnl_drawdown = 0.0;
+        without_loss_memory.global.realized_pnl_drawdown = 0.0;
         let reference = orchestrator::compute_ideal_orders(&without_loss_memory).unwrap();
         assert!(reference
             .orders
             .iter()
             .any(|order| order.order_type == OrderType::CloseUnstuckLong));
-        assert_eq!(bt.loss_gate_memory.drawdown(), 50.0);
+        assert_eq!(bt.realized_loss_memory.drawdown(), 50.0);
     }
 
     #[test]
@@ -1139,7 +1132,8 @@ mod tests {
         let btc = Array1::from_elem(6, 20_000.0);
         for interval in [1, 5] {
             let mut p = params("coin", 1);
-            p.loss_gate_max_drawdown_fraction = 0.0;
+            p.loss_gate_enabled = true;
+            p.loss_gate_max_drawdown_fraction = Some(0.0);
             p.candle_interval_minutes = interval;
             p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
             let mut bot_params = bots(1);
@@ -1164,7 +1158,7 @@ mod tests {
             exit.fee_fraction = 0.0;
             bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
                 .unwrap();
-            assert_eq!(bt.loss_gate_memory.drawdown(), 64.0);
+            assert_eq!(bt.realized_loss_memory.drawdown(), 64.0);
             let (fills, _) = bt.run().unwrap();
             assert_eq!(fills.len(), 2);
             let mut expected = 64.0_f32;
@@ -1173,7 +1167,7 @@ mod tests {
             for _ in 0..5 * interval {
                 expected = 0.5_f32.mul_add(expected, 0.0);
             }
-            assert_eq!(bt.loss_gate_memory.drawdown(), expected as f64);
+            assert_eq!(bt.realized_loss_memory.drawdown(), expected as f64);
         }
     }
 
@@ -1181,9 +1175,10 @@ mod tests {
     fn realized_gate_zero_activates_memory_and_disabled_gate_does_not() {
         let values = candles(1, 100.0);
         let btc = Array1::from_elem(6, 20_000.0);
-        for pct in [0.0, 1.0 - f64::EPSILON, 1.0, 2.0] {
+        for (enabled, cap) in [(true, Some(0.0)), (true, Some(0.1)), (false, Some(0.1)), (false, None)] {
             let mut p = params("coin", 1);
-            p.loss_gate_max_drawdown_fraction = pct;
+            p.loss_gate_enabled = enabled;
+            p.loss_gate_max_drawdown_fraction = cap;
             p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
             let mut bot_params = bots(1);
             bot_params[0].long.unstuck_enabled = false;
@@ -1195,7 +1190,7 @@ mod tests {
                 vec![ExchangeParams::default()],
                 &p,
             );
-            assert_eq!(bt.loss_gate_memory_enabled, pct < 1.0);
+            assert_eq!(bt.realized_loss_memory_enabled, enabled);
         }
     }
 
@@ -1215,57 +1210,10 @@ mod tests {
             vec![ExchangeParams::default()],
             &p,
         );
-        assert!(!bt.loss_gate_memory_enabled);
-        assert!(!bt.unstuck_memory_enabled);
+        assert!(!bt.realized_loss_memory_enabled);
         bt.hsl_after_fill(1, 0, LONG, execution(100.0), f64::MAX)
             .unwrap();
-        assert_eq!(bt.loss_gate_memory.drawdown(), 0.0);
-    }
-
-    #[test]
-    fn independent_realized_spans_share_actual_fills_but_not_filter_state() {
-        let values = candles(1, 100.0);
-        let btc = Array1::from_elem(6, 20_000.0);
-        let mut p = params("coin", 1);
-        p.loss_gate_max_drawdown_fraction = 0.15;
-        p.unstuck_memory_ema_span_minutes = 3.0;
-        p.loss_gate_memory_ema_span_minutes = 7.0;
-        p.equity_hard_stop_loss = crate::types::EquityHardStopLossConfig::default();
-        let mut bt = Backtest::new(
-            values.view(),
-            btc.view(),
-            bots(1),
-            vec![ExchangeParams::default()],
-            &p,
-        );
-        assert!(bt.unstuck_memory_enabled && bt.loss_gate_memory_enabled);
-        let mut entry = execution(100.0);
-        entry.fee_fraction = 0.0;
-        bt.process_entry_fill_long(0, 0, &order(10.0, OrderType::EntryInitialNormalLong), entry)
-            .unwrap();
-        let mut exit = execution(50.0);
-        exit.fee_fraction = 0.0;
-        bt.process_close_fill_long(0, 0, &order(-1.0, OrderType::CloseGridLong), exit)
-            .unwrap();
-        // The ordinary ledger has one loss, while each filter remembers all of it.
-        assert_eq!(bt.fills.len(), 2);
-        assert_eq!(bt.pnl_cumsum_running_net, -50.0);
-        assert_eq!(bt.balance.usd_total_balance, 950.0);
-        assert_eq!(bt.unstuck_memory.drawdown(), 50.0);
-        assert_eq!(bt.loss_gate_memory.drawdown(), 50.0);
-        bt.unstuck_memory.advance_to(60_000).unwrap();
-        bt.loss_gate_memory.advance_to(60_000).unwrap();
-        let input = bt.get_orchestrator_input_cached(1, None, None);
-        assert_eq!(input.global.unstuck_realized_pnl_drawdown, 25.0);
-        assert_eq!(input.global.loss_gate_realized_pnl_drawdown, 37.5);
-        // A later actual profit repays each existing memory independently.
-        let mut profit = execution(110.0);
-        profit.fee_fraction = 0.0;
-        bt.process_close_fill_long(1, 0, &order(-1.0, OrderType::CloseGridLong), profit)
-            .unwrap();
-        assert_eq!(bt.unstuck_memory.drawdown(), 15.0);
-        assert_eq!(bt.loss_gate_memory.drawdown(), 27.5);
-        assert_eq!(bt.pnl_cumsum_running_net, -40.0);
+        assert_eq!(bt.realized_loss_memory.drawdown(), 0.0);
     }
 
     #[test]
@@ -1273,8 +1221,7 @@ mod tests {
         let values = candles(2, 100.0);
         let btc = Array1::from_elem(6, 20_000.0);
         let mut p = params("coin", 2);
-        p.unstuck_memory_ema_span_minutes = 15.0;
-        p.loss_gate_memory_ema_span_minutes = 31.0;
+        p.realized_loss_memory_ema_span_minutes = 31.0;
         let config = p.equity_hard_stop_loss.hsl.as_mut().unwrap();
         let mut local = config.sides.clone();
         local[LONG].memory_ema_span_minutes = 7.0;

@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import live.event_emitters as live_event_emitters
+from config.schema import get_expanded_config_prototype
 from live.event_bus import (
     ConsoleSummarySink,
     EventTypes,
@@ -5155,6 +5156,9 @@ async def test_execute_orders_parent_records_order_opened_event(monkeypatch):
                 monitor_sinks=[],
             )
 
+        def _orchestrator_uses_realized_pnl(self):
+            return False
+
         def live_value(self, key):
             assert key == "max_n_creations_per_batch"
             return 5
@@ -6418,6 +6422,7 @@ def test_monitor_unstuck_section_skips_pnl_math_when_unstuck_disabled():
     import passivbot as pb_mod
 
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.config = get_expanded_config_prototype()
     bot.open_orders = {}
     bot.has_open_unstuck_order = lambda: False
     bot._unstuck_uses_realized_pnl = lambda: False
@@ -6426,7 +6431,6 @@ def test_monitor_unstuck_section_skips_pnl_math_when_unstuck_disabled():
     )
     bot.bot_value = lambda pside, key: {
         "unstuck_loss_allowance_fraction": 0.01,
-        "unstuck_close_fraction": 0.0,
         "unstuck_exposure_trigger_ratio": 0.9,
     }[key]
 
@@ -6443,6 +6447,7 @@ def test_monitor_unstuck_section_derives_live_allowance_from_raw_diagnostic():
     import passivbot as pb_mod
 
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.config = get_expanded_config_prototype()
     bot.open_orders = {}
     bot.has_open_unstuck_order = lambda: False
     bot._unstuck_uses_realized_pnl = lambda: True
@@ -6454,7 +6459,6 @@ def test_monitor_unstuck_section_derives_live_allowance_from_raw_diagnostic():
     )
     bot.bot_value = lambda pside, key: {
         "unstuck_loss_allowance_fraction": 0.01,
-        "unstuck_close_fraction": 0.0,
         "unstuck_exposure_trigger_ratio": 0.9,
     }[key]
 
@@ -6545,6 +6549,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         _resolve_pb_order_type = pb_mod.Passivbot._resolve_pb_order_type
 
         def __init__(self):
+            portfolio_risk = get_expanded_config_prototype()["bot"]["portfolio"]["risk"]
+            self.config = {"bot": {"portfolio": {"risk": portfolio_risk}}}
             self.exchange = "bitget"
             self.user = "bitget_01"
             self.quote = "USDT"
@@ -6723,8 +6729,6 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("short", "unstuck_ema_distance_fraction"): 0.02,
                 ("long", "unstuck_loss_allowance_fraction"): 0.02,
                 ("short", "unstuck_loss_allowance_fraction"): 0.0,
-                ("long", "unstuck_close_fraction"): 0.5,
-                ("short", "unstuck_close_fraction"): 0.5,
                 ("long", "unstuck_exposure_trigger_ratio"): 0.8,
                 ("short", "unstuck_exposure_trigger_ratio"): 0.8,
                 ("long", "entry_grid_reentry_qty_multiplier"): 1.0,
@@ -6931,7 +6935,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert "market" in snapshot
     assert "forager" in snapshot
     assert "trailing" in snapshot
-    assert "unstuck" in snapshot
+    assert snapshot["unstuck"]["close_allocation"] == {"count": 0, "sample": []}
     assert "recent" in snapshot
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"][
         "last_price"

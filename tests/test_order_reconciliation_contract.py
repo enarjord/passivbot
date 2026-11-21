@@ -869,6 +869,8 @@ def test_bitget_classic_one_way_uses_trade_side_without_reduce_only(
 
 
 class _SnapshotBot:
+    _loss_gate_enabled = staticmethod(lambda: False)
+
     def __init__(self, orders):
         self.active_symbols = []
         self.open_orders = {"BTC/USDT:USDT": orders}
@@ -1239,6 +1241,8 @@ def _normalized_order(price: float) -> dict:
 
 def test_tolerance_reconciliation_maximizes_one_to_one_matches():
     class Bot:
+        _loss_gate_enabled = staticmethod(lambda: False)
+
         @staticmethod
         def live_value(key):
             assert key == "order_match_tolerance_fraction"
@@ -1261,6 +1265,8 @@ def test_tolerance_reconciliation_maximizes_one_to_one_matches():
 
 def test_tolerance_reconciliation_maps_sorted_matches_back_to_source_orders():
     class Bot:
+        _loss_gate_enabled = staticmethod(lambda: False)
+
         @staticmethod
         def live_value(key):
             assert key == "order_match_tolerance_fraction"
@@ -1284,6 +1290,8 @@ def test_tolerance_reconciliation_maps_sorted_matches_back_to_source_orders():
 
 def test_churn_evidence_never_preserves_a_stale_actual_order():
     class Bot:
+        _loss_gate_enabled = staticmethod(lambda: False)
+
         @staticmethod
         def live_value(key):
             assert key == "order_match_tolerance_fraction"
@@ -1378,6 +1386,8 @@ def test_semantic_identity_mismatches_require_reconciliation(field, replacement)
 
 def test_unsupported_generic_connector_preserves_legacy_tolerance_matching():
     class Bot:
+        _loss_gate_enabled = staticmethod(lambda: False)
+
         _order_churn_gate_enabled_for_connector = False
 
         @staticmethod

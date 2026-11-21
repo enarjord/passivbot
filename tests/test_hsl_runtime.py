@@ -38,7 +38,7 @@ def bot(mode="coin", *, side="long", events=()):
     config = generated_template(get_expanded_config_prototype(), mode)
     set_risk_memory_spans(config, 288.0)
     for pside in ("long", "short"):
-        config["bot"][pside]["hsl"].update(
+        config["bot"][pside]["risk"]["hsl"].update(
             enabled=pside == side,
             drawdown_threshold_fraction=0.05,
             # Availability/admission fixtures use an unsmoothed one-minute
@@ -47,10 +47,10 @@ def bot(mode="coin", *, side="long", events=()):
         )
         config["bot"][pside]["risk"]["max_positions"] = 1
     if mode == "portfolio":
-        config["bot"]["portfolio"]["hsl"].update(config["bot"][side]["hsl"])
-        config["bot"]["portfolio"]["hsl"]["panic_close_order_type"] = "market"
+        config["bot"]["portfolio"]["risk"]["hsl"].update(config["bot"][side]["risk"]["hsl"])
+        config["bot"]["portfolio"]["risk"]["hsl"]["panic_close_order_type"] = "market"
         for pside in ("long", "short"):
-            config["bot"][pside]["hsl"]["enabled"] = False
+            config["bot"][pside]["risk"]["hsl"]["enabled"] = False
             config["bot"][pside]["risk"]["max_positions"] = 0
             config["bot"][pside]["risk"]["total_wallet_exposure_limit_ratio"] = 0
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
@@ -86,7 +86,7 @@ def bot(mode="coin", *, side="long", events=()):
     value.bot_value = lambda side, key: config["bot"][side]["risk"][
         "max_positions" if key == "n_positions" else key
     ]
-    value.bp = lambda side, key, symbol: config["bot"][side]["hsl"][
+    value.bp = lambda side, key, symbol: config["bot"][side]["risk"]["hsl"][
         key.removeprefix("hsl_")
     ]
     return value
@@ -115,7 +115,7 @@ def run(value, marks=None, sources=None, **changes):
 
 def test_live_capture_budget_metadata_matches_strict_default_json():
     value = bot()
-    value.config["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = True
+    value.config["bot"]["long"]["risk"]["hsl"]["scale_budget_with_excess_allowance"] = True
     requests, unavailable = capture(
         value, quotes(), {}, symbols={"long": [SYMBOL], "short": []},
         now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000,
@@ -160,7 +160,7 @@ async def test_native_hsl_uses_original_quote_receipt_age(monkeypatch):
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_no_history_current_loss_is_evaluated_for_every_topology(mode, side):
     value = bot(mode, side=side)
-    policy = value.config["bot"]["portfolio"]["hsl"] if mode == "portfolio" else value.config["bot"][side]["hsl"]
+    policy = value.config["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else value.config["bot"][side]["risk"]["hsl"]
     policy["drawdown_fraction_ema_span_minutes"] = 1_000_000.0
     result, unavailable = run(value, quotes(side))
     assert not unavailable
@@ -214,9 +214,9 @@ def test_current_quote_failure_is_scoped_before_native_evaluation():
     assert [d.scope.symbol for d in result] == [SYMBOL]
     assert result[0].action == "panic"
     assert [u.scope.symbol for u in unavailable] == [other]
-    value.config["bot"]["portfolio"]["hsl"]["scope"] = "portfolio"
-    value.config["bot"]["portfolio"]["hsl"] = dict(
-        deepcopy(value.config["bot"]["long"]["hsl"]), scope="portfolio"
+    value.config["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "portfolio"
+    value.config["bot"]["portfolio"]["risk"]["hsl"] = dict(
+        deepcopy(value.config["bot"]["long"]["risk"]["hsl"]), scope="portfolio"
     )
     result, unavailable = run(value)
     assert not result and len(unavailable) == 1
@@ -359,7 +359,7 @@ def test_capture_is_immutable_and_does_not_inherit_prior_state():
     assert not unavailable
     before = evaluate(requests)
     value.positions[SYMBOL]["long"]["price"] = 80.0
-    value.config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.99
+    value.config["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] = 0.99
     assert evaluate(requests) == before
     assert run(value)[0][0].action == "normal"
 
@@ -383,13 +383,13 @@ def test_held_enabled_zero_slot_scope_is_an_explicit_configuration_error():
 def test_held_zero_slot_scope_with_hsl_disabled_is_not_selected():
     value = bot()
     value.config["bot"]["long"]["risk"]["max_positions"] = 0
-    value.config["bot"]["long"]["hsl"]["enabled"] = False
+    value.config["bot"]["long"]["risk"]["hsl"]["enabled"] = False
     assert run(value) == ((), ())
 
 
 def test_fractional_cooldown_uses_native_backtest_millisecond_rounding():
     value = bot()
-    value.config["bot"]["long"]["hsl"]["cooldown_after_red_minutes"] = 1.5 / 60_000
+    value.config["bot"]["long"]["risk"]["hsl"]["cooldown_after_red_minutes"] = 1.5 / 60_000
     set_risk_memory_spans(value.config, 288.25)
     requests, _ = capture(
         value,
@@ -483,9 +483,9 @@ def test_observed_fill_interval_reconstructs_flat_halt_and_window_expiry(mode):
     value = bot(mode, events=events)
     value.positions = {}
     policy = (
-        value.config["bot"]["portfolio"]["hsl"]
+        value.config["bot"]["portfolio"]["risk"]["hsl"]
         if mode == "portfolio"
-        else value.config["bot"]["long"]["hsl"]
+        else value.config["bot"]["long"]["risk"]["hsl"]
     )
     (decision,) = run(value, fills_started_ms=NOW - 150, fills_completed_ms=NOW - 50)[0]
     assert decision.action == "halted"
@@ -513,7 +513,7 @@ def test_observed_fill_interval_reconstructs_flat_halt_and_window_expiry(mode):
 def test_missing_quote_does_not_contaminate_disabled_side_or_other_coin_policy():
     value = bot()
     other = "OTHER/USDT:USDT"
-    value.coin_overrides[other] = {"bot": {"long": {"hsl": {"enabled": False}}}}
+    value.coin_overrides[other] = {"bot": {"long": {"risk": {"hsl": {"enabled": False}}}}}
     result, unavailable = run(value, symbols=[SYMBOL, other])
     assert not unavailable and len(result) == 1
 
@@ -524,7 +524,7 @@ def test_malformed_later_native_scope_does_not_publish_an_earlier_usable_subset(
     import live.hsl_runtime as runtime
 
     value = bot()
-    value.config["bot"]["short"]["hsl"]["enabled"] = True
+    value.config["bot"]["short"]["risk"]["hsl"]["enabled"] = True
     native = runtime.pbr.hsl_v9_evaluate_grids
     calls = []
 
@@ -714,7 +714,7 @@ def test_coin_membership_keeps_eligible_and_historical_sides_separate():
             )
         ]
     )
-    value.config["bot"]["short"]["hsl"]["enabled"] = True
+    value.config["bot"]["short"]["risk"]["hsl"]["enabled"] = True
     result, unavailable = run(
         value, symbols={"long": [SYMBOL], "short": ["SHORT_ONLY"]}
     )
@@ -730,7 +730,7 @@ def test_coin_membership_keeps_eligible_and_historical_sides_separate():
 
 def test_long_only_history_never_requires_metadata_for_the_empty_short_scope():
     value = bot("position_side", events=[event(symbol="LONG_ONLY", timestamp=NOW - 60_000)])
-    value.config["bot"]["short"]["hsl"]["enabled"] = True
+    value.config["bot"]["short"]["risk"]["hsl"]["enabled"] = True
     result, unavailable = run(value)
     assert [(d.scope.pside, d.action) for d in result] == [("short", "normal")]
     assert len(unavailable) == 1 and unavailable[0].scope.pside == "long"
@@ -832,7 +832,7 @@ def test_negative_historical_equity_uses_explicit_loss_branch():
         ]
     )
     value.positions[SYMBOL]["long"]["size"] = 100.0
-    value.config["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.5
+    value.config["bot"]["long"]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.5
     rows = [
         dict(ts=NOW - (6 - i) * 60_000, o=p, h=p, l=p, c=p)
         for i, p in enumerate([1000.0, 0.001, 0.001, 0.001, 0.001, 0.001])
@@ -928,7 +928,7 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
     from passivbot import Passivbot
 
     fixture = bot(mode)
-    policy = fixture.config["bot"]["portfolio"]["hsl"] if mode == "portfolio" else fixture.config["bot"]["long"]["hsl"]
+    policy = fixture.config["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else fixture.config["bot"]["long"]["risk"]["hsl"]
     policy["drawdown_fraction_ema_span_minutes"] = 1_000_000.0
     # Do not start a bot or exchange client: exercise the real runtime accessors
     # and symbol override resolver against canonical prepared configuration.
@@ -939,7 +939,9 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
         "TEST": {
             "bot": {
                 "long": {
-                    "hsl": {"drawdown_threshold_fraction": 0.99, "panic_close_order_type": "market"}
+                    "risk": {
+                        "hsl": {"drawdown_threshold_fraction": 0.99, "panic_close_order_type": "market"},
+                    },
                 }
             }
         }
@@ -970,7 +972,7 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
 def test_undated_flat_fill_quality_survives_without_market_requirements(mode):
     value = bot(mode)
     value.positions = {}
-    value.config["bot"]["short"]["hsl"]["enabled"] = True
+    value.config["bot"]["short"]["risk"]["hsl"]["enabled"] = True
     value._pnls_manager.get_events = lambda **_: [
         event(symbol="UNKNOWN_MARKET", timestamp=0)
     ]
@@ -1096,9 +1098,9 @@ def test_actual_unchanged_position_read_can_precede_fill_tail_without_forged_tim
     value = bot(mode, events=events)
     value.positions = {}
     policy = (
-        value.config["bot"]["portfolio"]["hsl"]
+        value.config["bot"]["portfolio"]["risk"]["hsl"]
         if mode == "portfolio"
-        else value.config["bot"]["long"]["hsl"]
+        else value.config["bot"]["long"]["risk"]["hsl"]
     )
     actual_read = observe_positions(value)
     assert actual_read.observed_ms == NOW - 200
@@ -1155,9 +1157,9 @@ def test_flat_retained_fills_do_not_require_a_delisted_market_quote(mode):
     value = bot(mode, events=events)
     value.positions = {}
     policy = (
-        value.config["bot"]["portfolio"]["hsl"]
+        value.config["bot"]["portfolio"]["risk"]["hsl"]
         if mode == "portfolio"
-        else value.config["bot"]["long"]["hsl"]
+        else value.config["bot"]["long"]["risk"]["hsl"]
     )
     decisions, unavailable = run(
         value, {}, fills_started_ms=NOW - 150, fills_completed_ms=NOW - 50
@@ -1312,7 +1314,7 @@ def test_native_grids_stay_with_their_symbol_across_scope_ordering(mode):
     }
     value.c_mults[other], value.qty_steps[other] = 1.0, 0.1
     if mode != "portfolio":
-        value.config["bot"]["short"]["hsl"]["enabled"] = True
+        value.config["bot"]["short"]["risk"]["hsl"]["enabled"] = True
     marks = {
         **quotes(),
         other: replace(
@@ -1494,9 +1496,9 @@ def test_historical_flat_and_cooldown_survive_newer_position_reads(
     value = bot(mode, side=side, events=events)
     value.positions[SYMBOL][side].update(size=sign * 1.0, price=100.0)
     policy = (
-        value.config["bot"]["portfolio"]["hsl"]
+        value.config["bot"]["portfolio"]["risk"]["hsl"]
         if mode == "portfolio"
-        else value.config["bot"][side]["hsl"]
+        else value.config["bot"][side]["risk"]["hsl"]
     )
     policy.update(
         drawdown_fraction_ema_span_minutes=1.0, cooldown_after_red_minutes=cooldown, drawdown_threshold_fraction=0.05
@@ -1523,9 +1525,9 @@ def test_disabled_hsl_does_not_require_hsl_history_or_current_inputs(mode, cap):
 
     value = bot(mode)
     for side in ("long", "short"):
-        value.config["bot"][side]["hsl"]["enabled"] = False
+        value.config["bot"][side]["risk"]["hsl"]["enabled"] = False
     if mode == "portfolio":
-        value.config["bot"]["portfolio"]["hsl"]["enabled"] = False
+        value.config["bot"]["portfolio"]["risk"]["hsl"]["enabled"] = False
     value.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = cap
     # These are not needed by HSL when it has no enabled scope. The ordinary
     # owner still validates its account receipt before any connector write.
@@ -1538,9 +1540,9 @@ def test_flat_unselected_coin_override_still_requires_hsl_history_window():
     from live.hsl_runtime import enabled
 
     value = bot()
-    value.config["bot"]["long"]["hsl"]["enabled"] = False
+    value.config["bot"]["long"]["risk"]["hsl"]["enabled"] = False
     value.coin_overrides["OTHER/USDT:USDT"] = {
-        "bot": {"short": {"hsl": {"enabled": True}}}
+        "bot": {"short": {"risk": {"hsl": {"enabled": True}}}}
     }
     value.config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 0
     assert enabled(value)
@@ -1601,9 +1603,9 @@ def test_current_budget_with_realized_loss_uses_current_equity_anchor(mode):
         ],
     )
     policy = (
-        value.config["bot"]["portfolio"]["hsl"]
+        value.config["bot"]["portfolio"]["risk"]["hsl"]
         if mode == "portfolio"
-        else value.config["bot"]["long"]["hsl"]
+        else value.config["bot"]["long"]["risk"]["hsl"]
     )
     policy.update(drawdown_fraction_ema_span_minutes=1.0, drawdown_threshold_fraction=0.095)
     marks = {SYMBOL: replace(quotes()[SYMBOL], bid=100.0, ask=100.0, last=100.0)}
@@ -1660,10 +1662,10 @@ def test_disabled_aggregate_hsl_does_not_restrict_balance_override(mode):
     value = bot(mode)
     value.config["live"]["account"]["balance_override"] = 1000.0
     if mode == "portfolio":
-        value.config["bot"]["portfolio"]["hsl"]["enabled"] = False
+        value.config["bot"]["portfolio"]["risk"]["hsl"]["enabled"] = False
     else:
         for side in ("long", "short"):
-            value.config["bot"][side]["hsl"]["enabled"] = False
+            value.config["bot"][side]["risk"]["hsl"]["enabled"] = False
     assert run(value) == ((), ())
 
 
@@ -1712,12 +1714,12 @@ def test_live_scales_slot_budget_from_coin_override_allowance(
         max_positions=10, total_wallet_exposure_limit_ratio=2.5, we_excess_allowance_fraction=0.07
     )
     value.positions[SYMBOL][side]["size"] = 1 if side == "long" else -1
-    value.config["bot"][side]["hsl"]["drawdown_threshold_fraction"] = 0.2
+    value.config["bot"][side]["risk"]["hsl"]["drawdown_threshold_fraction"] = 0.2
     mark = 78.0 if side == "long" else 122.0
     marks = {SYMBOL: MarketSnapshot(SYMBOL, mark, mark, mark, NOW - 100, "fake")}
     ordinary, unavailable = run(value, marks=marks)
     assert not unavailable and ordinary[0].action == "panic"
-    value.config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"] = True
+    value.config["bot"][side]["risk"]["hsl"]["scale_budget_with_excess_allowance"] = True
     root_scaled, unavailable = run(value, marks=marks)
     assert not unavailable and root_scaled[0].action == "panic"
     value.coin_overrides[SYMBOL] = {

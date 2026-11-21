@@ -15,7 +15,7 @@ from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
 from config.metrics import CORE_METRIC_DEFINITION_VERSION
 
-CONTRACT_VERSION = 11
+CONTRACT_VERSION = 12
 CONTRACT_KEY = "optimizer_evaluation_contract"
 CONTRACT_CACHE_KEY = "_optimizer_evaluation_contract"
 
@@ -90,7 +90,7 @@ def build_evaluation_contract(config: dict) -> dict:
         ]:
             for side in ("long", "short"):
                 for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
-                    bot.get(side, {}).get("unstuck", {}).pop(key, None)
+                    bot.get(side, {}).get("risk", {}).get("unstuck", {}).pop(key, None)
     for key in bounds:
         path = resolve_optimizer_key_path(effective, key)
         if path is not None:

@@ -162,7 +162,7 @@ async def test_confirmed_anchor_correction_revalidates_and_same_id_repair_recove
 
     bot, symbol, exchange = await pending_position_bot(tmp_path, monkeypatch)
     for side in ("long", "short"):
-        bot.config["bot"][side]["hsl"]["enabled"] = hsl_enabled
+        bot.config["bot"][side]["risk"]["hsl"]["enabled"] = hsl_enabled
     owner = hsl_live.owner(bot)
     original_anchor = bot._get_last_position_change_anchors()[symbol]["long"]
     signature = bot._fill_events_signature(bot._pnls_manager.get_events())
@@ -219,8 +219,8 @@ async def test_disabled_owner_rebuilds_trailing_after_correction_during_ema(
 
     cfg = generated_template(mutable_runtime_fixture(load_fake_hsl_config()), "coin")
     for side in ("long", "short"):
-        cfg["bot"][side]["hsl"]["enabled"] = False
-        cfg["bot"][side]["unstuck"]["enabled"] = False
+        cfg["bot"][side]["risk"]["hsl"]["enabled"] = False
+        cfg["bot"][side]["risk"]["unstuck"]["enabled"] = False
         cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
     cfg["bot"]["long"]["universe"]["approved_coins"] = ["BTC"]
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["close"][

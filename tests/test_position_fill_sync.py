@@ -16,7 +16,11 @@ def settling_config(scope="coin", *, enabled=True):
         policy["enabled"] = enabled
     return {
         "config_version": "v9.0.0",
-        "bot": {"portfolio": {'hsl': policy}, 'long': {'hsl': {'enabled': enabled}}, 'short': {'hsl': {'enabled': enabled}}},
+        "bot": {
+            "portfolio": {"risk": {"hsl": policy}},
+            "long": {"risk": {"hsl": {"enabled": enabled}}},
+            "short": {"risk": {"hsl": {"enabled": enabled}}},
+        },
     }
 
 
@@ -256,12 +260,12 @@ def test_canonical_aggregate_scope_defers_every_contributing_pending_position(pe
 def test_pside_gate_uses_only_the_canonical_order_side_enabled_policy():
     sync, _ = gate()
     config = settling_config("position_side")
-    config["bot"]["long"]["hsl"]["enabled"] = False
+    config["bot"]["long"]["risk"]["hsl"]["enabled"] = False
     bot = SimpleNamespace(_position_fill_sync=sync, config=config)
     assert not permits(bot, dict(symbol=A[0], position_side="long"))
     assert permits(bot, dict(symbol=C[0], position_side="long"))
     assert permits(bot, dict(symbol=B[0], position_side="short"))
-    config["bot"]["long"]["hsl"]["enabled"] = True
+    config["bot"]["long"]["risk"]["hsl"]["enabled"] = True
     assert not permits(bot, dict(symbol=C[0], position_side="long"))
 
 
@@ -280,7 +284,7 @@ def test_legacy_policy_fields_cannot_override_canonical_scope(scope):
 def test_invalid_canonical_scope_fails_explicitly_when_gate_is_consumed(scope):
     sync, _ = gate()
     config = settling_config()
-    config["bot"]["portfolio"]["hsl"]["scope"] = scope
+    config["bot"]["portfolio"]["risk"]["hsl"]["scope"] = scope
     config["live"] = {"hsl_signal_mode": "coin"}
     with pytest.raises(ValueError, match="invalid HSL scope"):
         permits(SimpleNamespace(_position_fill_sync=sync, config=config),
@@ -288,7 +292,7 @@ def test_invalid_canonical_scope_fails_explicitly_when_gate_is_consumed(scope):
 
 
 @pytest.mark.parametrize("config", [{}, {"bot": {}}, {"bot": {"risk": {}}},
-                                    {"bot": {"portfolio": {'hsl': {}}}}])
+                                    {"bot": {"portfolio": {"risk": {"hsl": {}}}}}])
 def test_missing_canonical_scope_has_no_legacy_or_coin_fallback(config):
     sync, _ = gate()
     with pytest.raises(KeyError):
@@ -300,7 +304,7 @@ def test_missing_canonical_scope_has_no_legacy_or_coin_fallback(config):
 def test_missing_enabled_fact_for_consumed_aggregate_policy_fails(scope):
     sync, _ = gate()
     config = settling_config(scope)
-    policy = config["bot"]["portfolio"]["hsl"] if scope == "portfolio" else config["bot"]["long"]["hsl"]
+    policy = config["bot"]["portfolio"]["risk"]["hsl"] if scope == "portfolio" else config["bot"]["long"]["risk"]["hsl"]
     del policy["enabled"]
     with pytest.raises(KeyError, match="enabled"):
         permits(SimpleNamespace(_position_fill_sync=sync, config=config),

@@ -30,7 +30,7 @@ async def test_hsl_disabled_ordinary_waits_for_existing_account_refresh(monkeypa
     # Retain an earlier receipt so identity changes can be exercised even
     # though disabled HSL will no longer acquire one itself.
     bot._hsl_fill_observation = hsl_runtime.observe_fills(bot, (NOW, NOW))
-    bot.config["bot"]["long"]["hsl"]["enabled"] = False
+    bot.config["bot"]["long"]["risk"]["hsl"]["enabled"] = False
     assert not hsl_runtime.enabled(bot)
     owner.sources[SYMBOL] = Sources((), (), 0)
     ledger = bot._ensure_freshness_ledger()
@@ -100,7 +100,7 @@ async def test_hsl_disabled_ordinary_waits_for_existing_account_refresh(monkeypa
 @pytest.mark.asyncio
 async def test_hsl_disabled_ordinary_without_refresh_preserves_existing_preparation(monkeypatch):
     fixture = planning_bot(monkeypatch)
-    fixture.bot.config["bot"]["long"]["hsl"]["enabled"] = False
+    fixture.bot.config["bot"]["long"]["risk"]["hsl"]["enabled"] = False
     fixture.release.set()
     plan = await fixture.owner._ordinary_plan()
     assert plan is not None and fixture.owner._account_matches(plan[3], fixture.clock[0])
@@ -128,7 +128,7 @@ async def test_hsl_disabled_rejoins_account_refresh_once_during_final_preparatio
 ):
     fixture = planning_bot(monkeypatch)
     bot, owner = fixture.bot, fixture.owner
-    bot.config["bot"]["long"]["hsl"]["enabled"] = False
+    bot.config["bot"]["long"]["risk"]["hsl"]["enabled"] = False
     assert not hsl_runtime.enabled(bot)
     fixture.release.set()
     ledger = bot._ensure_freshness_ledger()

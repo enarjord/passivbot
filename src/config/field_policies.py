@@ -7,8 +7,8 @@ metadata never adds optimizer genes or per-coin permissions.
 from .strategy_spec import BOT_POSITION_SIDES
 
 SPECIAL_OPTIMIZER_KEY_PATHS = {
-    "unstuck_memory_ema_span_minutes": ("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
-    "loss_gate_memory_ema_span_minutes": ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes"),
+    "realized_loss_memory_ema_span_minutes": ("bot", "portfolio", "risk", "loss_realization", "memory_ema_span_minutes"),
+    "loss_gate_max_drawdown_fraction": ("bot", "portfolio", "risk", "loss_realization", "loss_gate", "max_realized_drawdown_fraction"),
     "long_forager_volume_ema_span_minutes": ("bot", "long", "forager", "volume_ema_span_minutes"),
     "long_forager_log_range_ema_span_minutes": (
         "bot",
@@ -94,13 +94,13 @@ for _side in BOT_POSITION_SIDES:
 
 CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
     {
-        "hsl.cooldown_after_red_minutes",
-        "hsl.drawdown_fraction_ema_span_minutes",
-        "hsl.memory_ema_span_minutes",
-        "hsl.scale_budget_with_excess_allowance",
-        "hsl.enabled",
-        "hsl.panic_close_order_type",
-        "hsl.drawdown_threshold_fraction",
+        "risk.hsl.cooldown_after_red_minutes",
+        "risk.hsl.drawdown_fraction_ema_span_minutes",
+        "risk.hsl.memory_ema_span_minutes",
+        "risk.hsl.scale_budget_with_excess_allowance",
+        "risk.hsl.enabled",
+        "risk.hsl.panic_close_order_type",
+        "risk.hsl.drawdown_threshold_fraction",
     }
 )
 OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
@@ -113,14 +113,13 @@ OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
         "risk.position_exposure_enforcer.enabled",
         "risk.position_exposure_enforcer.threshold_ratio",
         "risk.we_excess_allowance_fraction",
-        "unstuck.close_fraction",
-        "unstuck.ema_distance_fraction",
-        "unstuck.ema_span_0_minutes",
-        "unstuck.ema_span_1_minutes",
-        "unstuck.ema_gating_enabled",
-        "unstuck.enabled",
-        "unstuck.loss_allowance_fraction",
-        "unstuck.exposure_trigger_ratio",
+        "risk.unstuck.ema_distance_fraction",
+        "risk.unstuck.ema_span_0_minutes",
+        "risk.unstuck.ema_span_1_minutes",
+        "risk.unstuck.ema_gating_enabled",
+        "risk.unstuck.enabled",
+        "risk.unstuck.loss_allowance_fraction",
+        "risk.unstuck.exposure_trigger_ratio",
     }
     | CONDITIONAL_HSL_OVERRIDE_PATHS
 )

@@ -58,7 +58,7 @@ def _inputs(*, target=2.0, debt_cap=0.975):
         bot = config["bot"][side]
         bot["enabled"] = side == "long"
         bot["universe"].update(minimum_coin_age_days=0.0, filter_by_min_effective_cost=False)
-        bot["hsl"]["enabled"] = False
+        bot["risk"]["hsl"]["enabled"] = False
         bot["entry_cooldown"].update(
             base_duration_minutes=24.1,
             min_duration_minutes=0.0,

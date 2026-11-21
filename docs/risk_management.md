@@ -84,37 +84,23 @@ while wallet exposure uses average entry price. The chunk can therefore reduce t
 by more or less than `close_fraction`, before accounting for rounding, exchange minimums, loss allowance
 and balance changes. See the [auto-unstuck formulas](config.bot.md#auto-unstucking) for details.
 
-#### Auto-Unstuck Loss-Allowance Contract
+#### Auto-Unstuck Exposure and Loss Allowance
 
-Auto-unstuck loss allowance is a pacing budget, not an exact per-order loss
-cap. The bot may need to snap an unstuck close to the exchange's minimum
-quantity or minimum cost. If the remaining allowance is smaller than that
-minimum executable close, the close may exceed the remaining allowance. Further
-unstucking is then blocked until later realized profits or loss-memory decay rebuild positive
-allowance.
+Auto-unstuck targets the exposure trigger. The projected position after a close must
+keep positive account balance and lower the exposure ratio without going below the
+trigger. The exposure calculation includes the close's projected net PnL. A venue
+minimum larger than the exposure-bounded quantity makes the proposal infeasible.
 
-The global realized-loss gate has its own threshold, `bot.portfolio.loss_gate.max_drawdown_fraction`,
-and consumes the same account-wide ordered net fills with its own span and accumulator. It can still block a
-non-panic unstuck close if the projected loss exceeds its remaining allowance.
+A lossy close is also bounded by positive unstuck allowance and any active portfolio
+loss gate. Quantity rounds up to an executable lot when loss headroom binds and
+rounds down at the exposure floor. The final projected loss is reserved in full.
+Passivbot selects at most one unstuck close per account. On each position it keeps
+one protective reducer and caps ordinary closes to the remaining inventory.
 
-Auto-unstuck may be emitted in the same ideal-order batch as compatible ordinary
-grid, trailing, or EMA-anchor closes for that position. Passivbot keeps only one
-protective reducer, reserves its quantity, and caps ordinary closes to the
-remaining position size. Competing panic, exposure-repair, and auto-unstuck
-intents are consolidated by keeping the largest loss-admissible final absolute
-reduction after position/minimum sizing, not their sum. If the realized-loss
-gate blocks the largest non-panic intent, Passivbot tries the next-largest
-intent. A full-position panic remains exclusive. The realized-loss gate
-evaluates reducer candidates largest-first across the shared batch allowance
-before ordinary closes, and live reconciliation reapplies the cap against the
-latest position without consuming reducer quantity first.
-
-Auto-unstuck uses one continuous account-wide net-realized loss memory, controlled
-by `bot.portfolio.unstuck.memory_ema_span_minutes`. Every ordered fill updates each enabled memory, including
-fees and signed rebates; profits repay remembered loss and elapsed minutes decay it.
-HSL episode boundaries do not reset it. Live bootstrap uses available fill coverage
-and discloses its unknown prefix; a finite suffix is not proof of the infinite past.
-See the [v9 risk model](v9_risk_model.md) for the exact allowance and sampling rules.
+Unstuck shares its realized-loss memory with the portfolio gate. Ordered net fills,
+fees and rebates update the memory, and elapsed minutes decay it. Live restart
+discloses approximate initialization when earlier fill history is unknown.
+See the [v9 risk model](v9_risk_model.md) for the formulas and allocation rules.
 
 ### B. Exposure Enforcers
 While exposure limits prevent *new* orders, it is still possible for existing positions to swell beyond their limits (e.g., the account holds BTC as collateral and the BTC/USD price drops, the user withdraws funds while positions are maxed out, or the account realizes significant losses). To handle this, Passivbot provides three parameters that control how aggressively to cap and trim exposure.
@@ -156,7 +142,7 @@ the effective excess allowance and effective limit as zero. If
 `total_wallet_exposure_limit_ratio` is non-positive or non-finite, bounded mode
 grants no excess headroom.
 
-In coin HSL mode, `bot.<side>.hsl.scale_budget_with_excess_allowance=true` also
+In coin HSL mode, `bot.<side>.risk.hsl.scale_budget_with_excess_allowance=true` also
 multiplies the balance budget by `1 + effective_we_excess_allowance_fraction`. It defaults
 to `false`. See [HSL budgets](equity_hard_stop_loss.md#scopes-and-budgets).
 
@@ -192,7 +178,7 @@ to `false`. See [HSL budgets](equity_hard_stop_loss.md#scopes-and-budgets).
 > **Auto-Unstuck Trigger:**
 > The exposure eligibility boundary is `effective_we_limit * unstuck_exposure_trigger_ratio`:
 > `0.375 * 0.48 == 0.18`. Wallet exposure must be strictly above this boundary,
-> and the other unstuck gates must pass. This is not a target remaining exposure.
+> and the other unstuck gates must pass. This forms the floor for an executable unstuck close.
 
 
 
@@ -231,47 +217,36 @@ reductions, with stable symbol tie-breaks, and stop once projected TWE reaches t
 
 `normal`, `graceful_stop`, and `tp_only` open positions are managed by TWEL auto-reduce. Manual and
 panic exposure contributes to the same-side TWE measurement, but those positions remain outside
-TWEL auto-reduce management. TWEL auto-reduce is still subject to `bot.portfolio.loss_gate.max_drawdown_fraction`; only
+TWEL auto-reduce management. TWEL auto-reduce is still subject to `bot.portfolio.risk.loss_realization.loss_gate`; only
 panic close orders bypass the realized-loss gate.
 
-### C. Realized-Loss Gate (`bot.portfolio.loss_gate.max_drawdown_fraction`)
-This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.
+### C. Realized-Loss Gate
 
-The gate consumes the same ordered account-wide net-realized facts as auto-unstuck,
-using its own drawdown D and elapsed-minute decay from `bot.portfolio.loss_gate.memory_ema_span_minutes` and per-fill clipping.
-All actual fills contribute net PnL and signed fees once, even when HSL and unstuck
-are disabled. UPNL and external balance changes do not change D.
+Set `bot.portfolio.risk.loss_realization.loss_gate.enabled` and give the gate a
+`max_realized_drawdown_fraction` in `[0, 1)`. The default gate is disabled.
+A cap of zero is valid and blocks lossy non-panic closes. An enabled gate sizes
+both sides against account-wide allowance. This includes WEL/TWEL and unstuck
+reducers. Panic closes bypass admission, and their realized fills update the
+shared drawdown memory.
 
-With raw balance B and fraction r=`max_drawdown_fraction`, Rust computes:
+For raw balance `B`, remembered currency drawdown `D` and configured cap `r`,
+remaining headroom starts at `max(0, r * (B + D) - D)`. Passivbot trims losing
+closes to available headroom in execution priority order. When a smaller amount
+cannot be placed, one step or effective venue minimum can exceed positive
+headroom. A binding venue minimum can exceed the configured cap on a small
+account. Resting and unresolved closes can defer a replacement until their
+remaining execution and fills are confirmed.
 
-`remaining_allowance = max(0, r * (B + D) - D)`
-
-The exact float32/FMA graph follows the [v9 risk model](v9_risk_model.md). TWEL does
-not multiply r. A candidate close whose projected loss exceeds the remaining
-allowance is blocked; fills and decay replenish or consume that allowance.
-
-Behavior by value:
-* `max_drawdown_fraction == 0.0`: block all lossy closes; negative or nonfinite values are invalid.
-* `0.0 < max_drawdown_fraction < 1.0`: allow losses within the remaining gate-memory allowance.
-* `max_drawdown_fraction >= 1.0`: disabled.
-
-Operational notes:
-* The shipped default is `1.0`, which keeps the gate disabled until you opt in explicitly.
-* Live bot logs visible warnings whenever an order is blocked by this gate.
-* This can intentionally block automatic reducers if they would realize too much loss.
-* If you need immediate forced reduction regardless of realized loss, use panic mode.
-* The old `live.realized_loss_gate_lookback_minutes` window is removed in config
-  schema v9.0.0. Active old-schema gates need explicit migration acknowledgment;
-  zero and all-history windows have no equivalent EMA span.
-* Restart reconstructs a declared bounded authoritative suffix from a fixed origin.
-  An unknown-prefix zero initializer and its residual attenuation are disclosed;
-  a finite suffix does not prove exact infinite-history memory.
+The shared decay span lives at
+`bot.portfolio.risk.loss_realization.memory_ema_span_minutes`. The
+[v8 migration guide](v8_to_v9_migration.md) explains conversion of the released
+rolling gate and the acknowledgment required for an active policy.
 
 ### D. Equity Hard Stop Loss
 
 HSL uses one Rust forward risk model in live trading, backtesting and optimization. Coin mode
 uses one signal per coin and position side; position_side mode uses one per active side;
-portfolio mode uses one explicit policy under `bot.portfolio.hsl`.
+portfolio mode uses one explicit policy under `bot.portfolio.risk.hsl`.
 
 HSL maintains slowly decaying currency drawdown and an independent fast EMA of its
 contemporaneous drawdown ratio. The minimum of the raw ratio and ratio EMA must

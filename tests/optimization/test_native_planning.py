@@ -71,26 +71,19 @@ def set_value(planner, vector, key, value):
     return values
 
 
-MEMORY_PATHS = {
-    "unstuck_memory_ema_span_minutes": (
-        "bot.portfolio.unstuck.memory_ema_span_minutes", ("portfolio", "unstuck", "memory_ema_span_minutes"),
-    ),
-    "loss_gate_memory_ema_span_minutes": (
-        "bot.portfolio.loss_gate.memory_ema_span_minutes", ("portfolio", "loss_gate", "memory_ema_span_minutes"),
-    ),
-}
+MEMORY_KEY = "realized_loss_memory_ema_span_minutes"
+MEMORY_PATH = "bot.portfolio.risk.loss_realization.memory_ema_span_minutes"
 
 
-def global_span_inputs(memory_key, *, suite=False, fixed=False, scenario_pin=False):
+def global_span_inputs(*, suite=False, fixed=False, scenario_pin=False):
     previous, _ = inputs(suite=suite)
     config = deepcopy(previous.base.config)
-    override_path, bound_path = MEMORY_PATHS[memory_key]
     from optimization.warmup import _apply_config_overrides
     _apply_config_overrides(config, {
-        ".".join(("optimize", "bounds", *bound_path)): [1000.0, 50000.0],
+        MEMORY_PATH.replace("bot.", "optimize.bounds.", 1): [1000.0, 50000.0],
     })
     if fixed:
-        config["optimize"]["fixed_runtime_overrides"] = {override_path: 4096.5}
+        config["optimize"]["fixed_runtime_overrides"] = {MEMORY_PATH: 4096.5}
     base = Evaluator(previous.base.hlcvs_specs, previous.base.btc_usd_specs,
                      previous.base.msss, config)
     evaluator = base
@@ -99,7 +92,7 @@ def global_span_inputs(memory_key, *, suite=False, fixed=False, scenario_pin=Fal
         for context in contexts:
             context.config = deepcopy(config)
             if scenario_pin and context.label == "stress":
-                context.overrides[override_path] = 2048.5
+                context.overrides[MEMORY_PATH] = 2048.5
         evaluator = SuiteEvaluator(base, contexts, {"default": "mean"})
     bindings = []
     for binding in previous.bindings:
@@ -122,12 +115,11 @@ def global_span_inputs(memory_key, *, suite=False, fixed=False, scenario_pin=Fal
     return planner, vector
 
 
-@pytest.mark.parametrize("memory_key", MEMORY_PATHS)
 @pytest.mark.parametrize("suite", [False, True])
-def test_global_memory_span_gene_reuses_dataset_and_changes_effective_requests(memory_key, suite):
-    planner, vector = global_span_inputs(memory_key, suite=suite)
-    low_vector = set_value(planner, vector, memory_key, 1000.0)
-    high_vector = set_value(planner, vector, memory_key, 50000.0)
+def test_global_memory_span_gene_reuses_dataset_and_changes_effective_requests(suite):
+    planner, vector = global_span_inputs(suite=suite)
+    low_vector = set_value(planner, vector, MEMORY_KEY, 1000.0)
+    high_vector = set_value(planner, vector, MEMORY_KEY, 50000.0)
     low = planner.prepare("low", low_vector)
     high = planner.prepare("high", high_vector)
     repeated = planner.prepare("repeated", low_vector)
@@ -136,53 +128,51 @@ def test_global_memory_span_gene_reuses_dataset_and_changes_effective_requests(m
     for plan, expected in ((low, 1000.0), (high, 50000.0)):
         assert len(plan.requests) == (2 if suite else 1)
         for request in plan.requests:
-            assert request.parameters[memory_key] == expected
-    other_memory = next(key for key in MEMORY_PATHS if key != memory_key)
+            assert request.parameters[MEMORY_KEY] == expected
     for low_request, high_request in zip(low.requests, high.requests, strict=True):
-        assert low_request.parameters[other_memory] == high_request.parameters[other_memory]
         for side in ("long", "short"):
             hsl_key = f"{side}_hsl_memory_ema_span_minutes"
             assert low_request.parameters[hsl_key] == high_request.parameters[hsl_key]
 
 
-@pytest.mark.parametrize("memory_key", MEMORY_PATHS)
-def test_fixed_global_memory_span_deduplicates_shadow_gene(memory_key):
-    planner, vector = global_span_inputs(memory_key, fixed=True)
-    low = planner.prepare("low", set_value(planner, vector, memory_key, 1000.0))
-    high = planner.prepare("high", set_value(planner, vector, memory_key, 50000.0))
+def test_fixed_global_memory_span_deduplicates_shadow_gene():
+    planner, vector = global_span_inputs(fixed=True)
+    low = planner.prepare("low", set_value(planner, vector, MEMORY_KEY, 1000.0))
+    high = planner.prepare("high", set_value(planner, vector, MEMORY_KEY, 50000.0))
     assert low.effective_key == high.effective_key
     assert low.requests[0].parameters == high.requests[0].parameters
-    assert low.requests[0].parameters[memory_key] == 4096.5
+    assert low.requests[0].parameters[MEMORY_KEY] == 4096.5
 
 
-@pytest.mark.parametrize("memory_key", MEMORY_PATHS)
-def test_last_scenario_global_memory_span_override_is_request_owned(memory_key):
-    planner, vector = global_span_inputs(memory_key, suite=True, scenario_pin=True)
-    low = planner.prepare("low", set_value(planner, vector, memory_key, 1000.0))
-    high = planner.prepare("high", set_value(planner, vector, memory_key, 50000.0))
+def test_last_scenario_global_memory_span_override_is_request_owned():
+    planner, vector = global_span_inputs(suite=True, scenario_pin=True)
+    low = planner.prepare("low", set_value(planner, vector, MEMORY_KEY, 1000.0))
+    high = planner.prepare("high", set_value(planner, vector, MEMORY_KEY, 50000.0))
     assert low.effective_key != high.effective_key
     assert [r.dataset_id for r in low.requests] == [r.dataset_id for r in high.requests]
     assert low.requests[1].parameters == high.requests[1].parameters
-    assert low.requests[0].parameters[memory_key] == 1000.0
-    assert high.requests[0].parameters[memory_key] == 50000.0
-    assert low.requests[1].parameters[memory_key] == 2048.5
+    assert low.requests[0].parameters[MEMORY_KEY] == 1000.0
+    assert high.requests[0].parameters[MEMORY_KEY] == 50000.0
+    assert low.requests[1].parameters[MEMORY_KEY] == 2048.5
 
 
-@pytest.mark.parametrize("memory_key", MEMORY_PATHS)
 @pytest.mark.parametrize(
     "path,value",
     [
         ("live.startup.risk_bootstrap_max_lookback_minutes", 64800.0),
-        ("bot.portfolio.loss_gate.max_drawdown_fraction", 0.5),
+        (
+            "bot.portfolio.risk.loss_realization.loss_gate",
+            {"enabled": True, "max_realized_drawdown_fraction": 0.5},
+        ),
         ("bot.portfolio.execution.market_orders_allowed", True),
         ("backtest.starting_balance", 2000.0),
     ],
 )
-def test_global_memory_span_gene_does_not_relax_other_dataset_inputs(memory_key, path, value):
-    planner, vector = global_span_inputs(memory_key)
+def test_global_memory_span_gene_does_not_relax_other_dataset_inputs(path, value):
+    planner, vector = global_span_inputs()
     planner.base.config["optimize"]["fixed_runtime_overrides"] = {path: value}
     with pytest.raises(ValueError, match="dataset-owned execution inputs"):
-        planner.prepare("changed-static", set_value(planner, vector, memory_key, 1000.0))
+        planner.prepare("changed-static", set_value(planner, vector, MEMORY_KEY, 1000.0))
 
 
 def test_fixed_runtime_policy_and_exact_last_scenario_override_are_materialized_once(monkeypatch):

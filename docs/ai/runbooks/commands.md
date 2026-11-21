@@ -109,7 +109,7 @@ passivbot tool clean-config configs/private/input.json configs/private/clean.jso
 passivbot tool clean-config configs/private/input.json configs/private/live.json --mode live
 passivbot tool clean-config input.json compact.json --mode compact
 passivbot tool clean-config input.json resolved.json --mode resolved
-passivbot tool config-explain input.json bot.long.unstuck.ema_span_0_minutes --json
+passivbot tool config-explain input.json bot.long.risk.unstuck.ema_span_0_minutes --json
 passivbot tool clean-config configs/private/raw --dry-run --max-depth 2
 passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json
 passivbot tool migrate-config-v9 config_v8.json --best-effort --dry-run --diff

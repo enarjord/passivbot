@@ -40,7 +40,7 @@ def _worker_config(config):
                 for name in ("ema_span_0_minutes", "ema_span_1_minutes"):
                     if name not in strategy_patch:
                         # No coin strategy pin: inherit the explicit request value.
-                        side_patch.get("unstuck", {}).pop(name, None)
+                        side_patch.get("risk", {}).get("unstuck", {}).pop(name, None)
                         side_patch.pop(f"unstuck_{name.removesuffix('_minutes')}", None)
     return result
 

@@ -839,6 +839,11 @@ def apply_bot_config_patch(config, overrides, *, channel="authored", policy_sour
     serialized metadata and never resolves source files. Equal declarations and
     parent replacements retain presence through the same typed source API.
     """
+    from .migrations.v9 import reject_retired_risk_path
+
+    for selector in overrides:
+        if isinstance(selector, str):
+            reject_retired_risk_path(selector)
     if policy_source is not None and type(policy_source) is not BotPolicy:
         raise TypeError("patch source must be an exact BotPolicy")
     policy = (policy_source if policy_source is not None else

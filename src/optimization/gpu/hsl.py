@@ -60,7 +60,7 @@ def project_bot(payload, coin_index, side, config, *, base=False):
         if base:
             from config.hsl import native_hsl_policy
 
-            policy = native_hsl_policy(config["bot"][side]["hsl"])
+            policy = native_hsl_policy(config["bot"][side]["risk"]["hsl"])
         else:
             policy = hsl["coins"][coin][index]
     else:

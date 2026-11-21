@@ -123,7 +123,7 @@ def _hsl_side_config(config: dict[str, Any], pside: str) -> dict[str, Any]:
     bot = _section(config.get("bot"))
     side_config = _section(bot.get(pside))
     values = {
-        key: _section(side_config.get("hsl")).get(key)
+        key: _section(_section(side_config.get("risk")).get("hsl")).get(key)
         for key in FIELDS
     }
     return {"present": any(value is not None for value in values.values()), **values}
@@ -140,23 +140,10 @@ def _config_report(config: dict[str, Any]) -> dict[str, Any]:
         },
         "hsl": {
             "signal_mode": _section(
-                _section(_section(config.get("bot")).get("portfolio")).get("hsl")
+                _section(_section(_section(config.get("bot")).get("portfolio")).get("risk")).get("hsl")
             ).get("scope"),
             "sides": {pside: _hsl_side_config(config, pside) for pside in SIDES},
-            "portfolio": _hsl_side_config(
-                {
-                    "bot": {
-                        "portfolio": {
-                            "hsl": _section(
-                                _section(_section(config.get("bot")).get("portfolio")).get(
-                                    "hsl"
-                                )
-                            )
-                        }
-                    }
-                },
-                "portfolio",
-            ),
+            "portfolio": _hsl_side_config(config, "portfolio"),
         },
     }
 

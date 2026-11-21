@@ -382,13 +382,13 @@ def test_multicoin_adaptive_checkpoint_preserves_every_output(side):
     ).items():
         row[keys.index(key)] = value
     matrix = np.asarray([row], dtype=float)
-    plain = MpsTrailingMartingaleMulticoinRunner(run, data, side=side, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
+    plain = MpsTrailingMartingaleMulticoinRunner(run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, side=side, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
     expected = {
         key: value.cpu().clone() if isinstance(value, torch.Tensor) else value
         for key, value in plain.run(matrix).items()
     }
     chunked = MpsTrailingMartingaleMulticoinRunner(
-        run, data, side=side, max_dispatch_candidate_bars=94,
+        run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, side=side, max_dispatch_candidate_bars=94,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},

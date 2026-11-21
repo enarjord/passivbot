@@ -33,11 +33,11 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
     cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     if side == "short":
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
-        cfg["bot"]["long"]["hsl"]["enabled"] = False
+        cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
             max_positions=0, total_wallet_exposure_limit_ratio=0.0
         )
-    policy = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
+    policy = cfg["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["risk"]["hsl"]
     policy.update(
         enabled=True,
         drawdown_threshold_fraction=0.9,
@@ -98,9 +98,9 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
         hsl_live.owner(bot).cancel_inputs()
         await asyncio.sleep(0.01)
         policy = (
-            bot.config["bot"]["portfolio"]["hsl"]
+            bot.config["bot"]["portfolio"]["risk"]["hsl"]
             if mode == "portfolio"
-            else bot.config["bot"][side]["hsl"]
+            else bot.config["bot"][side]["risk"]["hsl"]
         )
         policy["drawdown_threshold_fraction"] = 0.05
         await bot.update_pnls()

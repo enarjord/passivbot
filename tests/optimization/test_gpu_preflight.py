@@ -39,6 +39,7 @@ def test_unsupported_collateral_rejected_before_optional_device_imports(
 
 def test_suite_overrides_cannot_hide_unsupported_collateral():
     config = get_template_config()
+    config["bot"]["global"]["risk"]["unstuck"]["enabled"] = False
     config["optimize"]["backend"] = "gpu"
     original = deepcopy(config)
     with pytest.raises(ValueError, match="btc_collateral_target_ratio=0"):
@@ -97,3 +98,16 @@ def test_ema_position_enforcers_rejected_before_device_imports(monkeypatch, side
                               timestamps=None, exchange="binance", batch_size=1, needed_metrics=["cagr_fraction_strategy_equity"])
     config["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = 0
     validate_gpu_backtest_config(config)  # Dormant risk settings on disabled sides are unused.
+
+
+def test_gpu_preflight_checks_only_evaluated_scenario_risk_policy():
+    config = get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    config["bot"]["global"]["risk"]["unstuck"]["enabled"] = True
+    _run_gpu_preparation_preflight(config, dict(enabled=True, scenarios=[
+        dict(label="supported", overrides={"bot.global.risk.unstuck.enabled": False}),
+    ]))
+    with pytest.raises(ValueError, match="unstuck exposure sizing.*CPU"):
+        _run_gpu_preparation_preflight(config, dict(enabled=True, scenarios=[
+            dict(label="unsupported", overrides={}),
+        ]))

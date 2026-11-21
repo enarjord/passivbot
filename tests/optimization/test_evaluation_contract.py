@@ -73,7 +73,7 @@ def test_resume_ignores_candidate_values_but_rejects_fixed_bot_policy():
     old = _record(config)
     old["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 37.0
     assert _resume_config_mismatches(old, config) == []
-    config["bot"]["long"]["hsl"]["enabled"] = not config["bot"]["long"]["hsl"][
+    config["bot"]["long"]["risk"]["hsl"]["enabled"] = not config["bot"]["long"]["risk"]["hsl"][
         "enabled"
     ]
     assert any(
@@ -108,19 +108,19 @@ def test_resume_ignores_machine_settings_and_overridden_source_values():
     from optimize import _resume_config_mismatches
 
     config = _config()
-    config["optimize"]["fixed_runtime_overrides"] = {"bot.long.hsl.enabled": False}
+    config["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.hsl.enabled": False}
     old = _record(config)
-    config["bot"]["long"]["hsl"]["enabled"] = True
+    config["bot"]["long"]["risk"]["hsl"]["enabled"] = True
     config["live"]["execution"]["execution_delay_seconds"] = 17
     config["optimize"]["n_cpus"] += 1
     assert _resume_config_mismatches(old, config) == []
 
 
 @pytest.mark.parametrize("path,value", [
-    ("bot.long.hsl.drawdown_threshold_fraction", 0.123),
+    ("bot.long.risk.hsl.drawdown_threshold_fraction", 0.123),
     ("bot.long.risk.max_positions", 3),
-    ("bot.portfolio.unstuck.memory_ema_span_minutes", 1000.5),
-    ("bot.portfolio.loss_gate.memory_ema_span_minutes", 2000.5),
+    ("bot.portfolio.risk.loss_realization.memory_ema_span_minutes", 1000.5),
+    ("bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction", 0.017),
 ])
 def test_fixed_canonical_override_builds_contract_without_lowering_public_config(path, value):
     from config.migrations.v9 import require_v9_runtime_config
@@ -191,7 +191,7 @@ def test_changed_contract_blocks_checkpoint_fitness_reuse(tmp_path):
     old = _record(config)
     old["metrics"] = {"objectives": {"w_0": -1.0}}
     (tmp_path / "all_results.bin").write_bytes(msgpack.packb(old, use_bin_type=True))
-    config["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
+    config["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "position_side"
     with pytest.raises(ValueError, match="critical parameters have changed"):
         _validate_resume_results(str(tmp_path), config)
 
@@ -668,7 +668,7 @@ def test_resume_checks_each_reconstructed_record_contract(tmp_path, change):
     first = _record(config)
     second = deepcopy(first)
     if change == "fixed_policy":
-        second["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
+        second["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "position_side"
         second[CONTRACT_KEY] = build_evaluation_contract(prepare_config(clean_config(second), verbose=False))
     elif change == "implementation":
         second[CONTRACT_KEY]["implementation"][

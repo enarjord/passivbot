@@ -41,7 +41,7 @@ def validate_hsl_signal_topology(
 
     if signal_mode not in HSL_SIGNAL_MODES:
         raise ValueError(
-            "GPU HSL requires bot.portfolio.hsl.scope to be coin, position_side, or "
+            "GPU HSL requires bot.portfolio.risk.hsl.scope to be coin, position_side, or "
             f"portfolio; got {signal_mode!r}"
         )
     if coin_count > 1:
@@ -130,7 +130,7 @@ TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS = ("twel_enforcer_enabled",)
 UNSTUCK_PARAM_KEYS = (
     "unstuck_enabled",
     "unstuck_ema_gating_enabled",
-    "unstuck_close_fraction",
+    "reserved_unstuck_sizing_slot",
     "unstuck_ema_distance_fraction",
     "unstuck_loss_allowance_fraction",
     "unstuck_exposure_trigger_ratio",
@@ -150,7 +150,8 @@ COUPLED_UNSTUCK_EMA_SOURCE_KEYS = {
 }
 
 
-GLOBAL_RISK_PARAM_KEYS = ("unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes")
+GLOBAL_RISK_PARAM_KEYS = ("realized_loss_memory_ema_span_minutes",)
+RESERVED_RISK_PARAM_KEYS = ("reserved_unstuck_sizing_slot", "reserved_realized_memory_slot")
 
 HSL_PARAM_KEYS = (
     "hsl_enabled",
@@ -233,6 +234,7 @@ EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
     *UNSTUCK_EMA_PARAM_KEYS,
     *ADAPTIVE_PARAM_KEYS,
     *GLOBAL_RISK_PARAM_KEYS,
+    "reserved_realized_memory_slot",
 )
 
 TRAILING_MARTINGALE_PARAM_KEYS = (
@@ -282,6 +284,7 @@ TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
     *UNSTUCK_EMA_PARAM_KEYS,
     *ADAPTIVE_PARAM_KEYS,
     *GLOBAL_RISK_PARAM_KEYS,
+    "reserved_realized_memory_slot",
 )
 
 TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (

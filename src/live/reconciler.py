@@ -1756,7 +1756,6 @@ def _submitted_rust_input_context(
                 )
                 for field in (
                     "unstuck_loss_allowance_fraction",
-                    "unstuck_close_fraction",
                     "unstuck_exposure_trigger_ratio",
                 )
             }
@@ -2463,21 +2462,35 @@ def validate_rust_orchestrator_output(
     loss_gate_blocks = diagnostics["loss_gate_blocks"]
     if not isinstance(loss_gate_blocks, list):
         raise FatalBotException("Rust orchestrator loss_gate_blocks must be a list")
-    submitted_loss_gate_max_drawdown_fraction: float | None = None
-    if loss_gate_blocks:
+    gate_enabled = global_input.get("loss_gate_enabled")
+    if type(gate_enabled) is not bool or "loss_gate_max_drawdown_fraction" not in global_input:
+        raise FatalBotException("Rust orchestrator submitted malformed realized-loss gate policy")
+    submitted_loss_gate_max_drawdown_fraction = global_input["loss_gate_max_drawdown_fraction"]
+    if submitted_loss_gate_max_drawdown_fraction is None:
+        if gate_enabled:
+            raise FatalBotException("Rust orchestrator submitted enabled realized-loss gate without a cap")
+    else:
         submitted_loss_gate_max_drawdown_fraction = _validated_rust_finite_number(
-            global_input.get("loss_gate_max_drawdown_fraction"),
+            submitted_loss_gate_max_drawdown_fraction,
             "submitted global input has invalid loss_gate_max_drawdown_fraction",
         )
-        if submitted_loss_gate_max_drawdown_fraction < 0.0:
-            raise FatalBotException(
-                "Rust orchestrator submitted global input has invalid loss_gate_max_drawdown_fraction"
+        if not 0.0 <= submitted_loss_gate_max_drawdown_fraction < 1.0:
+            raise FatalBotException("Rust orchestrator submitted invalid realized-loss gate cap")
+    expected_floor = None
+    if loss_gate_blocks:
+        if not gate_enabled:
+            raise FatalBotException("Rust orchestrator reported loss-gate blocks while the gate is disabled")
+        raw_balance = _validated_rust_finite_number(
+            orchestrator_input.get("balance_raw"), "submitted global input has invalid raw balance",
+        )
+        try:
+            allowance = _pb_attr("pbr").calc_loss_gate_headroom_v9(
+                raw_balance, gate_enabled, submitted_loss_gate_max_drawdown_fraction,
+                global_input["realized_pnl_drawdown"],
             )
-        if submitted_loss_gate_max_drawdown_fraction >= 1.0:
-            raise FatalBotException(
-                "Rust orchestrator loss_gate_blocks present while submitted "
-                "realized-loss gate is disabled"
-            )
+            expected_floor = raw_balance - allowance
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            raise FatalBotException("Rust loss-gate blocks require valid shared headroom") from exc
     finite_fields = (
         "qty",
         "price",
@@ -2568,6 +2581,10 @@ def validate_rust_orchestrator_output(
                 raise FatalBotException(
                     f"Rust orchestrator loss_gate_block {block_idx} has invalid price"
                 )
+        if block.get("loss_gate_enabled") is not True:
+            raise FatalBotException(
+                f"Rust orchestrator loss_gate_block {block_idx} reports disabled gate"
+            )
         qty = finite_values["qty"]
         _validate_rust_limit_price_exchange_constraints(
             finite_values["price"],
@@ -2613,7 +2630,7 @@ def validate_rust_orchestrator_output(
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} must have negative projected_pnl"
             )
-        if balance_before <= 0.0 or balance_peak <= 0.0 or balance_floor <= 0.0:
+        if balance_peak <= 0.0 or balance_before < balance_floor:
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} has invalid balance state"
             )
@@ -2637,17 +2654,17 @@ def validate_rust_orchestrator_output(
             )
         if not math.isclose(
             balance_floor,
-            balance_peak * (1.0 - loss_gate_max_drawdown_fraction),
+            expected_floor,
             rel_tol=1e-12,
             abs_tol=1e-12,
         ):
             raise FatalBotException(
                 f"Rust orchestrator loss_gate_block {block_idx} has inconsistent balance floor"
             )
-        if projected_balance_after >= balance_floor - 1e-12:
-            raise FatalBotException(
-                f"Rust orchestrator loss_gate_block {block_idx} does not cross balance floor"
-            )
+
+    from live.realized_close_admission import validate_allocations
+
+    validate_allocations(diagnostics.get("close_allocations"), orders, orchestrator_input)
 
     def validate_diagnostic_symbol_idx(value: object, context: str) -> None:
         if (
@@ -3138,7 +3155,10 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     malformed_actual_counts = dict(
         getattr(bot, "_malformed_actual_order_counts", {}) or {}
     )
-    connector_enabled = connector_supports_order_churn_gate(bot)
+    connector_enabled = (
+        connector_supports_order_churn_gate(bot)
+        or (apply_mode_filters and bot._loss_gate_enabled())
+    )
     keys = (
         (
             "symbol",
@@ -3313,7 +3333,7 @@ def snapshot_actual_orders(
     psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
 ) -> dict[str, list[dict]]:
     """Return a normalized snapshot of currently open orders keyed by symbol."""
-    connector_enabled = connector_supports_order_churn_gate(bot)
+    connector_enabled = connector_supports_order_churn_gate(bot) or bot._loss_gate_enabled()
     actual_orders: dict[str, list[dict]] = {}
     malformed_symbols: set[str] = set()
     malformed_counts: dict[str, int] = {}
@@ -3733,6 +3753,12 @@ def apply_order_match_tolerance(
     if tolerance <= 0.0:
         return to_cancel, to_create, 0
 
+    gate_enabled = bot._loss_gate_enabled()
+    def exact_close(order):
+        return _order_is_reduce_only(order) and (
+            gate_enabled or _order_pb_type(order).startswith("close_unstuck_")
+        )
+
     def pct_diff(a: float, b: float) -> float:
         if b == 0:
             return 0.0 if a == 0 else float("inf")
@@ -3744,8 +3770,11 @@ def apply_order_match_tolerance(
         skipped = 0
         for order in to_create:
             match_idx = None
+            if exact_close(order):
+                kept_create.append(order)
+                continue
             for idx, existing in enumerate(to_cancel):
-                if idx in used_cancel:
+                if idx in used_cancel or exact_close(existing):
                     continue
                 try:
                     if _pb_attr("orders_matching")(
@@ -3803,7 +3832,14 @@ def apply_order_match_tolerance(
         matchable_cancel.append(order)
         matchable_cancel_indices.append(idx)
     previous = normalize_ideal_orders(matchable_cancel)
-    matches = deterministic_one_to_one_matches(current, previous, tolerance)
+    matches = {
+        current_idx: previous_idx
+        for current_idx, previous_idx in deterministic_one_to_one_matches(
+            current, previous, tolerance
+        ).items()
+        if not exact_close(to_create[current[current_idx].source_index])
+        and not exact_close(to_cancel[matchable_cancel_indices[previous[previous_idx].source_index]])
+    }
     used_cancel = {
         matchable_cancel_indices[previous[previous_idx].source_index]
         for previous_idx in matches.values()

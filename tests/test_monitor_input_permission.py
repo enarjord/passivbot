@@ -508,12 +508,12 @@ async def test_real_fake_ordinary_compute_has_complete_immutable_receipts(tmp_pa
     legacy = prepare_config(load_fake_hsl_config(), target="canonical", runtime=None, verbose=False)
     cfg = generated_template(mutable_runtime_fixture(legacy), "coin")
     for side in ("long", "short"):
-        cfg["bot"][side]["unstuck"]["enabled"] = False
+        cfg["bot"][side]["risk"]["unstuck"]["enabled"] = False
         cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.
-        cfg["bot"][side]["hsl"]["enabled"] = bool(hsl_enabled and side == "long")
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.
+        cfg["bot"][side]["risk"]["hsl"]["enabled"] = bool(hsl_enabled and side == "long")
+    cfg["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] = {"enabled": False}
     cfg["bot"]["long"]["universe"]["approved_coins"] = ["BTC"]
-    cfg["bot"]["long"]["hsl"].update(drawdown_fraction_ema_span_minutes=1., drawdown_threshold_fraction=.5)
+    cfg["bot"]["long"]["risk"]["hsl"].update(drawdown_fraction_ema_span_minutes=1., drawdown_threshold_fraction=.5)
     set_risk_memory_spans(cfg, 288.)
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({k:v for k,v in cfg.items() if not k.startswith("_")}))

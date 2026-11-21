@@ -46,8 +46,7 @@ def test_projection_uses_explicit_portfolio_policy_memory():
               "cooldown_minutes_after_red": 20.0, "panic_close_order_type": "market"}
     payload = SimpleNamespace(
         bot_params_list=[{"long": {"n_positions": 2}}],
-        backtest_params={"unstuck_memory_ema_span_minutes": 777.0,
-                         "loss_gate_memory_ema_span_minutes": 888.0,
+        backtest_params={"realized_loss_memory_ema_span_minutes": 888.0,
                          "equity_hard_stop_loss": {"engine": "hsl", "mode": "portfolio",
                                                    "portfolio": policy}},
     )
@@ -64,8 +63,7 @@ def test_coin_projection_preserves_policy_memory_and_budget_scaling():
     payload = SimpleNamespace(
         bot_params_list=[{"long": {"n_positions": 2}}],
         backtest_params={"coins": ["BTC"], "dynamic_wel_by_tradability": True,
-                         "unstuck_memory_ema_span_minutes": 15.5,
-                         "loss_gate_memory_ema_span_minutes": 31.5,
+                         "realized_loss_memory_ema_span_minutes": 31.5,
                          "equity_hard_stop_loss": {"engine": "hsl", "mode": "coin",
                                                    "coins": {"BTC": [policy, policy]}}},
     )

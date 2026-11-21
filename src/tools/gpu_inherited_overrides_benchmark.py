@@ -20,7 +20,7 @@ def benchmark_inputs(*, bars: int, coins: int):
     """Prepare canonical benchmark inputs before constructing a device replay."""
     fixture = fixture_parser().parse_args([
         "--fixture", "trailing_martingale", "--sides", "long", "--coins", str(coins),
-        "--bars", str(bars), "--seed", "43", "--hsl", "disabled", "--unstuck",
+        "--bars", str(bars), "--seed", "43", "--hsl", "disabled",
     ])
     config, candles, markets, btc, timestamps = fixture_inputs(fixture)
     config["bot"]["long"]["risk"].update(

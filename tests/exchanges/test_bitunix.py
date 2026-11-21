@@ -3068,7 +3068,7 @@ async def test_bitunix_ordinary_close_wave_transport_and_recovery(
         quotes=quotes,
         _ordinary_account_cohort=lambda: (account_revision,),
     )
-    bot._loss_gate_max_drawdown_fraction = lambda: 1.0
+    bot._loss_gate_enabled = lambda: False
     bot._live_market_snapshot_fetch_max_age_ms = lambda: 10_000
     bot.live_value = lambda name: {"time_in_force": "post_only"}[name]
     bot.config = {"live": {"execution": {"time_in_force": "post_only"}}}

@@ -18,6 +18,8 @@ from optimization.bounds import Bound
 from .bot_inheritance import (ABSENT, SIDES, BotPolicy, Path, _get, _set, _freeze, _thaw, _intersects,
                               apply_bot_policy_patch, install_bot_policy, reconciled_bot_policy)
 from .field_spec import FieldType
+from .risk_memory import (LOSS_GATE_CAP_PATH, LOSS_REALIZATION_PATH, normalize_loss_gate_cap,
+                          normalize_memory_ema_span_minutes, optimizer_loss_gate_policies)
 
 
 @dataclass(frozen=True)
@@ -250,8 +252,11 @@ def prepare_bound_plan(config, *, authored_bounds=None):
         authored_bounds = current.source_view() if type(current) is PreparedOptimizationBounds else current
     authored = deepcopy(authored_bounds)
     portfolio = config["bot"]["portfolio"]
+    gate_used = any(spec.path == LOSS_GATE_CAP_PATH for spec in policy.catalog.portfolio_fields) and any(
+        gate["enabled"] for gate in optimizer_loss_gate_policies(config)
+    )
     plan = build_bound_plan(policy, authored, strategy_kind=portfolio["strategy_kind"],
-                            hsl_scope=portfolio["hsl"]["scope"])
+                            hsl_scope=portfolio["risk"]["hsl"]["scope"], loss_gate_used=gate_used)
     fixed = resolve_plan_selectors(config, config.get("optimize", {}).get("fixed_params", []) or [], plan=plan)
     if fixed:
         effective = _logical_fixed_view(policy)
@@ -280,6 +285,7 @@ def prepare_bound_plan(config, *, authored_bounds=None):
 
 def resolve_plan_selectors(config, selectors, *, plan=None):
     """Match authored owners or effective/native targets without splitting a gene."""
+    from .migrations.v9 import reject_retired_risk_path
     from .param_paths import bound_path_matches_selector, resolve_dotted_config_path
 
     plan = get_bound_plan(config) if plan is None else plan
@@ -290,6 +296,7 @@ def resolve_plan_selectors(config, selectors, *, plan=None):
         if not isinstance(selector, str) or not selector.strip():
             raise TypeError("optimizer selectors must be nonempty strings")
         selector = selector.strip()
+        reject_retired_risk_path(selector)
         if selector.startswith("optimize.bounds."):
             selector = "bot." + selector.removeprefix("optimize.bounds.")
         if selector.split(".", 1)[0] in {"global", "portfolio"}:
@@ -315,6 +322,7 @@ def _bound(value, path):
 
 def build_bound_plan(
     policy: BotPolicy, authored_bounds: Mapping, *, strategy_kind: str, hsl_scope: str,
+    loss_gate_used: bool = False,
 ) -> BoundPlan:
     if type(policy) is not BotPolicy:
         raise TypeError("a typed BotPolicy is required")
@@ -326,7 +334,7 @@ def build_bound_plan(
     portfolio = {spec.path[2:]: spec for spec in policy.catalog.portfolio_fields}
 
     def active_hsl(scope, suffix):
-        return suffix[:1] != ("hsl",) or (scope == "portfolio") == (hsl_scope == "portfolio")
+        return suffix[:2] != ("risk", "hsl") or (scope == "portfolio") == (hsl_scope == "portfolio")
 
     def check(node, prefix):
         if not isinstance(node, Mapping):
@@ -339,7 +347,16 @@ def build_bound_plan(
                 numeric = FieldType.FLOAT in field.types or FieldType.INTEGER in field.types
                 if not numeric or not field.optimizable:
                     raise ValueError(f"{'.'.join((*prefix, *suffix))} is not optimizer eligible")
-                _bound(value, (*prefix, *suffix))
+                bound_path = (*prefix, *suffix)
+                bound = _bound(value, bound_path)
+                if prefix[-1] == "portfolio":
+                    validator = {
+                        LOSS_GATE_CAP_PATH[2:]: normalize_loss_gate_cap,
+                        (*LOSS_REALIZATION_PATH[2:], "memory_ema_span_minutes"): normalize_memory_ema_span_minutes,
+                    }.get(suffix)
+                    if validator is not None:
+                        for endpoint in (bound.low, bound.high):
+                            validator(endpoint, field=".".join(bound_path))
                 return
             if not isinstance(value, Mapping) or not any(
                 path[:len(suffix)] == suffix for path in (portfolio if prefix[-1] == "portfolio" else fields)
@@ -402,6 +419,8 @@ def build_bound_plan(
             continue
         value = _get(authored_bounds.get("portfolio", {}), suffix)
         bound_path = ("optimize", "bounds", "portfolio", *suffix)
+        if spec.path == LOSS_GATE_CAP_PATH and (not loss_gate_used or value is ABSENT):
+            continue
         if value is ABSENT:
             value = _get(effective["portfolio"], suffix)
             if value is ABSENT or value is None:

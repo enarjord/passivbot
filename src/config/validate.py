@@ -51,10 +51,9 @@ def _validate_fixed_runtime_overrides(config: dict) -> None:
                 f"{'.'.join(resolved)!r}"
             )
         resolved_sources[resolved] = dotted_path
-        target = config
-        for part in resolved:
-            target = target[part]
-        if isinstance(target, dict):
+        from .access import get_optional_config_value
+
+        if isinstance(get_optional_config_value(config, ".".join(resolved)), dict):
             raise TypeError(
                 "config.optimize.fixed_runtime_overrides must target leaf settings; "
                 f"{dotted_path!r} resolves to a mapping"
@@ -230,7 +229,7 @@ def validate_config(
             raise ValueError(
                 f"bot.{pside}.strategy.{strategy_kind} must be a non-empty dict for active strategy_kind"
             )
-    normalize_hsl_signal_mode(config["bot"]["portfolio"]["hsl"]["scope"])
+    normalize_hsl_signal_mode(config["bot"]["portfolio"]["risk"]["hsl"]["scope"])
     if config["live"]["modes"]["disapproved_position"] not in {
         "graceful_stop",
         "manual",

@@ -2,7 +2,8 @@ from copy import deepcopy
 from typing import Optional
 
 BOT_POSITION_SIDES = ("long", "short")
-BOT_SHARED_GROUPS = ("entry_cooldown", "risk", "forager", "hsl", "unstuck")
+BOT_SHARED_GROUPS = ("entry_cooldown", "risk", "forager")
+RISK_POLICY_GROUPS = frozenset({"hsl", "unstuck"})
 
 BOT_GROUP_FIELD_MAP = {
     "entry_cooldown": {
@@ -37,7 +38,6 @@ BOT_GROUP_FIELD_MAP = {
         "drawdown_threshold_fraction": "hsl_drawdown_threshold_fraction",
     },
     "unstuck": {
-        "close_fraction": "unstuck_close_fraction",
         "ema_distance_fraction": "unstuck_ema_distance_fraction",
         "ema_span_0_minutes": "unstuck_ema_span_0_minutes",
         "ema_span_1_minutes": "unstuck_ema_span_1_minutes",
@@ -48,8 +48,12 @@ BOT_GROUP_FIELD_MAP = {
     },
 }
 
+def shared_bot_group_path(group_name):
+    return ("risk", group_name) if group_name in RISK_POLICY_GROUPS else (group_name,)
+
+
 FLAT_BOT_KEY_TO_GROUP_PATH = {
-    flat_key: (group_name, *local_key.split("."))
+    flat_key: (*shared_bot_group_path(group_name), *local_key.split("."))
     for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
     for local_key, flat_key in field_map.items()
 }
@@ -60,7 +64,7 @@ _MISSING = object()
 def get_bot_group(bot_side: dict | None, group_name: str) -> dict:
     if not isinstance(bot_side, dict):
         return {}
-    group = bot_side.get(group_name)
+    group = get_grouped_path(bot_side, shared_bot_group_path(group_name))
     if isinstance(group, dict):
         return group
     return {}

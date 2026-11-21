@@ -520,7 +520,7 @@ def build_merged_configs(
         portfolios = [config.get("bot", {}).get("portfolio", {}) for config in configs]
         if len({normalize_strategy_kind(portfolio.get("strategy_kind")) for portfolio in portfolios}) > 1:
             raise ValueError("v9 Pareto inputs must use the same portfolio strategy_kind")
-        if len({portfolio.get("hsl", {}).get("scope", "coin") for portfolio in portfolios}) > 1:
+        if len({portfolio.get("risk", {}).get("hsl", {}).get("scope", "coin") for portfolio in portfolios}) > 1:
             raise ValueError("v9 Pareto inputs must use the same portfolio HSL scope")
 
     all_components = _collect_all_components(fronts)

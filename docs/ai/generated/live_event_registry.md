@@ -226,6 +226,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `pre_create_planning_snapshot_invalid`
 - `queue_full`
 - `ranking_features_unavailable`
+- `realized_close_admission_deferred`
 - `realized_loss_gate_blocked`
 - `recent_execution`
 - `remote_fetch`

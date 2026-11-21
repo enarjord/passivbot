@@ -661,6 +661,7 @@ class TestCCXTBotConnectorCallEvents:
                 return {"id": "oid-1", "status": "open"}
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot._orchestrator_uses_realized_pnl = lambda: False
         bot.exchange = "binance"
         bot.user = "binance_01"
         bot.bot_id = "bot-1"
@@ -716,6 +717,7 @@ class TestCCXTBotConnectorCallEvents:
                 return {"id": order_id, "status": "canceled"}
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot._orchestrator_uses_realized_pnl = lambda: False
         bot.exchange = "binance"
         bot.cca = CCA()
         bot.recent_order_cancellations = []
@@ -748,6 +750,7 @@ class TestCCXTBotExecuteCancellation:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot._orchestrator_uses_realized_pnl = lambda: False
         bot.exchange = "bybit"
         bot.cca = MagicMock()
         bot.cca.cancel_order = AsyncMock(
@@ -784,6 +787,7 @@ class TestCCXTBotExecuteCancellation:
         from exchanges.ccxt_bot import CCXTBot
 
         bot = CCXTBot.__new__(CCXTBot)
+        bot._orchestrator_uses_realized_pnl = lambda: False
         bot.exchange = "bybit"
         bot.cca = MagicMock()
         bot.cca.cancel_order = AsyncMock(

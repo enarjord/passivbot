@@ -153,7 +153,7 @@ from config.strategy import normalize_strategy_kind
 from config.shared_bot import get_grouped_bot_value
 from config.schema import MAX_EXCHANGE_SYMBOL_UNAVAILABLE_COOLDOWN_HOURS
 from config.pnl_lookback import PnlsLookback
-from config.risk_memory import risk_bootstrap_horizon_minutes
+from config.risk_memory import require_loss_realization_policy, risk_bootstrap_horizon_minutes
 from config.overrides import parse_overrides
 from config.runtime_compile import compile_runtime_config
 from risk_limits import (
@@ -1875,8 +1875,9 @@ class Passivbot:
                     type(exc).__name__,
                 )
 
-    def _loss_gate_max_drawdown_fraction(self) -> float:
-        return float(require_config_value(self.config, "bot.portfolio.loss_gate.max_drawdown_fraction"))
+    def _loss_gate_enabled(self) -> bool:
+        _, enabled, _ = require_loss_realization_policy(self.config)
+        return enabled
 
     def _unstuck_uses_realized_pnl(self) -> bool:
         symbols: list[Optional[str]] = [None]
@@ -1894,7 +1895,6 @@ class Passivbot:
                         self.bp(pside, "unstuck_loss_allowance_fraction", symbol) or 0.0
                     )
                     > 0.0
-                    and float(self.bp(pside, "unstuck_close_fraction", symbol) or 0.0) > 0.0
                     and float(self.bp(pside, "unstuck_exposure_trigger_ratio", symbol) or 0.0) > 0.0
                 ):
                     return True
@@ -1902,7 +1902,7 @@ class Passivbot:
 
     def _orchestrator_uses_realized_pnl(self) -> bool:
         return (
-            self._loss_gate_max_drawdown_fraction() < 1.0
+            self._loss_gate_enabled()
             or self._unstuck_uses_realized_pnl()
         )
 
@@ -2654,7 +2654,7 @@ class Passivbot:
         if self._pnls_manager is None:
             return {"status": "no_pnl_manager"}
 
-        memory = self._get_realized_memories()["unstuck"]
+        memory = self._get_realized_loss_memory()
         if memory is None:
             return {"status": "unstuck_disabled"}
         drawdown = memory["drawdown"]
@@ -12863,95 +12863,70 @@ class Passivbot:
                 self._log_fill_event(event),
             )
 
-    def _get_realized_memories(self) -> dict:
-        """Fold one canonical factual stream into independently enabled memories.
-
-        Both filters retain this run's fixed origin. An unknown prefix starts
-        explicitly at zero; attenuation does not bound omitted economic losses.
-        Corrections replay the same retained facts and factual initializer.
-        """
-        controls = {
-            "unstuck": {
-                "enabled": self._unstuck_uses_realized_pnl(),
-                "memory_ema_span_minutes": require_config_value(
-                    self.config, "bot.portfolio.unstuck.memory_ema_span_minutes"
-                ),
-            },
-            "loss_gate": {
-                "enabled": self._loss_gate_max_drawdown_fraction() < 1.0,
-                "memory_ema_span_minutes": require_config_value(
-                    self.config, "bot.portfolio.loss_gate.memory_ema_span_minutes"
-                ),
-            },
-        }
-        if not any(control["enabled"] for control in controls.values()):
-            return {"unstuck": None, "loss_gate": None}
+    def _get_realized_loss_memory(self) -> dict | None:
+        """Replay the account's canonical net-realized fills from the fixed origin."""
+        if not self._orchestrator_uses_realized_pnl():
+            self._realized_loss_memory_diagnostics = None
+            return None
         if getattr(self, "_pnls_manager", None) is None:
             raise RuntimeError("realized risk requires the canonical fill manager")
         from live.realized_facts import canonical_realized_facts
 
+        span, _, _ = require_loss_realization_policy(self.config)
         now_ms = int(self.get_exchange_time())
         origin = self._realized_memory_start_ms(now_ms)
         events = self._pnls_manager.get_events(start_ms=origin, end_ms=now_ms)
         self._assert_pnl_history_safe_for_risk(
-            events, context="account realized-loss memories", start_ms=origin, end_ms=now_ms,
+            events, context="account realized-loss memory", start_ms=origin, end_ms=now_ms,
         )
         ordered = canonical_realized_facts(events)
         known_origin = origin == 0
         initialization = "known_zero_origin" if known_origin else "unknown_prefix_zero"
         payload = {
-            "start": origin, "now": now_ms, "known_origin": known_origin,
-            "fills": list(ordered.fills), **controls,
+            "start": origin,
+            "now": now_ms,
+            "known_origin": known_origin,
+            "memory_ema_span_minutes": span,
+            "fills": list(ordered.fills),
         }
         try:
-            memories = json.loads(pbr.realized_memories_v9(json.dumps(payload, allow_nan=False)))
-            if (type(memories["start"]) is not int or memories["start"] != origin
-                or type(memories["now"]) is not int or memories["now"] != now_ms
-                or type(memories["input_fills"]) is not int
-                or memories["input_fills"] != len(ordered.fills)):
-                raise ValueError("invalid realized-memories envelope")
-            for name, control in controls.items():
-                memory = memories[name]
-                if not control["enabled"]:
-                    if memory is not None:
-                        raise ValueError("disabled realized filter produced state")
-                    continue
-                if (not isinstance(memory, dict)
-                    or type(memory["start"]) is not int or memory["start"] != origin
-                    or type(memory["now"]) is not int or memory["now"] != now_ms
-                    or type(memory["drawdown"]) not in (int, float)
-                    or not math.isfinite(memory["drawdown"]) or memory["drawdown"] < 0
-                    or type(memory["fills"]) is not int or memory["fills"] != len(ordered.fills)
-                    or type(memory["unknown_prefix"]) is not bool
-                    or memory["unknown_prefix"] != (not known_origin)
-                    or memory["initialization"] != initialization
-                    or type(memory["initial_drawdown"]) not in (int, float)
-                    or memory["initial_drawdown"] != 0.0
-                    or type(memory["prefix_attenuation"]) not in (int, float)
-                    or not 0.0 <= memory["prefix_attenuation"] <= 1.0
-                    or type(memory["span_minutes"]) not in (int, float)
-                    or memory["span_minutes"] != control["memory_ema_span_minutes"]):
-                    raise ValueError(f"invalid {name} realized-memory envelope")
+            memory = json.loads(pbr.realized_memory_v9(json.dumps(payload, allow_nan=False)))
+            if (
+                not isinstance(memory, dict)
+                or type(memory["start"]) is not int or memory["start"] != origin
+                or type(memory["now"]) is not int or memory["now"] != now_ms
+                or type(memory["drawdown"]) not in (int, float)
+                or not math.isfinite(memory["drawdown"]) or memory["drawdown"] < 0
+                or type(memory["fills"]) is not int or memory["fills"] != len(ordered.fills)
+                or type(memory["unknown_prefix"]) is not bool
+                or memory["unknown_prefix"] == known_origin
+                or memory["initialization"] != initialization
+                or type(memory["initial_drawdown"]) not in (int, float)
+                or memory["initial_drawdown"] != 0.0
+                or type(memory["prefix_attenuation"]) not in (int, float)
+                or not 0.0 <= memory["prefix_attenuation"] <= 1.0
+                or type(memory["span_minutes"]) not in (int, float)
+                or memory["span_minutes"] != span
+            ):
+                raise ValueError("invalid realized-loss memory envelope")
         except (KeyError, TypeError, ValueError, OverflowError) as exc:
-            raise FatalBotException("invalid v9 realized-memories producer output") from exc
-        memories["ordering_reasons"] = list(ordered.reasons)
-        memories["ambiguous_cohort_count"] = ordered.ambiguous_cohort_count
-        memories["proven_pair_chain_count"] = ordered.proven_pair_chain_count
-        previous = getattr(self, "_realized_memories_diagnostics", None)
-        for name, control in controls.items():
-            memory = memories[name]
-            if memory is None or known_origin:
-                continue
-            prior = previous.get(name) if previous is not None else None
-            if prior is None or prior["start"] != origin or prior["span_minutes"] != memory["span_minutes"]:
-                logging.warning(
-                    "[risk] %s realized-loss memory uses an approximate zero initializer "
-                    "for unknown history before %s; span_minutes=%s prefix_attenuation=%s "
-                    "(attenuation is not an economic error bound)",
-                    name, origin, memory["span_minutes"], memory["prefix_attenuation"],
-                )
-        self._realized_memories_diagnostics = memories
-        return memories
+            raise FatalBotException("invalid v9 realized-loss memory producer output") from exc
+
+        memory["ordering_reasons"] = list(ordered.reasons)
+        memory["ambiguous_cohort_count"] = ordered.ambiguous_cohort_count
+        memory["proven_pair_chain_count"] = ordered.proven_pair_chain_count
+        previous = getattr(self, "_realized_loss_memory_diagnostics", None)
+        if not known_origin and (
+            previous is None or previous["start"] != origin or previous["span_minutes"] != span
+        ):
+            logging.warning(
+                "[risk] realized-loss memory uses an approximate zero initializer "
+                "for unknown history before %s | span_minutes=%s prefix_attenuation=%s "
+                "(attenuation is not an economic error bound)",
+                origin, span, memory["prefix_attenuation"],
+            )
+        self._realized_loss_memory_diagnostics = memory
+        return memory
 
     @staticmethod
     def _fill_event_increases_position(pside: str, side: str, qty: float) -> bool:
@@ -13206,12 +13181,12 @@ class Passivbot:
             projected_pnl = float(block.get("projected_pnl", 0.0) or 0.0)
             projected_balance = float(block.get("projected_balance_after", 0.0) or 0.0)
             balance_floor = float(block.get("balance_floor", 0.0) or 0.0)
-            max_drawdown_fraction = float(block.get("loss_gate_max_drawdown_fraction", 1.0) or 1.0)
+            max_drawdown_fraction = block["loss_gate_max_drawdown_fraction"]
             if not structured_console_available:
                 logging.warning(
                     "[risk] order blocked by realized-loss gate | %s %s %s qty=%.10g price=%.10g "
                     "projected_pnl=%.6f projected_balance=%.6f floor=%.6f loss_gate_max_drawdown_fraction=%.6f | "
-                    "adjust bot.portfolio.loss_gate.max_drawdown_fraction to change behavior",
+                    "adjust bot.portfolio.risk.loss_realization.loss_gate to change behavior",
                     Passivbot._log_symbol(symbol),
                     pside,
                     order_type,
@@ -13232,6 +13207,7 @@ class Passivbot:
                     projected_pnl=projected_pnl,
                     projected_balance=projected_balance,
                     balance_floor=balance_floor,
+                    loss_gate_enabled=block["loss_gate_enabled"],
                     loss_gate_max_drawdown_fraction=max_drawdown_fraction,
                 )
 
@@ -14734,7 +14710,6 @@ class Passivbot:
                 self.bp(pside, key, symbol) > 0.0
                 for key in (
                     "unstuck_loss_allowance_fraction",
-                    "unstuck_close_fraction",
                     "unstuck_exposure_trigger_ratio",
                     "total_wallet_exposure_limit_ratio",
                 )
@@ -17701,9 +17676,8 @@ class Passivbot:
         )
 
         # Python only proves the realized-PnL inputs are safe to expose; Rust
-        # owns both realized-loss consumers from their own memories below; duplicate
-        # order risk rides normal live reconciliation like any other order.
-        realized_memory = self._get_realized_memories()
+        # uses one account memory for both realized-loss policies.
+        realized_memory = self._get_realized_loss_memory()
         auto_unstuck_allowed = self._auto_unstuck_configured_live()
         now_ms = int(self.get_exchange_time())
         fill_increase_timestamps = self._get_last_increase_fill_timestamps(
@@ -17715,7 +17689,7 @@ class Passivbot:
         last_increase_fill_timestamps = self._merge_entry_cooldown_anchors(
             fill_increase_timestamps, delta_increase_timestamps
         )
-        loss_gate_max_drawdown_fraction = float(Passivbot._loss_gate_max_drawdown_fraction(self))
+        _, loss_gate_enabled, loss_gate_cap = require_loss_realization_policy(self.config)
 
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
@@ -17747,15 +17721,12 @@ class Passivbot:
                 ),
                 "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
-                "loss_gate_max_drawdown_fraction": loss_gate_max_drawdown_fraction,
-                "unstuck_realized_pnl_drawdown": (
-                    float(realized_memory["unstuck"]["drawdown"])
-                    if realized_memory["unstuck"] is not None else 0.0
+                "loss_gate_enabled": loss_gate_enabled,
+                "loss_gate_max_drawdown_fraction": loss_gate_cap,
+                "realized_pnl_drawdown": (
+                    float(realized_memory["drawdown"]) if realized_memory is not None else 0.0
                 ),
-                "loss_gate_realized_pnl_drawdown": (
-                    float(realized_memory["loss_gate"]["drawdown"])
-                    if realized_memory["loss_gate"] is not None else 0.0
-                ),
+                "limit_orders_post_only": self.live_value("time_in_force") == "post_only",
                 "sort_global": True,
                 "global_bot_params": global_bp,
                 "hedge_mode": effective_hedge_mode,
@@ -17845,6 +17816,7 @@ class Passivbot:
             input_dict["symbols"].append(
                 {
                     "symbol_idx": int(idx),
+                    "symbol": symbol,
                     "inception_timestamp_ms": inception_timestamp_ms(getattr(self, "first_timestamps", {}).get(symbol)),
                     "order_book": {"bid": bid, "ask": ask},
                     "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
@@ -17911,6 +17883,11 @@ class Passivbot:
                 out_json, idx_to_symbol, input_dict
             )
             diagnostics = out["diagnostics"]
+            from live import realized_close_admission
+
+            realized_close_admission.bind(
+                self, input_dict, diagnostics["close_allocations"], self._current_planning_snapshot
+            )
             self._order_churn_risk_active_pairs = (
                 reconciler.order_churn_risk_active_pairs_from_rust_output(
                     out, idx_to_symbol

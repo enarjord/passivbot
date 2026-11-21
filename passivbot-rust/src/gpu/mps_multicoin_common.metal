@@ -272,8 +272,7 @@ struct JointPortfolioAccount {
     float realized_pnl_total;
     float realized_pnl_long;
     float realized_pnl_short;
-    RealizedDecayMemory unstuck_memory;
-    RealizedDecayMemory loss_gate_memory;
+    RealizedDecayMemory realized_memory;
     int realized_decay_interval_minutes;
     bool realized_decay_valid;
 #if PASSIVBOT_CORE_REQUEST_MASK != 0
@@ -290,10 +289,10 @@ inline JointPortfolioAccount init_joint_portfolio_account(
     account.realized_pnl_total = 0.0f;
     account.realized_pnl_long = 0.0f;
     account.realized_pnl_short = 0.0f;
-    account.unstuck_memory.beta = account.loss_gate_memory.beta = 0.0f;
-    account.unstuck_memory.drawdown = account.loss_gate_memory.drawdown = 0.0f;
-    account.unstuck_memory.minute = account.loss_gate_memory.minute = 0;
-    account.unstuck_memory.enabled = account.loss_gate_memory.enabled = false;
+    account.realized_memory.beta = 0.0f;
+    account.realized_memory.drawdown = 0.0f;
+    account.realized_memory.minute = 0;
+    account.realized_memory.enabled = false;
     account.realized_decay_interval_minutes = 1;
     account.realized_decay_valid = true;
 #if PASSIVBOT_CORE_REQUEST_MASK != 0
@@ -302,13 +301,12 @@ inline JointPortfolioAccount init_joint_portfolio_account(
     return account;
 }
 
-// Each policy consumes every actual account net fill once. Independent rates
-// own independent state; projected losses reserve allowance without changing it.
+// Each actual account net fill updates the shared realized memory once.
 inline bool joint_realized_loss_allowance(
     thread JointPortfolioAccount& account, float fraction, thread float& allowance
 ) {
     if (!hsl_decay_realized_allowance(
-            account.balance, fraction, account.loss_gate_memory.drawdown, allowance)) {
+            account.balance, fraction, account.realized_memory.drawdown, allowance)) {
         account.realized_decay_valid = false;
         return false;
     }
@@ -316,22 +314,15 @@ inline bool joint_realized_loss_allowance(
 }
 
 inline void configure_joint_realized_memory(
-    thread JointPortfolioAccount& account, float unstuck_span, float loss_gate_span,
-    bool unstuck_enabled, bool loss_gate_enabled, int interval_minutes
+    thread JointPortfolioAccount& account, float memory_span,
+    bool enabled, int interval_minutes
 ) {
-    float alpha;
-    // A disabled memory is never consulted; mirror the CPU reference and fold
-    // only enabled policies' decay-rate validity into the account.
-    if (unstuck_enabled) {
+    if (enabled) {
+        float alpha;
         account.realized_decay_valid = account.realized_decay_valid
-            && hsl_decay_rate(unstuck_span, alpha, account.unstuck_memory.beta);
+            && hsl_decay_rate(memory_span, alpha, account.realized_memory.beta);
     }
-    if (loss_gate_enabled) {
-        account.realized_decay_valid = account.realized_decay_valid
-            && hsl_decay_rate(loss_gate_span, alpha, account.loss_gate_memory.beta);
-    }
-    account.unstuck_memory.enabled = unstuck_enabled;
-    account.loss_gate_memory.enabled = loss_gate_enabled;
+    account.realized_memory.enabled = enabled;
     account.realized_decay_interval_minutes = interval_minutes;
 }
 
@@ -349,8 +340,7 @@ inline void advance_realized_memory(
 
 inline void advance_joint_realized_memory(thread JointPortfolioAccount& account, int bar_index) {
     const long minute = long(bar_index) * long(account.realized_decay_interval_minutes);
-    advance_realized_memory(account.unstuck_memory, minute, account.realized_decay_valid);
-    advance_realized_memory(account.loss_gate_memory, minute, account.realized_decay_valid);
+    advance_realized_memory(account.realized_memory, minute, account.realized_decay_valid);
 }
 #pragma STDC FP_CONTRACT ON
 
@@ -359,13 +349,9 @@ inline void record_joint_portfolio_fill(
     float net_pnl,
     bool is_long
 ) {
-    if (account.unstuck_memory.enabled) {
+    if (account.realized_memory.enabled) {
         account.realized_decay_valid = account.realized_decay_valid
-            && hsl_decay_realized_fill(net_pnl, account.unstuck_memory.drawdown);
-    }
-    if (account.loss_gate_memory.enabled) {
-        account.realized_decay_valid = account.realized_decay_valid
-            && hsl_decay_realized_fill(net_pnl, account.loss_gate_memory.drawdown);
+            && hsl_decay_realized_fill(net_pnl, account.realized_memory.drawdown);
     }
     // Keep small fees/profits from disappearing into the larger cash balance.
     // The residual travels with account state through temporal dispatches.

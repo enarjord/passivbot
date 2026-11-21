@@ -9,6 +9,7 @@ import re
 
 from .field_registry import LIVE_OPERATIONAL_PATHS, get_field_registry
 from .field_spec import CoinOverridePolicy, FieldType, NO_DEFAULT
+from .risk_memory import LOSS_GATE_CAP_PATH
 
 
 def field_schema(field, *, include_default=True):
@@ -96,8 +97,10 @@ def generate_schema():
     root["allOf"] = [{
         "if": {"required": ["bot"], "properties": {"bot": {
             "required": ["portfolio"], "properties": {"portfolio": {
-                "required": ["hsl"], "properties": {"hsl": {
-                    "required": ["scope"], "properties": {"scope": {"enum": ["position_side", "portfolio"]}}
+                "required": ["risk"], "properties": {"risk": {
+                    "required": ["hsl"], "properties": {"hsl": {
+                        "required": ["scope"], "properties": {"scope": {"enum": ["position_side", "portfolio"]}}
+                    }}
                 }}
             }}
         }}},
@@ -151,6 +154,9 @@ def _object_schema(tree, path, definitions):
         result["properties"] = properties
         result["additionalProperties"] = (_object_schema(children["*"], (*path, "*"), definitions)
                                           if "*" in children else False)
+    if path == LOSS_GATE_CAP_PATH[:-1]:
+        result["if"] = {"required": ["enabled"], "properties": {"enabled": {"const": True}}}
+        result["then"] = {"required": [LOSS_GATE_CAP_PATH[-1]]}
     if path == LIVE_OPERATIONAL_PATHS["startup_phase_budgets"]:
         from live.event_bus import STARTUP_TIMING_PHASES
 
@@ -164,6 +170,8 @@ def _bounds_schema(registry):
     for field in registry:
         if field.optimizable and field.path[:1] == ("bot",):
             endpoint = {"type": "number"}  # Fractional genes may target integer counts.
+            if field.path == LOSS_GATE_CAP_PATH:
+                endpoint.update(minimum=0, exclusiveMaximum=1)
             schema = {"anyOf": [endpoint, {"type": "array", "minItems": 1, "maxItems": 3,
                       "prefixItems": [endpoint, endpoint, {"type": ["number", "null"]}],
                       "items": False}], "x-passivbot-target": ".".join(field.path)}

@@ -57,7 +57,7 @@ def test_normalized_only_policy_keeps_untouched_weights_and_recomputes_changed_g
     config = prepare_config(raw, verbose=False)
     assert get_bot_policy(config)._derived == ()
     normalized = deepcopy(config["bot"]["long"]["forager"]["score_weights"])
-    _apply_config_overrides(config, {"bot.long.unstuck.close_fraction": 0.2})
+    _apply_config_overrides(config, {"bot.long.risk.unstuck.loss_allowance_fraction": 0.2})
     assert get_bot_policy(config)._derived == ()
     for side in ("long", "short"):
         assert config["bot"][side]["forager"]["score_weights"] == normalized
@@ -108,14 +108,14 @@ def test_scenario_patch_preserves_derived_spans_and_unrelated_normalized_pins(ki
         assert source["long"]["forager"]["score_weights"] == weights
         assert candidate["bot"]["long"]["forager"]["score_weights"] == normalized
         assert candidate["bot"]["short"]["forager"]["score_weights"] == normalized
-        assert candidate["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == value
-        assert candidate["bot"]["long"]["unstuck"]["ema_span_1_minutes"] == 3.5
+        assert candidate["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == value
+        assert candidate["bot"]["long"]["risk"]["unstuck"]["ema_span_1_minutes"] == 3.5
         origins = {origin.target: origin for origin in policy.resolve()[1]}
-        assert origins[("bot", "long", "unstuck", "ema_span_0_minutes")].kind == "derived"
+        assert origins[("bot", "long", "risk", "unstuck", "ema_span_0_minutes")].kind == "derived"
         assert origins[("bot", "long", "forager", "score_weights", "volume")].source == (
             "bot", "long", "forager", "score_weights", "volume",
         )
-        assert not any(entry.path == ("bot", "long", "unstuck", "ema_span_0_minutes")
+        assert not any(entry.path == ("bot", "long", "risk", "unstuck", "ema_span_0_minutes")
                        for entry in policy._normalized)
         updated = {"volume": 9.0 / 17, "log_range": 3.0 / 17,
                    "ema_readiness": 5.0 / 17, "rms_directionality": 0.0}
@@ -127,9 +127,9 @@ def test_scenario_patch_preserves_derived_spans_and_unrelated_normalized_pins(ki
             assert changed["bot"]["short"]["forager"]["score_weights"] == (
                 updated if scope == "global" else normalized)
             assert bot_policy_source_view(changed)["bot"][scope]["forager"]["score_weights"]["volume"] == 9.0
-        _apply_config_overrides(candidate, {"bot.long.unstuck.ema_span_0_minutes": 9.0})
-        assert candidate["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 9.0
-        assert bot_policy_source_view(candidate)["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 9.0
+        _apply_config_overrides(candidate, {"bot.long.risk.unstuck.ema_span_0_minutes": 9.0})
+        assert candidate["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 9.0
+        assert bot_policy_source_view(candidate)["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 9.0
     assert len(set(identities)) == 1
     assert bot_policy_source_view(base) == original
     assert get_bound_plan(base) is plan

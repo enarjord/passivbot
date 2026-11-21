@@ -403,6 +403,7 @@ class ReasonCodes:
     CREATE_FAILURE_STREAK = "create_failure_streak"
     ORDER_WRITE_SIGNER_REJECTED = "order_write_signer_rejected"
     REALIZED_LOSS_GATE_BLOCKED = "realized_loss_gate_blocked"
+    REALIZED_CLOSE_ADMISSION_DEFERRED = "realized_close_admission_deferred"
     TRAILING_STATUS = "trailing_status"
     UNSTUCK_SELECTION = "unstuck_selection"
     UNSTUCK_STATUS = "unstuck_status"
@@ -1870,6 +1871,9 @@ def _console_realized_loss_gate_summary(event: LiveEvent) -> list[str]:
     balance_floor = _data_float(data, "balance_floor")
     if balance_floor:
         parts.append(f"floor={balance_floor}")
+    enabled = data.get("loss_gate_enabled")
+    if type(enabled) is bool:
+        parts.append(f"enabled={str(enabled).lower()}")
     max_loss = _data_number(data, "loss_gate_max_drawdown_fraction")
     if max_loss is not None:
         parts.append(f"max_loss={max_loss * 100.0:.4f}%")

@@ -223,12 +223,12 @@ def test_explain_optimizer_transform_keeps_selected_relative_coin_file_context(
             tmp_path, monkeypatch, decoy=source_kind == "symlink-decoy",
         )
     source["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
-    source["bot"]["long"]["unstuck"] = {"ema_span_0_minutes": 42.5}
+    source["bot"]["long"].setdefault("risk", {})["unstuck"] = {"ema_span_0_minutes": 42.5}
     write_json(actual, source)
     before = deepcopy(source)
     source_bytes = actual.read_bytes()
     link_identity = (selected.lstat().st_ino, os.readlink(selected)) if selected.is_symlink() else None
-    path = ("bot.long.unstuck.ema_span_0_minutes" if query == "transformed" else
+    path = ("bot.long.risk.unstuck.ema_span_0_minutes" if query == "transformed" else
             "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes")
     if entrypoint == "programmatic":
         report = explain_config(source, path, coin="BTC", optimize=True,

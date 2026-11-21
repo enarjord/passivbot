@@ -76,7 +76,7 @@ def test_schema_generation_and_metadata_are_offline(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", forbidden)
     schema = generate_schema()
     Draft202012Validator(schema).validate(get_template_config())
-    assert describe_field("bot.portfolio.hsl.enabled")["default"] == {"declared": False}
+    assert describe_field("bot.portfolio.risk.hsl.enabled")["default"] == {"declared": False}
 
 
 def test_all_intentional_examples_match_editor_schema(validator):
@@ -145,7 +145,7 @@ def test_authored_monitor_flags_agree_with_editor_boolean_types(validator, inval
 @pytest.mark.parametrize(("payload", "match"), [
     (source(backtest={"suite_enabled": "false"}), r"config\.backtest\.suite_enabled"),
     (source(live={"startup": {"force_cold_startup": 1}}), r"config\.live\.startup\.force_cold_startup"),
-    (source(bot={"global": {"hsl": {"enabled": None}}}), r"config\.bot\.global\.hsl\.enabled"),
+    (source(bot={"global": {"risk": {"hsl": {"enabled": None}}}}), r"config\.bot\.global\.risk\.hsl\.enabled"),
     (
         source(optimize={"limits": [{"enabled": "false", "metric": "loss_profit_ratio",
                                      "penalize_if": "greater_than", "value": 0.5}]}),
@@ -170,14 +170,14 @@ def test_authored_monitor_flags_agree_with_editor_boolean_types(validator, inval
         r"config\.optimize\.fixed_runtime_overrides\.backtest\.compress_cache",
     ),
     (
-        source(coin_overrides={"BTC": {"bot": {"long": {"unstuck": {"ema_gating_enabled": "false"}}}}}),
-        r"coin_overrides\.BTC\.bot\.long\.unstuck\.ema_gating_enabled",
+        source(coin_overrides={"BTC": {"bot": {"long": {"risk": {"unstuck": {"ema_gating_enabled": "false"}}}}}}),
+        r"coin_overrides\.BTC\.bot\.long\.risk\.unstuck\.ema_gating_enabled",
     ),
     (
         source(backtest={"scenarios": [{"overrides": {
-            "coin_overrides.BTC.bot.long.unstuck.ema_gating_enabled": "false",
+            "coin_overrides.BTC.bot.long.risk.unstuck.ema_gating_enabled": "false",
         }}]}),
-        r"coin_overrides\.BTC\.bot\.long\.unstuck\.ema_gating_enabled",
+        r"coin_overrides\.BTC\.bot\.long\.risk\.unstuck\.ema_gating_enabled",
     ),
 ])
 def test_authored_layers_reject_non_boolean_values_before_normalization(validator, payload, match):
@@ -226,7 +226,7 @@ def test_sidecars_reject_quoted_booleans_before_extracting_policy(tmp_path):
 
     coin = tmp_path / "coin.json"
     coin.write_text(json.dumps(source(
-        bot={"global": {"unstuck": {"ema_gating_enabled": "false"}}},
+        bot={"global": {"risk": {"unstuck": {"ema_gating_enabled": "false"}}}},
     )))
     with pytest.raises(
         ValueError,
@@ -243,7 +243,7 @@ def test_canonical_nested_bounds_support_documented_forms(validator, value):
 
 
 @pytest.mark.parametrize("bounds", [
-    {"risk": {}}, {"unstuck": {}}, {"long_forager_score_weights_volume": [0, 1]},
+    {"risk": {}}, {"risk": {"unstuck": {}}}, {"long_forager_score_weights_volume": [0, 1]},
     {"long": {"forager": {"score_weights_volume": [0, 1]}}},
     {"long": {"risk": {"position_exposure_enforcer.enabled": [0, 1]}}},
     {"long": {"forager": {"score_weights": {"volume": []}}}},
@@ -254,8 +254,8 @@ def test_bounds_do_not_open_aliases_or_non_numeric_genes(validator, bounds):
 
 
 @pytest.mark.parametrize("patch", [
-    {"bot.long.unstuck.ema_span_0_minutes": 60.5},
-    {"coin_overrides.BTC.bot.long.unstuck.ema_span_0_minutes": 60.5},
+    {"bot.long.risk.unstuck.ema_span_0_minutes": 60.5},
+    {"coin_overrides.BTC.bot.long.risk.unstuck.ema_span_0_minutes": 60.5},
     {"bot.long.entry_cooldown.max_duration_minutes": None},
 ])
 @pytest.mark.parametrize("owner", ["scenario", "fixed"])
@@ -267,12 +267,12 @@ def test_literal_and_nested_overrides_reuse_known_fields(validator, patch, owner
 
 def test_nested_scenario_overrides_remain_supported(validator):
     validator.validate(source(backtest={"scenarios": [{"overrides": {
-        "bot": {"long": {"unstuck.ema_span_0_minutes": 60.5}},
+        "bot": {"long": {"risk.unstuck.ema_span_0_minutes": 60.5}},
     }}]}))
 
 
 @pytest.mark.parametrize("patch", [
-    {"bot.long.not_a_field": 1}, {"long.unstuck.ema_span_0_minutes": 1},
+    {"bot.long.not_a_field": 1}, {"long.risk.unstuck.ema_span_0_minutes": 1},
     {"coin_overrides.BTC.bot.long.risk.max_positions": 1},
     {"coin_overrides.BTC.bot.portfolio.loss_gate.max_drawdown_fraction": 0.5},
     {"coin_overrides.BTC.override_config_path": "policy.json"},
@@ -283,17 +283,17 @@ def test_overrides_cannot_expand_canonical_paths_or_coin_permissions(validator, 
 
 
 @pytest.mark.parametrize("patch", [
-    {"bot": {"long": {"unstuck.ema_span_0_minutes": 60.5}}},
+    {"bot": {"long": {"risk.unstuck.ema_span_0_minutes": 60.5}}},
     {"bot": {}},
     {"live": {"account.leverage": 2}},
     {"backtest": {"starting_balance": 1000.0}},
-    {"bot.long.unstuck": {"close_pct": 0.1}},
-    {"bot": {"long.unstuck": {"close_pct": 0.1}}},
+    {"bot.long.risk.unstuck": {"close_pct": 0.1}},
+    {"bot": {"long.risk.unstuck": {"close_pct": 0.1}}},
     {"optimize.prefilter.penalty_weight": 1.0},
     {"optimize": {"prefilter": {"penalty_weight": 1.0}}},
     {"coin_overrides": {"BTC": {"live": {"account": {"leverage": 2}}}}},
     {"coin_overrides.BTC": {"live": {"account": {"leverage": 2}}}},
-    {"coin_overrides.BTC.bot.long.unstuck": {"close_pct": 0.1}},
+    {"coin_overrides.BTC.bot.long.risk.unstuck": {"close_pct": 0.1}},
 ])
 def test_fixed_runtime_schema_reuses_paths_but_rejects_object_pins_and_prefilter_policy(validator, patch):
     with pytest.raises(ValidationError):
@@ -302,7 +302,7 @@ def test_fixed_runtime_schema_reuses_paths_but_rejects_object_pins_and_prefilter
 
 def test_nested_fixed_pin_is_rejected_by_schema_and_runtime(validator):
     payload = source(optimize={"fixed_runtime_overrides": {
-        "bot": {"long": {"unstuck.ema_span_0_minutes": 60.5}},
+        "bot": {"long": {"risk.unstuck.ema_span_0_minutes": 60.5}},
     }})
     with pytest.raises(ValidationError):
         validator.validate(payload)
@@ -315,9 +315,9 @@ def test_atomic_scenario_coin_objects_match_runtime_permissions(validator, coin)
     from config.load import prepare_config
 
     payload = source(
-        coin_overrides={coin: {"bot": {"long": {"unstuck": {"close_fraction": 0.1}}}}},
+        coin_overrides={coin: {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.1}}}}}},
         backtest={"scenarios": [{"label": "atomic", "overrides": {
-            f"coin_overrides.{coin}": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 42.5}}}},
+            f"coin_overrides.{coin}": {"bot": {"long": {"risk": {"unstuck": {"ema_span_0_minutes": 42.5}}}}},
         }}]},
     )
     validator.validate(payload)
@@ -335,12 +335,12 @@ def test_atomic_scenario_coin_objects_match_runtime_permissions(validator, coin)
 
 def test_inline_coin_permissions_and_hsl_context_remain_narrow(validator):
     payload = source(coin_overrides={"BTC": {"override_config_path": "policy.json", "bot": {"long": {
-        "wallet_exposure_limit_ratio": 0.5, "hsl": {"enabled": False},
-        "unstuck": {"ema_span_0_minutes": 15.5},
+        "wallet_exposure_limit_ratio": 0.5,
+        "risk": {"hsl": {"enabled": False}, "unstuck": {"ema_span_0_minutes": 15.5}},
     }}}})
     validator.validate(payload)
     for scope in ("position_side", "portfolio"):
-        payload["bot"] = {"portfolio": {"hsl": {"scope": scope}}}
+        payload["bot"] = {"portfolio": {"risk": {"hsl": {"scope": scope}}}}
         with pytest.raises(ValidationError):
             validator.validate(payload)
     payload = source(coin_overrides={"BTC": {"bot": {"long": {"risk": {"max_positions": 2}}}}})
@@ -361,7 +361,7 @@ def test_shared_metadata_matches_adapters_without_changing_special_validation_me
             field = registry.find(path)
             assert field.optimize_key == key
             assert field.optimizable
-    field = registry.find(("bot", "long", "hsl", "drawdown_threshold_fraction"))
+    field = registry.find(("bot", "long", "risk", "hsl", "drawdown_threshold_fraction"))
     assert field.recommended_bounds == (0.15, 0.15, 0.001)
     assert field.domain.minimum == 0 and field.domain.maximum == 1
     assert field.domain.exclusive_minimum
@@ -371,14 +371,14 @@ def test_shared_metadata_matches_adapters_without_changing_special_validation_me
 
 
 def test_metadata_report_is_separate_and_optional_authority_has_no_default(capsys):
-    report = describe_field("bot.portfolio.hsl.enabled")
+    report = describe_field("bot.portfolio.risk.hsl.enabled")
     assert report["default"] == {"declared": False}
     assert report["optimizer"]["eligible"] is False
-    assert main(["--field", "bot.portfolio.hsl.enabled"]) == 0
+    assert main(["--field", "bot.portfolio.risk.hsl.enabled"]) == 0
     assert json.loads(capsys.readouterr().out) == json.loads(json.dumps(report))
     with pytest.raises(KeyError):
         describe_field("bot.global.unknown")
-    patch = describe_field("coin_overrides.BTC.bot.long.unstuck.ema_span_0_minutes")
+    patch = describe_field("coin_overrides.BTC.bot.long.risk.unstuck.ema_span_0_minutes")
     assert patch["default"] == {"declared": False}
     assert patch["unit"] == "minutes"
     assert patch["optimizer"]["eligible"] is False

@@ -46,7 +46,7 @@ and ignored null clears. Whole-side omission equals an empty side object. One po
 kind selects the engine. Directional numerical fallbacks share the starter profile.
 Budgets remain per side, not an implicitly divided portfolio allocation.
 
-`bot.portfolio` owns account-wide settings/state, including unstuck realized memory. Typed source,
+`bot.portfolio` owns account-wide settings/state, including the shared realized-loss memory. Typed source,
 normalized execution values, explicit optimizer derivations and frozen source memberships remain
 separate. JSON metadata and hydration cannot create source pins. Reusable exports retain common
 defaults and declared pins; expanded effective inspection is a separate view. Candidate results
@@ -155,7 +155,7 @@ Optimizer selector contract:
 - When `--fine_tune_params` is combined with `--start`, the starting configs are anchor configs:
   non-tuned optimizer-bound bot params are fixed from the selected anchor, while the fine-tune
   selectors remain tunable. Base-config policy fields, including boolean toggles such as
-  `bot.<side>.hsl.enabled`, still win over anchors. Anchor and seed values outside
+  `bot.<side>.risk.hsl.enabled`, still win over anchors. Anchor and seed values outside
   `optimize.bounds` are clamped into bounds with aggregated source/key logging. Without
   `--fine_tune_params`, `--start` remains seed-only.
 
@@ -339,65 +339,46 @@ operand/FMA/tick-conversion envelope, where Rust's fused rounding may cross the 
 Exact aligned proofs and authored offsets outside that envelope retain their existing decision.
 These bounded proofs do not establish general GPU numerical acceptance or native migration readiness.
 
-Auto-unstuck has its own EMA trigger toggle:
-`bot.<side>.unstuck.ema_gating_enabled`. It defaults to `true`. When false, auto-unstuck skips the
-EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure
-threshold, close sizing, and valid market/exchange inputs.
+Auto-unstuck uses `bot.<side>.risk.unstuck.ema_gating_enabled`, which defaults to `true`.
+Disabling EMA gating removes the price-band readiness dependency. The order still requires an
+enabled unstuck policy, positive allowance, exposure above its trigger, and valid execution inputs.
 
-Native unstuck fields use `unstuck_close_fraction`, `unstuck_ema_distance_fraction`,
-`unstuck_ema_span_0_minutes`, `unstuck_ema_span_1_minutes`,
-`unstuck_loss_allowance_fraction` and `unstuck_exposure_trigger_ratio`. The native account
-loss-gate policy is `loss_gate_max_drawdown_fraction`; its public field remains
-`bot.portfolio.loss_gate.max_drawdown_fraction`. These names preserve scaling, signed
-quantities, fractional spans and off sentinels. Explicit released-v8 conversion retains the
-released spellings independently of current native identifiers.
+The account-wide state uses `bot.portfolio.risk.loss_realization.memory_ema_span_minutes`.
+It accumulates canonical net-realized fills once in economic order, including fees, rebates,
+ordinary closes, and panic fills. HSL has separate equity memory. The gate's required native
+`loss_gate_enabled` boolean controls activation. Its `loss_gate_max_drawdown_fraction` is
+required when enabled and may be null when disabled. Rust computes the unstuck and gate allowances from the same
+raw balance and drawdown using the checked binary32 arithmetic in the
+[risk model](../../v9_risk_model.md). The unstuck fraction retains its TWEL multiplier.
+The gate fraction applies directly at account scale.
 
+Rust bounds unstuck size at the largest legal partial close that lowers the exposure ratio
+while preserving its trigger floor. The projection holds effective WEL fixed and applies
+estimated net close PnL to raw balance. Allowance may reduce quantity further. One eligible
+unstuck proposal can survive per account allocation. Diagnostic rows report eligibility,
+pre- and projected post-fill exposure, quantity, estimated PnL, and whether the order
+survived selection.
 
-V9 auto-unstuck uses one continuous account-wide net-realized loss memory, with
-`bot.portfolio.unstuck.memory_ema_span_minutes` slow decay and per-fill clipping. Entry/exit fees,
-ordinary closes, HSL closes and signed rebates all contribute in deterministic economic
-order. UPNL and external balance changes do not. HSL episode transitions never reset it.
-Rust computes allowance as `max(0, p * (B + D) - D)` using the explicit binary32/FMA
-graph in [the risk contract](../../v9_risk_model.md). Selection, effective TWEL,
-exposure thresholds and close sizing retain their existing policies. The live orchestrator exposes
-observability-only unstuck gate rows, including exhausted allowance, exposure/EMA waits, unavailable
-inputs, eligible positions, proposed closes, and whether the proposal survives final native reducer
-selection. Python presents these facts without recomputing selection or authorizing execution. The global
-`bot.portfolio.loss_gate` consumes the same ordered facts using its independently configured
-`memory_ema_span_minutes` and separate drawdown. It uses `p=max_drawdown_fraction`,
-without TWEL multiplication; panic exemption and close-selection policy remain. Gate-only
-configs still produce gate memory. Each enabled filter consumes each fill once and the
-economic ledger records it once.
-Config schema v9.0.0 retires its separate rolling window. Active old-schema gates
-require explicit semantic migration; zero and all-history windows are not EMA spans.
-Live realized-memory bootstrap discloses an unknown prefix and residual attenuation;
-a finite suffix is not proof of infinite-tail equality. Required malformed or missing
-realized facts are fatal/deferred at their owning boundary, never an invented zero D.
-
-`bot.<side>.unstuck.ema_span_0_minutes` and `ema_span_1_minutes` independently define the unstuck price EMA
-band, using the same minute-horizon conversion and unrounded geometric-mean third span as the strategy
-band. Long eligibility uses the upper band; short eligibility uses the lower band. Strategy EMA
-changes must not change the unstuck band. Missing required unstuck EMAs follow the existing scoped
-input-unavailable contract; disabled gating does not require them or extend warmup. Live loading
-requests unstuck-only spans for held sides separately, preserving usable strategy spans when an
-unstuck horizon is unavailable. Live warmup uses that same held/static eligibility and does not
-expand flat forager candidates to an unused unstuck horizon. Monitor bands are independently
-available for each consumer.
+The two unstuck price spans under `bot.<side>.risk.unstuck` share the strategy HLCV time base
+and use their own unrounded geometric-mean third span. Long eligibility uses the upper band
+and short eligibility uses the lower band. Live acquisition loads the unstuck-only spans
+for held sides when their policy consumes them. Missing required spans follow scoped
+input unavailability and leave available strategy inputs intact. Monitor bands retain
+each consumer's effective spans.
 
 Explicit released-v8 conversion materializes missing unstuck price spans from the effective active
 strategy before default hydration, including coin overrides and external-file/inline precedence.
 Explicit unstuck spans win. Converted optimizer bounds copy fixed legacy bounds, or freeze at the migrated starting values for
 varying legacy ranges unless supplied; a warning explains that independent genes cannot preserve
 the old coupled search. New defaults expose tunable spans.
-Supported shared-account Metal kernels model a separate price EMA band for unstuck.
-It uses the same seeded recurrence, floating horizons and candle-interval scaling as exact Rust.
-Coin overrides win over candidate globals, and temporal replay persists the independent band.
+Use CPU evaluation with active unstuck or the realized-loss gate. GPU optimization
+rejects those policies during preparation.
 
 The opt-in optimizer override `couple_unstuck_ema_spans` derives each side/coin's unstuck pair
 from its effective strategy, after mirroring and fixed/scenario overrides. It removes redundant
 unstuck span genes and materializes explicit runtime spans in saved candidates and scenarios.
-GPU packing preserves the dependency on candidate strategy genes while retaining strategy coin
-pins. This is optimizer configuration finalization, not a live/backtest coupling mode.
+Candidate finalization retains strategy coin pins and materializes the resulting spans
+before replay.
 
 ## Backtest Limit Fill Buffer
 
@@ -484,25 +465,25 @@ trajectory equality for every configuration.
 
 ## Close Reducer Compatibility
 
-For each coin and position side, Rust selects at most one protective reducer per ideal-order batch.
-Active panic, TWEL/WEL exposure-repair, and auto-unstuck intents are consolidated by keeping the
-largest loss-admissible absolute reduction after final position/minimum sizing, not by summing
-their quantities. If the realized-loss gate blocks the largest non-panic intent, Rust tries the
-next-largest intent. This prevents a small auto-reduce from suppressing a materially larger unstuck
-close while retaining a smaller safety fallback when the larger close would exceed the loss
-budget. A full-position HSL panic is therefore largest and remains exclusive; equal-size ties keep
-panic first and otherwise prefer the closest-to-fill candidate.
+Rust reserves at most one protective reducer per coin and position side. Panic manages its
+position independently and bypasses the gate. For TWEL/WEL repair and auto-unstuck, Rust
+compares the admissible quantities and commits the winning quantity and reservation together.
+Remaining alternatives are re-evaluated against the shared headroom after each reservation.
 
-A selected non-panic reducer may coexist with ordinary grid, trailing, or EMA-anchor closes. Its
-quantity is reserved first; if aggregate close quantity would exceed the position, ordinary closes
-are trimmed furthest-from-fill first against the remaining quantity. Aggregate reduce-only quantity
-must never exceed the position after quantity-step and effective-minimum handling. The cumulative
-realized-loss gate participates in this allocation, checks the final reducer size, and spends the
-shared batch allowance on final reducer quantities largest-first rather than in symbol iteration
-order. It then evaluates ordinary closes after the selected reducers. Live reconciliation reapplies
-the same aggregate cap against current exchange position size, still trimming ordinary closes
-before the reducer if the position shrank after planning.
-This contract is shared by both supported strategy kinds.
+Within the reducer tier and the ordinary tier, immediately executable closes take priority,
+followed by favorable signed entry distance at executable touch. Passive closes are ranked
+by normalized distance to their resting touch, then signed entry distance. Canonical order
+identity resolves ties across both sides and all symbols. CPU risk planning uses completed
+market observations. The projected route determines fees and loss, while subsequent candles
+determine simulated fills. Limit fills in the candle simulator use its resting-maker contract.
+
+Ordinary grid, trailing and EMA-anchor closes share the remaining position capacity. The
+allocator rechecks quantity and venue minimums after normalizing the close wave. Loss-sized
+closes keep their price and route. A positive allowance can fund a single upward quantity-step
+or minimum-order overrun, which exhausts that budget for the rest of the allocation. Final
+allocation diagnostics carry proposed and admitted quantities, route, loss and headroom.
+Live execution also reserves outstanding exchange orders and unresolved transport attempts
+using native loss projections. Conflicting replacements wait for confirmation and a fresh plan.
 
 ## Source Of Truth
 

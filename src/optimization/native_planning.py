@@ -46,7 +46,7 @@ def _request_owned_paths(config):
             if field.optimizable:
                 yield ("bot", "global", *field.suffix)
     kind = config['bot']["portfolio"]['strategy_kind']
-    dynamic_bound_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
+    dynamic_bound_keys = ["realized_loss_memory_ema_span_minutes", "loss_gate_max_drawdown_fraction"]
     for side in ("long", "short"):
         for key in get_strategy_param_keys(kind):
             yield ("bot", side, "strategy", kind, *key.split("."))
@@ -56,7 +56,7 @@ def _request_owned_paths(config):
             "forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes",
             "rms_directionality_ema_span_minutes", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",
-            "unstuck_close_fraction", "unstuck_ema_distance_fraction", "unstuck_loss_allowance_fraction", "unstuck_exposure_trigger_ratio",
+            "unstuck_ema_distance_fraction", "unstuck_loss_allowance_fraction", "unstuck_exposure_trigger_ratio",
             "unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes", "hsl_drawdown_threshold_fraction", "hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes",
             "hsl_cooldown_minutes_after_red",
             *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "log_range", "rms_directionality")),
@@ -66,7 +66,7 @@ def _request_owned_paths(config):
         if path is not None:
             yield path
     for key in ("drawdown_threshold_fraction", "memory_ema_span_minutes", "drawdown_fraction_ema_span_minutes", "cooldown_after_red_minutes"):
-        yield ("bot", "portfolio", "hsl", key)
+        yield ("bot", "portfolio", "risk", "hsl", key)
 
 
 def _static_policy_input(config):
@@ -104,7 +104,7 @@ def _static_contract(config):
     for key in ("scenarios", "suite_enabled", "suite_reducers", "cache_dir", "base_dir"):
         result["backtest"].pop(key, None)
     kind = config['bot']["portfolio"]['strategy_kind']
-    dynamic_bound_keys = ["unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"]
+    dynamic_bound_keys = ["realized_loss_memory_ema_span_minutes", "loss_gate_max_drawdown_fraction"]
     for side in ("long", "short"):
         for key in get_strategy_param_keys(kind):
             _remove_path(result, ("bot", side, "strategy", kind, *key.split(".")))
@@ -114,7 +114,7 @@ def _static_contract(config):
             "forager_volume_ema_span_minutes", "forager_log_range_ema_span_minutes",
             "rms_directionality_ema_span_minutes", "entry_cooldown_min_duration_minutes", "entry_cooldown_max_duration_minutes",
             "entry_cooldown_weights_minutes_exposure_ratio", "entry_cooldown_weights_minutes_adverse_directionality",
-            "unstuck_close_fraction", "unstuck_ema_distance_fraction", "unstuck_loss_allowance_fraction", "unstuck_exposure_trigger_ratio",
+            "unstuck_ema_distance_fraction", "unstuck_loss_allowance_fraction", "unstuck_exposure_trigger_ratio",
             "unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes", "hsl_drawdown_threshold_fraction", "hsl_memory_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes",
             "hsl_cooldown_minutes_after_red",
             *(f"forager_score_weights_{name}" for name in ("volume", "ema_readiness", "log_range", "rms_directionality")),
@@ -124,7 +124,7 @@ def _static_contract(config):
         if path is not None:
             _remove_path(result, path)
     for key in ("drawdown_threshold_fraction", "memory_ema_span_minutes", "drawdown_fraction_ema_span_minutes", "cooldown_after_red_minutes"):
-        _remove_path(result, ("bot", "portfolio", "hsl", key))
+        _remove_path(result, ("bot", "portfolio", "risk", "hsl", key))
     for path in _request_owned_paths(config):
         _remove_path(result, path)
     from config.inherited_bounds import get_bound_plan
@@ -140,7 +140,7 @@ def _static_contract(config):
         for patch in result.get("coin_overrides", {}).values():
             for side in ("long", "short"):
                 for name in ("ema_span_0_minutes", "ema_span_1_minutes"):
-                    _remove_path(patch, ("bot", side, "unstuck", name))
+                    _remove_path(patch, ("bot", side, "risk", "unstuck", name))
                     _remove_path(patch, ("bot", side, f"unstuck_{name}"))
     return result
 

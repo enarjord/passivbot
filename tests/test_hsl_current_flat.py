@@ -319,9 +319,9 @@ def test_live_owner_admits_after_estimated_cooldown_and_rechecks_repaired_histor
     value.positions[SYMBOL][side].update(size=0.0, price=0.0)
     value.get_raw_balance = lambda: 100.0
     policy = (
-        value.config["bot"]["portfolio"]["hsl"]
+        value.config["bot"]["portfolio"]["risk"]["hsl"]
         if mode == "portfolio"
-        else value.config["bot"][side]["hsl"]
+        else value.config["bot"][side]["risk"]["hsl"]
     )
     policy["cooldown_after_red_minutes"] = 5.0
     value.get_exchange_time = lambda: NOW

@@ -8,7 +8,7 @@ the [user guide](../../equity_hard_stop_loss.md) covers configuration.
 ## Signal authority
 
 - `coin` is one symbol/position-side scope; `position_side` is every position on one side;
-  `portfolio` has one explicit `bot.portfolio.hsl` policy across both sides.
+  `portfolio` has one explicit `bot.portfolio.risk.hsl` policy across both sides.
 - Slow decaying currency drawdown uses scoped UPNL deltas and ordered net realized
   cashflows, including fees and signed rebates. Balance/slot changes are budget facts,
   never scoped trading PnL. The independent fast EMA smooths the contemporaneous ratio,
@@ -97,11 +97,11 @@ to its normal refresh and protection path after the wave.
 Routine account-change reporting
 runs after protection in one owned background task with one coalesced pending receipt;
 slow or failed diagnostics cannot become a protective prerequisite. Ordinary strategy, auto-unstuck
-and the realized-loss gate retain their own readiness requirements. Unstuck and
-the gate own independent account-wide net-realized drawdown memories and spans under
-`bot.portfolio.unstuck` and `bot.portfolio.loss_gate`; the gate's allowance uses its fraction directly,
-without TWEL. Both read one canonical tape, each enabled memory consumes each actual net
-fill once even when HSL is disabled, and the ordinary ledger debits it once. A bounded authoritative
+and the realized-loss gate retain their own readiness requirements. Unstuck and the gate use
+one account-wide realized-loss memory under `bot.portfolio.risk.loss_realization`. Each
+canonical net-realized fill enters that memory and the economic ledger once. The gate's
+explicit enablement controls its use of the shared memory and its cap applies at account
+scale. Panic orders bypass the gate and their fills still contribute to realized-loss memory. A bounded authoritative
 suffix starts from an explicitly unknown-prefix zero initializer unless a known
 origin is factually proven. Attenuation is a disclosed estimate, not exact-history
 or safety proof; losing the initializer declares a new bounded bootstrap.
@@ -190,7 +190,7 @@ retain neither plot observations nor verbose rows.
 Released-v8 configs require explicit migration to config schema v9.0.0, including CLI mutations, overrides,
 scenarios, seeds and optimizer bounds. Mode `unified`, rolling-day memory and restart
 selectors and the separate realized-loss gate window are migration inputs only.
-Active gate contexts require explicit acknowledgment of decaying memory with independent spans.
+Active gate contexts require explicit acknowledgment of decaying realized-loss memory and a shared EMA span.
 `portfolio` policy is never inferred from a side.
 The offline converter requires explicit acknowledgment for authored `never` and
 potentially active tagged `threshold` restart policies, including in best-effort

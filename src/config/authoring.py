@@ -32,7 +32,8 @@ _PROTECTED = (
     # default. Compact output must not turn it into future inheritance.
     ("bot", "long"), ("bot", "short"),
     *(("bot", side, "forager", "always_include") for side in ("long", "short")),
-    ("bot", "portfolio", "hsl"),
+    ("bot", "portfolio", "risk", "hsl"),
+    ("bot", "portfolio", "risk", "loss_realization", "loss_gate"),
 )
 
 
@@ -147,8 +148,8 @@ def compact_config(source, *, base_config_path="", destination_path=""):
         baseline["bot"]["portfolio"] = {"strategy_kind": full["bot"]["portfolio"]["strategy_kind"]}
     if "live" in authored:
         baseline["live"] = {}
-    if full["bot"]["portfolio"]["hsl"]["scope"] == "portfolio":
-        baseline["bot"].setdefault("portfolio", {})["hsl"] = deepcopy(full["bot"]["portfolio"]["hsl"])
+    if full["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "portfolio":
+        baseline["bot"].setdefault("portfolio", {}).setdefault("risk", {})["hsl"] = deepcopy(full["bot"]["portfolio"]["risk"]["hsl"])
     defaults = cleanup_config(baseline, base_config_path=base_config_path, _allow_sparse=True)
     registry = get_field_registry()
     keep_empty = {("bot",), ("live",), ("bot", "long"), ("bot", "short")}

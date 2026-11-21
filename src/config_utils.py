@@ -341,7 +341,7 @@ FIELD_RUNTIME_RULES = {
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "bot.portfolio.loss_gate.max_drawdown_fraction": {
+    "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -359,7 +359,7 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
-    "bot.portfolio.unstuck.memory_ema_span_minutes": {
+    "bot.portfolio.risk.loss_realization.memory_ema_span_minutes": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -373,7 +373,7 @@ FIELD_RUNTIME_RULES = {
         "consumed_by": {"live"},
         "cli_exposed_on": {"live"},
     },
-    "bot.portfolio.hsl.scope": {
+    "bot.portfolio.risk.hsl.scope": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
         "cli_exposed_on": {"live", "backtest", "optimize"},
@@ -386,52 +386,50 @@ FIELD_RUNTIME_RULES = {
 }
 
 OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
-    "bot.long.hsl.enabled": {
-        "visible": ["--bot.long.hsl.enabled"],
-        "hidden": ["--bot.long.hsl_enabled", "--bot_long_hsl_enabled"],
+    "bot.long.risk.hsl.enabled": {
+        "visible": ["--bot.long.risk.hsl.enabled"],
+        "hidden": ["--bot_long_risk_hsl_enabled"],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"optimize"},
-        "help": "Override bot.long.hsl.enabled for this optimize run.",
+        "help": "Override bot.long.risk.hsl.enabled for this optimize run.",
     },
-    "bot.short.hsl.enabled": {
-        "visible": ["--bot.short.hsl.enabled"],
-        "hidden": ["--bot.short.hsl_enabled", "--bot_short_hsl_enabled"],
+    "bot.short.risk.hsl.enabled": {
+        "visible": ["--bot.short.risk.hsl.enabled"],
+        "hidden": ["--bot_short_risk_hsl_enabled"],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"optimize"},
-        "help": "Override bot.short.hsl.enabled for this optimize run.",
+        "help": "Override bot.short.risk.hsl.enabled for this optimize run.",
     },
-    "bot.long.hsl.panic_close_order_type": {
-        "visible": ["--bot.long.hsl.panic_close_order_type"],
+    "bot.long.risk.hsl.panic_close_order_type": {
+        "visible": ["--bot.long.risk.hsl.panic_close_order_type"],
         "hidden": [
-            "--bot.long.hsl_panic_close_order_type",
-            "--bot_long_hsl_panic_close_order_type",
+            "--bot_long_risk_hsl_panic_close_order_type",
         ],
         "type": str,
         "metavar": "VALUE",
         "commands": {"optimize"},
         "choices": ["limit", "market"],
-        "help": "Override bot.long.hsl.panic_close_order_type for this optimize run.",
+        "help": "Override bot.long.risk.hsl.panic_close_order_type for this optimize run.",
     },
-    "bot.short.hsl.panic_close_order_type": {
-        "visible": ["--bot.short.hsl.panic_close_order_type"],
+    "bot.short.risk.hsl.panic_close_order_type": {
+        "visible": ["--bot.short.risk.hsl.panic_close_order_type"],
         "hidden": [
-            "--bot.short.hsl_panic_close_order_type",
-            "--bot_short_hsl_panic_close_order_type",
+            "--bot_short_risk_hsl_panic_close_order_type",
         ],
         "type": str,
         "metavar": "VALUE",
         "commands": {"optimize"},
         "choices": ["limit", "market"],
-        "help": "Override bot.short.hsl.panic_close_order_type for this optimize run.",
+        "help": "Override bot.short.risk.hsl.panic_close_order_type for this optimize run.",
     },
 
 }
 
 
 for _pside in ("long", "short"):
-    _path = f"bot.{_pside}.hsl.scale_budget_with_excess_allowance"
+    _path = f"bot.{_pside}.risk.hsl.scale_budget_with_excess_allowance"
     OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS[_path] = {
         "visible": [f"--{_path}"],
         "hidden": [],
@@ -737,18 +735,24 @@ def clean_config(config: dict) -> dict:
     else:
         reject_retired_v9_fields(source)
     template = normalization_template(get_expanded_config_prototype(), source)
-    portfolio = source.get("bot", {}).get("portfolio", {}).get("hsl", {})
+    portfolio_risk = source.get("bot", {}).get("portfolio", {}).get("risk", {})
+    portfolio = portfolio_risk.get("hsl", {})
+    gate = portfolio_risk.get("loss_realization", {}).get("loss_gate", {})
+    if "max_realized_drawdown_fraction" in gate:
+        template["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"][
+            "max_realized_drawdown_fraction"
+        ] = None
     if not isinstance(portfolio, dict):
-        raise TypeError("bot.portfolio.hsl must be a mapping")
+        raise TypeError("bot.portfolio.risk.hsl must be a mapping")
     # Retain explicit portfolio policy without hydrating missing authorization.
-    template["bot"]["portfolio"]["hsl"].update(
+    template["bot"]["portfolio"]["risk"]["hsl"].update(
         {key: None for key in FIELDS if key in portfolio}
     )
-    portfolio_bounds = source.get("optimize", {}).get("bounds", {}).get("portfolio", {}).get("hsl")
+    portfolio_bounds = source.get("optimize", {}).get("bounds", {}).get("portfolio", {}).get("risk", {}).get("hsl")
     if portfolio_bounds is not None:
         if not isinstance(portfolio_bounds, dict):
-            raise TypeError("optimize.bounds.portfolio.hsl must be a mapping")
-        template["optimize"]["bounds"].setdefault("portfolio", {})["hsl"] = {
+            raise TypeError("optimize.bounds.portfolio.risk.hsl must be a mapping")
+        template["optimize"]["bounds"].setdefault("portfolio", {}).setdefault("risk", {})["hsl"] = {
             key: None for key in FIELDS if key in portfolio_bounds
         }
     from config.optimize_bounds import (
@@ -1145,9 +1149,9 @@ RESERVED_CLI_ARGS = {
             "when market orders are allowed; this is not a live slippage cap."
         ),
     },
-    "bot.portfolio.loss_gate.max_drawdown_fraction": {
-        "visible": ["--loss-gate-max-drawdown-fraction"],
-        "hidden": ["--bot_portfolio_loss_gate_max_drawdown_fraction"],
+    "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction": {
+        "visible": ["--loss-gate-max-realized-drawdown-fraction"],
+        "hidden": ["--bot_portfolio_risk_loss_realization_loss_gate_max_realized_drawdown_fraction"],
         "type": float,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1156,7 +1160,7 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "Limit non-panic close losses using independent loss-gate drawdown memory; >=1 disables the gate.",
+        "help": "Set the enabled loss gate's account drawdown cap in [0, 1).",
     },
     "live.fills.fallback_fee_fraction": {
         "visible": ["--fallback-fee-fraction"],
@@ -1199,9 +1203,9 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Maximum age difference allowed when using ticker data to convert non-quote fee tokens.",
     },
-    "bot.portfolio.unstuck.memory_ema_span_minutes": {
-        "visible": ["--unstuck-memory-ema-span-minutes"],
-        "hidden": ["--bot_portfolio_unstuck_memory_ema_span_minutes"],
+    "bot.portfolio.risk.loss_realization.memory_ema_span_minutes": {
+        "visible": ["--realized-loss-memory-ema-span-minutes"],
+        "hidden": ["--bot_portfolio_risk_loss_realization_memory_ema_span_minutes"],
         "type": normalize_memory_ema_span_minutes,
         "metavar": "FLOAT",
         "commands": {"live", "backtest", "optimize"},
@@ -1210,7 +1214,7 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "Global unstuck realized-memory EMA span in minutes.",
+        "help": "Account realized-loss EMA span shared by unstuck and the portfolio loss gate.",
     },
     "live.startup.risk_bootstrap_max_lookback_minutes": {
         "visible": ["--risk-bootstrap-max-lookback-minutes"],
@@ -1224,9 +1228,9 @@ RESERVED_CLI_ARGS = {
         "group": {"live": "Behavior"},
         "help": "Live reconstruction cap in minutes (maximum 90 days); requested horizon is five slow spans.",
     },
-    "bot.portfolio.hsl.scope": {
+    "bot.portfolio.risk.hsl.scope": {
         "visible": ["--hsl-scope"],
-        "hidden": ["--bot_portfolio_hsl_scope"],
+        "hidden": ["--bot_portfolio_risk_hsl_scope"],
         "type": normalize_hsl_signal_mode,
         "metavar": "MODE",
         "choices": tuple(HSL_SIGNAL_MODES),
@@ -1531,17 +1535,20 @@ for _pside in ("long", "short"):
         "help": f"Wallet exposure bounds for the {_pside} side: VALUE or LOW,HIGH[,STEP].",
     }
 
-for _path in ("bot.portfolio.unstuck.memory_ema_span_minutes", "bot.portfolio.loss_gate.max_drawdown_fraction", "bot.portfolio.hsl.scope"):
+for _path in ("bot.portfolio.risk.loss_realization.memory_ema_span_minutes", "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction", "bot.portfolio.risk.hsl.scope"):
     FIELD_RUNTIME_RULES[_path]["owner"] = "bot"
-FIELD_RUNTIME_RULES["bot.portfolio.loss_gate.memory_ema_span_minutes"] = deepcopy(
-    FIELD_RUNTIME_RULES["bot.portfolio.unstuck.memory_ema_span_minutes"]
-)
-RESERVED_CLI_ARGS["bot.portfolio.loss_gate.memory_ema_span_minutes"] = {
-    **deepcopy(RESERVED_CLI_ARGS["bot.portfolio.unstuck.memory_ema_span_minutes"]),
-    "visible": ["--loss-gate-memory-ema-span-minutes"],
-    "hidden": ["--bot_portfolio_loss_gate_memory_ema_span_minutes"],
-    "help": "Global loss-gate realized-memory EMA span in minutes.",
+_gate_enabled_path = "bot.portfolio.risk.loss_realization.loss_gate.enabled"
+_gate_cap_path = "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction"
+FIELD_RUNTIME_RULES[_gate_enabled_path] = deepcopy(FIELD_RUNTIME_RULES[_gate_cap_path])
+RESERVED_CLI_ARGS[_gate_enabled_path] = {
+    **deepcopy(RESERVED_CLI_ARGS[_gate_cap_path]),
+    "visible": ["--loss-gate-enabled"],
+    "hidden": ["--bot_portfolio_risk_loss_realization_loss_gate_enabled"],
+    "type": str2bool,
+    "metavar": "Y/N",
+    "help": "Enable account-wide loss sizing for non-panic closes. An enabled gate requires a cap.",
 }
+
 
 for _side in ("long", "short"):
     _path = f"bot.{_side}.universe.filter_by_min_effective_cost"
@@ -1776,22 +1783,22 @@ CLI_HELP_OVERRIDES = {
 for _pside in ("long", "short"):
     CLI_HELP_OVERRIDES.update(
         {
-            f"bot.{_pside}.hsl.scale_budget_with_excess_allowance": (
+            f"bot.{_pside}.risk.hsl.scale_budget_with_excess_allowance": (
                 "Scale coin HSL balance budget by effective bounded excess allowance. "
                 "Default false; allows coin overrides in coin HSL scope."
             ),
-            f"bot.{_pside}.hsl.enabled": f"Enable HSL for the {_pside} side.",
-            f"bot.{_pside}.hsl.drawdown_threshold_fraction": (
+            f"bot.{_pside}.risk.hsl.enabled": f"Enable HSL for the {_pside} side.",
+            f"bot.{_pside}.risk.hsl.drawdown_threshold_fraction": (
                 f"RED drawdown trigger for {_pside} HSL, as part-per-one."
             ),
-            f"bot.{_pside}.hsl.drawdown_fraction_ema_span_minutes": (
+            f"bot.{_pside}.risk.hsl.drawdown_fraction_ema_span_minutes": (
                 f"EMA span, in minutes, for the {_pside} HSL drawdown signal."
             ),
-            f"bot.{_pside}.hsl.cooldown_after_red_minutes": (
+            f"bot.{_pside}.risk.hsl.cooldown_after_red_minutes": (
                 f"Minutes to wait after {_pside} HSL RED is flattened before "
                 "restart is allowed."
             ),
-            f"bot.{_pside}.hsl.panic_close_order_type": (
+            f"bot.{_pside}.risk.hsl.panic_close_order_type": (
                 "Allowed values: limit or market. market uses "
                 "backtest.market_order_slippage_fraction and taker fees in backtests."
             ),
@@ -1854,7 +1861,7 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
         "live.recovery.exchange_symbol_unavailable_cooldown_hours",
         "live.account.leverage",
         "bot.portfolio.execution.market_orders_allowed",
-        "bot.portfolio.loss_gate.max_drawdown_fraction",
+        "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction",
         "live.execution.limit_order_create_max_market_distance_fraction",
         "live.execution.order_match_tolerance_fraction",
         "live.execution.order_replacement_churn_gate_activation_count",
@@ -2002,6 +2009,17 @@ def classify_config_argument(
 
 def project_template_config_for_cli(config: dict, command: Optional[str]) -> dict:
     result = deepcopy(config)
+    if "bot" in result:
+        from config.risk_memory import LOSS_GATE_CAP_PATH
+
+        node = result
+        for part in LOSS_GATE_CAP_PATH[:-1]:
+            if part not in node or not isinstance(node[part], dict):
+                break
+            node = node[part]
+        else:
+            # CLI discovery only. The configured cap remains absent until authored.
+            node.setdefault(LOSS_GATE_CAP_PATH[-1], None)
     omitted = object()
     fixed_bot_fields = set()
     if command == "optimize":
