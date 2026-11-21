@@ -403,6 +403,10 @@ returned create list, or any planning, execution, order, and risk decision.
 
 ## Connector Call Boundary
 
+The console create-candidate summary lists orders selected before final write admission.
+Candidates can still be skipped. Use the connector call and outcome events to distinguish
+local admission, exchange acknowledgement, and failed or skipped orders.
+
 `execution.create_connector_call_started` and `execution.cancel_connector_call_started` are
 emitted immediately before the concrete `cca.create_order` or `cca.cancel_order` coroutine. They
 prove only that local execution reached the call site—not that bytes were sent or the exchange
