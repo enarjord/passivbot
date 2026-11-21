@@ -20,11 +20,20 @@ _EXCHANGE_ERROR_LABEL_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}")
 _EXCHANGE_ERROR_SECRET_VALUE_RE = re.compile(r"[A-Za-z0-9+/_=-]{24,}")
 _PUBLIC_WALLET_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
 _EXCHANGE_ERROR_AUTH_HEADER_RE = re.compile(
-    r"\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=][^\r\n]*",
-    re.IGNORECASE,
+    r"\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=].*",
+    re.IGNORECASE | re.DOTALL,
 )
 _EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
     r"\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE
+)
+_EXCHANGE_ERROR_PEM_RE = re.compile(
+    r"-----BEGIN [^\r\n]*PRIVATE KEY-----.*?(?:-----END [^\r\n]*PRIVATE KEY-----|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+_EXCHANGE_ERROR_MULTIPLE_WORD_CREDENTIAL_RE = re.compile(
+    r"(?P<label>\b(?:mnemonic|seed[-_ ]?phrase|password|passphrase)"
+    r"(?:['\"])?[ \t]*[:=][ \t]*)(?!['\"])\S.*",
+    re.IGNORECASE | re.DOTALL,
 )
 _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
     r"(?P<label>\b(?:api[-_ ]?(?:key|secret|token|passphrase)|private[-_ ]?key|"
@@ -36,7 +45,7 @@ _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
     r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|["'][^\r\n]*|[^\s,;|]+)""",
     re.IGNORECASE,
 )
-_EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE = re.compile(r"\{|\[\s*[\[{\x22]")
+_EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE = re.compile(r"\{|\[\s*[\[{\x22\x27]")
 _HYPERLIQUID_UNRECOGNIZED_WALLET_RE = re.compile(
     r"(?:L1 error: )?User or API Wallet 0x[0-9a-fA-F]{40} does not exist\.?"
 )
@@ -297,6 +306,8 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
         text = _EXCHANGE_ERROR_EMAIL_RE.sub("<redacted-email>", text)
         text = _EXCHANGE_ERROR_AUTH_HEADER_RE.sub("<redacted-header>", text)
         text = _EXCHANGE_ERROR_AUTH_SCHEME_RE.sub("<redacted-auth>", text)
+        text = _EXCHANGE_ERROR_PEM_RE.sub("<redacted-key>", text)
+        text = _EXCHANGE_ERROR_MULTIPLE_WORD_CREDENTIAL_RE.sub(r"\g<label><redacted>", text)
         text = _EXCHANGE_ERROR_CREDENTIAL_RE.sub(r"\g<label><redacted>", text)
         text = _EXCHANGE_ERROR_SECRET_VALUE_RE.sub(
             lambda match: (
