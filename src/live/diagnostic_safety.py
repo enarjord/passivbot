@@ -21,6 +21,9 @@ _EXCHANGE_ERROR_SECRET_VALUE_RE = re.compile(r"[A-Za-z0-9+/_=-]{24,}")
 _PUBLIC_WALLET_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
 # Cap the prefix scan at each word boundary, even in long hyphenated input.
 _EXCHANGE_ERROR_FIELD_PREFIX = r"(?<![a-z0-9])(?:[a-z0-9]+[-_]+){0,4}"
+# A quote or status clause fixes the label start. Scan the full prefix
+# there without backtracking within its components.
+_EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX = r"(?:[a-z0-9]++[-_]++)*"
 _EXCHANGE_ERROR_AUTH_HEADER_LABEL = (
     r"(?:authorization|cookie)(?>[-_ ]+header\b|)"
 )
@@ -34,15 +37,17 @@ _EXCHANGE_ERROR_PEM_RE = re.compile(
     r"-----BEGIN [^\r\n]*PRIVATE KEY-----.*?(?:-----END [^\r\n]*PRIVATE KEY-----|\Z)",
     re.IGNORECASE | re.DOTALL,
 )
-_EXCHANGE_ERROR_CREDENTIAL_LABEL = (
-    _EXCHANGE_ERROR_FIELD_PREFIX
-    + r"(?:"
+_EXCHANGE_ERROR_CREDENTIAL_NAME = (
+    r"(?:"
     + _EXCHANGE_ERROR_AUTH_HEADER_LABEL
     + r"|api[-_ ]?(?:key|secret|token|passphrase)|private[-_ ]?key|"
     r"client[-_ ]?secret|access[-_ ]?(?:key|secret|sign(?:ature)?|token|passphrase)|"
     r"refresh[-_ ]?token|session[-_ ]?(?:id|key|token)|signing[-_ ]?key|"
     r"secret(?:[-_ ]?key)?|signature|passphrase|password|token|"
     r"listen[-_ ]?key|seed[-_ ]?phrase|mnemonic)(?![\w-])"
+)
+_EXCHANGE_ERROR_CREDENTIAL_LABEL = (
+    _EXCHANGE_ERROR_FIELD_PREFIX + _EXCHANGE_ERROR_CREDENTIAL_NAME
 )
 # A correctly quoted value has a known end. The rest of an unquoted or
 # malformed value is ambiguous: redact the suffix rather than guessing its end.
@@ -70,7 +75,8 @@ _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
-    rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?P=quote)\s*|"""
+    rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX}"""
+    rf"""{_EXCHANGE_ERROR_CREDENTIAL_NAME}(?P=quote)\s*|"""
     rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=['"(\[,;])))"""
     # Keep standalone diagnostic wording, including a credential followed by
     # a known status clause. Other trailing text may be a bare credential echo.
@@ -83,7 +89,8 @@ _EXCHANGE_ERROR_PREFIXED_CREDENTIAL_ECHO_RE = re.compile(
     r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')"""
     r"\s+(?P<clause>(?:is|was)\s+(?:(?:an?|the)\s+)?"
     r"(?:invalid|incorrect|expired|revoked)\s+"
-    + _EXCHANGE_ERROR_CREDENTIAL_LABEL + ")",
+    + _EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX
+    + _EXCHANGE_ERROR_CREDENTIAL_NAME + ")",
     re.IGNORECASE,
 )
 # Exact stock text with no echoed values. Keep the safety decision independent
