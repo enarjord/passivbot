@@ -880,6 +880,9 @@ class Owner:
 
                 try:
                     result = await self.cycle()
+                    guard = getattr(bot, "_create_failure_guard", None)
+                    if guard is not None and not self._shutdown_requested():
+                        guard.check(bot)
                 except (ExchangeError, InvalidNonce) as exc:
                     if self._shutdown_requested():
                         break

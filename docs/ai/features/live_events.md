@@ -442,6 +442,12 @@ logs remain private operational artifacts and must not be published without revi
 diagnostic projection does not alter event routing, emitter isolation, executor retries or
 re-raises, exchange calls, or trading behavior.
 
+`execution.create_health` reports degradation after five unacknowledged create outcomes,
+recovery on acceptance, or the fatal stop decision. Its bounded fields distinguish total
+failed creates from unconfirmed outcomes and include elapsed seconds, the affected write
+action, the next action, and the latest safe failure details where available. A confirmed
+API-wallet rejection may stop on a create or a cancel with zero preceding create failures.
+
 ## Fill Confirmation Fallbacks
 
 `fill.position_open_boundary_recovery_used` reports a confirmed trailing reset.

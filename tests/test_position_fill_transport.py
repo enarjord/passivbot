@@ -75,7 +75,13 @@ async def test_change_during_connector_queue_defers_at_transport(
                 )
             return await client.cancel_order(existing["id"], key[0])
 
-    bot = SimpleNamespace(cca=client, _position_fill_sync=sync, config={"live": {}})
+    from live.create_failure_guard import CreateFailureGuard
+
+    guard = CreateFailureGuard()
+    bot = SimpleNamespace(
+        cca=client, _position_fill_sync=sync, config={"live": {}},
+        _create_failure_guard=guard,
+    )
 
     owner = SimpleNamespace(_write_lock=asyncio.Lock(), admit=lambda order: True)
     monkeypatch.setattr(hsl_live, "owner", lambda bot: owner)
@@ -119,6 +125,7 @@ async def test_change_during_connector_queue_defers_at_transport(
     )
     assert not sent
     assert not ownership and not cancellations and not events
+    assert not guard.in_flight and guard.failures == 0
     assert syncmod._write_context.get() is None
     if transport == "fake":
         after = client.export_state()

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 import passivbot as pb
-from passivbot_exceptions import FatalBotException, RestartBotException
+from passivbot_exceptions import FatalBotException, FatalOrderWriteError, RestartBotException
 
 
 def crash():
@@ -374,17 +374,36 @@ async def test_recovery_waits_for_admitted_ordinary_execution(outcome, caplog):
 
 
 @pytest.mark.asyncio
-async def test_restart_budget_and_cooldown_remain_unchanged(caplog, monkeypatch):
+@pytest.mark.parametrize("fatal_write_stop", [False, True])
+async def test_restart_budget_and_fatal_write_stop(caplog, monkeypatch, fatal_write_stop):
     from unittest.mock import AsyncMock, Mock
 
     config = pb.get_template_config()
     config["live"].update(user="offline_test", max_n_restarts_per_day=1)
-    bot = SimpleNamespace(
-        config=config, stop_signal_received=False,
-        start_bot=AsyncMock(side_effect=RuntimeError("password=RESTART_SECRET")),
-        cleanup_for_restart=AsyncMock(),
-        _log_silence_watchdog_stage="execution_loop",
-    )
+    instances = []
+
+    def setup(_config):
+        instance = SimpleNamespace(
+            config=config, stop_signal_received=False,
+            cleanup_for_restart=AsyncMock(),
+            _log_silence_watchdog_stage="execution_loop",
+        )
+
+        async def start():
+            from ccxt.base.errors import InvalidOrder
+
+            order = {"symbol": "BTC/USDC:USDC"}
+            guard = instance._create_failure_guard
+            guard.submitted(order)
+            guard.completed(instance, order, error=InvalidOrder())
+            if fatal_write_stop and len(instances) == 2:
+                raise FatalOrderWriteError("sustained create failure")
+            raise RuntimeError("password=RESTART_SECRET")
+
+        instance.start_bot = start
+        instances.append(instance)
+        return instance
+
     monkeypatch.setattr(pb.sys, "argv", ["passivbot"])
     monkeypatch.setattr(pb, "configure_logging", lambda **kw: None)
     monkeypatch.setattr(pb, "load_input_config", lambda *a: (config, None, None))
@@ -397,16 +416,26 @@ async def test_restart_budget_and_cooldown_remain_unchanged(caplog, monkeypatch)
     monkeypatch.setattr(pb, "load_markets", AsyncMock())
     monkeypatch.setattr(pb, "parse_overrides", lambda config, **kw: config)
     monkeypatch.setattr(pb, "compile_runtime_config", lambda config, **kw: config)
-    monkeypatch.setattr(pb, "setup_bot", Mock(return_value=bot))
+    monkeypatch.setattr(pb, "setup_bot", Mock(side_effect=setup))
     monkeypatch.setattr(pb, "bot", None, raising=False)
     sleep = AsyncMock()
     monkeypatch.setattr(pb.asyncio, "sleep", sleep)
     with caplog.at_level(logging.ERROR):
-        await pb._run_live({})
-    assert pb.setup_bot.call_count == 2  # Original len(restarts) > limit policy.
-    assert bot.cleanup_for_restart.await_count == 2
-    assert sleep.await_count == 2 * 61  # Original inclusive 60..0 cooldown.
-    assert "restarts=2 limit=1 window=24h" in caplog.text
+        if fatal_write_stop:
+            with pytest.raises(SystemExit) as raised:
+                await pb._run_live({})
+            assert raised.value.code == 1
+            assert sleep.await_count == 61
+            assert "action=stop" in caplog.text
+        else:
+            await pb._run_live({})
+            assert sleep.await_count == 2 * 61  # Original inclusive 60..0 cooldown.
+            assert "restarts=2 limit=1 window=24h" in caplog.text
+    first, second = instances
+    assert first._create_failure_guard is second._create_failure_guard
+    assert second._create_failure_guard.failures == 2
+    first.cleanup_for_restart.assert_awaited_once()
+    second.cleanup_for_restart.assert_awaited_once()
     assert "RESTART_SECRET" not in caplog.text
 
 
