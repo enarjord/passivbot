@@ -62,9 +62,15 @@ _SAFE_CREDENTIAL_STATUS = (
     r"incorrect|required|failed|denied|not found|not recognized|does not exist)|"
     r"for the configured private key|failed: <redacted-auth>)(?=\s*(?:[.!?](?:\s|$)|$)))"
 )
+# Punctuation attached to text can start a credential. A completed sentence
+# has whitespace or ends the reason, optionally inside closing punctuation.
+_EXCHANGE_ERROR_CREDENTIAL_VALUE_START = (
+    r"""(?!\s|[:=：＝]|<redacted|[.!?]+(?=\s|\Z|["')\]]+\Z))"""
+)
 _EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
     r"\b(?:bearer|basic)(?>\s+(?:authentication|auth|token)\b|)"
-    r"\s+(?![\s.!?,;:=])"
+    r"(?:\s+|(?=[.!?,;]))"
+    + _EXCHANGE_ERROR_CREDENTIAL_VALUE_START
     + _SAFE_CREDENTIAL_STATUS
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
@@ -82,9 +88,7 @@ _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
     rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX}"""
     rf"""{_EXCHANGE_ERROR_CREDENTIAL_NAME}(?P=quote)\s*|"""
     rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=['"(\[,;.!?])))"""
-    # Sentence punctuation has a boundary. Attached punctuation can be the
-    # first character of a credential value.
-    r"(?!\s|[.!?](?=\s|\Z)|[:=：＝]|<redacted)"
+    + _EXCHANGE_ERROR_CREDENTIAL_VALUE_START
     + _SAFE_CREDENTIAL_STATUS
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
