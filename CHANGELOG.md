@@ -25,7 +25,8 @@ since the latest release tag; these features may already be available when insta
   constraint disagreement.
 
 - Apply the same punctuation boundaries to Bearer and Basic authentication values
-  and other credential echoes in live exchange diagnostics.
+  and other credential echoes. Drop diagnostic reasons when a payload delimiter
+  interrupts an unfinished quoted value.
 
 - Prevent credential values starting with punctuation or containing a payload delimiter
   from appearing in live exchange diagnostics.

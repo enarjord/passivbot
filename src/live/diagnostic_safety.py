@@ -100,12 +100,15 @@ _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
 # ambiguous echo. Bound the phrase without assuming a fixed exchange wording.
 _EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE = re.compile(
     r"""(?P<quote>['"\x60’”»])(?:\s*[:,;(.\-–—]\s*|\s+)"""
-    r"""(?P<clause>(?:[a-z]++(?:['’][a-z]++)*+\s+){1,6}?"""
+    r"""(?P<clause>(?:[a-z]++(?:['’][a-z]++)*+\s+){0,6}?"""
     + _EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX
     + _EXCHANGE_ERROR_CREDENTIAL_NAME + ")",
     re.IGNORECASE,
 )
-_EXCHANGE_ERROR_REVERSE_OPEN_QUOTE = {"’": "‘", "”": "“", "»": "«"}
+_EXCHANGE_ERROR_QUOTE_CLOSE = {"'": "'", '"': '"', "\x60": "\x60", "‘": "’", "“": "”", "«": "»"}
+_EXCHANGE_ERROR_QUOTE_OPEN = {
+    close: open_quote for open_quote, close in _EXCHANGE_ERROR_QUOTE_CLOSE.items()
+}
 _EXCHANGE_ERROR_BARE_REVERSE_RE = re.compile(
     r"\b(?:(?:is|was)\s+(?:(?:an?|the)\s+)?(?:invalid|incorrect|expired|revoked)"
     r"|(?:(?:is|was)\s+(?:not|no\s+longer)|(?:isn|wasn)['’]t)\s+"
@@ -412,8 +415,7 @@ def _redact_reverse_credential_echoes(text: str) -> str:
     parts = []
     offset = 0
     for match in matches:
-        close_quote = match["quote"]
-        open_quote = _EXCHANGE_ERROR_REVERSE_OPEN_QUOTE.get(close_quote, close_quote)
+        open_quote = _EXCHANGE_ERROR_QUOTE_OPEN[match["quote"]]
         opening = text.find(open_quote, offset, match.start())
         if opening < 0:
             return "<redacted>"
@@ -422,6 +424,29 @@ def _redact_reverse_credential_echoes(text: str) -> str:
         offset = match.end()
     parts.append(text[offset:])
     return "".join(parts)
+
+
+def _payload_prefix_has_open_quote(text: str) -> bool:
+    closing_quote = None
+    escaped = False
+    for index, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if (
+            char in {"'", "’"}
+            and 0 < index < len(text) - 1
+            and text[index - 1].isalnum()
+            and text[index + 1].isalnum()
+        ):
+            continue
+        if closing_quote is None:
+            closing_quote = _EXCHANGE_ERROR_QUOTE_CLOSE.get(char)
+        elif char == closing_quote:
+            closing_quote = None
+        elif char == "\\":
+            escaped = True
+    return closing_quote is not None
 
 
 def _bounded_exchange_error_reason(value: object) -> str | None:
@@ -438,10 +463,11 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
         # value can otherwise hide the closing quote and credential label.
         text = _redact_reverse_credential_echoes(value)
         if payload := _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE.search(value):
-            if text != value:
+            prefix = value[:payload.start()].rstrip()
+            if text != value or _payload_prefix_has_open_quote(prefix):
                 return "<redacted>"
             # Use the original delimiter so sanitizing cannot expose the dump.
-            text = value[:payload.start()].rstrip() + " <redacted-payload>"
+            text = prefix + " <redacted-payload>"
         text = _EXCHANGE_ERROR_URL_RE.sub("<redacted-url>", text)
         if "@" in text:
             text = _EXCHANGE_ERROR_EMAIL_RE.sub("<redacted-email>", text)
