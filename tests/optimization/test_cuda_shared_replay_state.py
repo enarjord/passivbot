@@ -1,9 +1,11 @@
 """Block-local replay state must never alias candidates or directional sides."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
-from optimization.gpu.cuda_kernel import cuda_source, _shared_side_replay
+from optimization.gpu.cuda_kernel import _hipify, _shared_side_replay, cuda_source
 
 
 def source(count=128, *, native=True, chunked=True):
@@ -40,6 +42,33 @@ def test_shared_workspace_is_only_selected_for_native_temporal_replay(native, ch
     assert "NAME##_storage" not in cuda_source(shader, shared_replay_state=False)
 
 
+@pytest.mark.parametrize(
+    "shader_file,chunk_define,state_type",
+    [
+        ("mps_ema_anchor_multicoin_long", "EMA", "EmaMulticoinSideState"),
+        (
+            "mps_trailing_martingale_multicoin",
+            "TM",
+            "TrailingMartingaleMulticoinSideState",
+        ),
+    ],
+)
+def test_fused_side_storage_policy_applies_to_actual_shader(shader_file, chunk_define, state_type):
+    gpu_sources = Path(__file__).resolve().parents[2] / "passivbot-rust" / "src" / "gpu"
+    shader = (gpu_sources / f"{shader_file}.metal").read_text()
+    preamble = f"#define PASSIVBOT_HSL_FACTUAL_ONLY 1\n#define PASSIVBOT_{chunk_define}_MULTICOIN_CHUNKED 1\n"
+    declaration = f"PASSIVBOT_GPU_SIDE_STATE({state_type}, short_side, 1);"
+    assert shader.count(declaration) == 1
+    reformatted = declaration.replace(", 1", ",  1")
+    for declaration_text in (declaration, reformatted):
+        lowered = cuda_source(preamble + shader.replace(declaration, declaration_text))
+        hip = _hipify(lowered)
+        assert declaration_text in lowered and declaration_text in hip
+        assert "PBReplaySideStorage<TYPE, SLOT> NAME##_storage" in hip
+        assert "Slot == 0 || PBShareSecondaryReplaySlot" in hip
+        assert hip.startswith("#define PASSIVBOT_HIP_PRIVATE_SECONDARY_REPLAY_SLOT 1\n")
+
+
 @pytest.mark.parametrize("count", [128, 6144, 6145])
 def test_actual_cuda_side_slots_and_size_fallback(count):
     torch = pytest.importorskip("torch")
@@ -50,7 +79,8 @@ def test_actual_cuda_side_slots_and_size_fallback(count):
     library = CudaShaderLibrary(source(count))
     kernel = library._module.get_function("state_probe")
     shared = kernel.attributes["shared_size_bytes"]
-    assert shared == (count * 4 * 2 if count <= 6144 else 0)
+    shared_slots = 1 if library._vendor == "hip" else 2
+    assert shared == (count * 4 * shared_slots if count <= 6144 else 0)
     width = 65
     output = torch.full((width * count * 2,), float("nan"), device="cuda")
     library.state_probe(output, threads=width, group_size=(1, 1, 1))
@@ -71,6 +101,29 @@ def test_actual_cuda_side_slots_and_size_fallback(count):
         np.testing.assert_array_equal(
             output.cpu().numpy().reshape(expected.shape), expected
         )
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_fused_replay_initializes_reused_state_after_active_hsl(strategy):
+    torch = pytest.importorskip("torch")
+    if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
+        pytest.skip("GPU required")
+    from test_gpu_hsl_multicoin import make_proxy, raw
+    from test_gpu_side_specialization import equal_outputs
+
+    proxy = make_proxy("coin", strategy, minutes=256, coin_count=2, factual_hsl=True)
+    runner = proxy.fused_runner
+    runner.hsl_disabled_specialization = False
+    runner.max_dispatch_candidate_bars = 64
+    inactive = [{"long_hsl_enabled": 0, "short_hsl_enabled": 0}]
+    _, expected = raw(proxy, inactive)
+    _, _ = raw(proxy, [{}])
+    assert runner._last_temporal_dispatch["dispatch_count"] > 1
+    state, = runner._replay_states.values()
+    state.fill_(0xFF)
+    _, actual = raw(proxy, inactive)
+    assert next(iter(runner._replay_states.values())) is state
+    equal_outputs(expected, actual)
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])

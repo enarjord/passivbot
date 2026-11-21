@@ -1980,6 +1980,8 @@ class _MulticoinReplayRunner:
         state_key = (batch_size, self._replay_state_bytes)
         if state_key not in self._replay_states:
             self._replay_states.clear()
+            # Each kernel initializes replay state on the first chunk. Only
+            # continuation chunks consume retained rows, so reuse needs no clear.
             self._replay_states = {
                 state_key: torch.empty(
                     (batch_size, self._replay_state_bytes),
