@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Recognize reviewed Hyperliquid crypto assets when CCXT returns numeric market
+  IDs. Validate the matching instrument metadata before resolving coin-age
+  evidence, including offline, so positive minimum-age filters can admit them.
+
 - Back off Bitget UTA entry submissions for 60 seconds after an insufficient-margin
   rejection for that symbol and position side, while keeping the bot online to
   manage existing positions. Deferred entries leave create-batch slots available

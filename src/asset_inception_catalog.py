@@ -795,6 +795,22 @@ def resolve_asset_identity(exchange: str, market: Mapping) -> AssetIdentity | No
     native_id = market.get("id")
     if not isinstance(native_id, str):
         return None
+    if exchange == "hyperliquid" and native_id.isascii() and native_id.isdecimal():
+        # CCXT exposes the universe index as id/baseId. Bind its declared name
+        # only when both index fields agree; the exact instrument checks below
+        # still apply before any asset history can be shared.
+        info = market.get("info")
+        if not isinstance(info, Mapping):
+            return None
+        index = info.get("baseId")
+        if (
+            market.get("baseId") != native_id
+            or type(index) not in (str, int)
+            or str(index) != native_id
+            or not isinstance(info.get("name"), str)
+        ):
+            return None
+        native_id = info["name"]
     match = _MARKET_ASSETS.get((exchange, native_id))
     if match is None:
         return None
