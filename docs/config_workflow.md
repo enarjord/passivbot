@@ -41,7 +41,7 @@ passivbot live configs/private/my_config.json
 
 For EMA Anchor, copy
 [`ema_anchor_long.json`](https://github.com/enarjord/passivbot/blob/v9/configs/examples/ema_anchor_long.json) instead.
-It enables longs with two position slots across the same 40-coin universe. Backtests use a
+It enables longs with two position slots and its own 40-coin universe. Backtests use a
 rolling end date. Add `--suite y` to run the base case, three coin subsets, and a higher-cost
 scenario. The example includes EMA Anchor search bounds for the CPU `pymoo` optimizer.
 Set a local account alias in your private copy before using it live.
@@ -83,7 +83,7 @@ The in-code starter and shipped example explicitly enable longs and disable shor
 Trailing Martingale profile is shared through `bot.global` and inherited by each side.
 
 - Each side has 10 slots and a total wallet exposure limit of `1.5`.
-- The 40-coin approval list, forager ranking, and adaptive entry cooldown are shared.
+- The 37-coin approval list, forager ranking, and adaptive entry cooldown are shared.
 - Coin-scope HSL is disabled.
 - Backtesting uses a rolling end date and venue market settings. The five-scenario suite is
   available with `--suite`.

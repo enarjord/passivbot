@@ -54,7 +54,7 @@ class OrchestrationBot(Passivbot):
         self.min_costs = {}
         self.c_mults = {}
         self._last_action_summary = {}
-        self.action_str_max_len = len("posting order")
+        self.action_str_max_len = len("selecting create")
 
     def register_symbol(self, symbol: str) -> None:
         self.active_symbols.append(symbol)
@@ -292,10 +292,10 @@ def test_order_summary_marks_market_execution(caplog):
     )
 
     with caplog.at_level(logging.INFO):
-        bot._log_order_action_summary({"HYPE/USDC:USDC": [order]}, "post")
+        bot._log_order_action_summary({"HYPE/USDC:USDC": [order]}, "create candidate")
 
     assert any(
-        "[order]" in rec.message
+        "[order] create candidate HYPE" in rec.message
         and "close_grid_long" in rec.message
         and "exec=market" in rec.message
         for rec in caplog.records
@@ -320,7 +320,7 @@ def test_market_execution_notice_is_not_suppressed(caplog):
         bot._log_market_execution_notice(order, context="plan_sync")
 
     records = [
-        rec for rec in caplog.records if "MARKET order submission" in rec.message
+        rec for rec in caplog.records if "MARKET create candidate" in rec.message
     ]
     assert len(records) == 2
     assert all("pb_type=close_grid_long" in rec.message for rec in records)

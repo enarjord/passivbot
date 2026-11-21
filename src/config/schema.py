@@ -78,22 +78,22 @@ def _build_template_config():
                     {
                         "label": "subset_1",
                         "coins": [
-                            "AAVE", "APT", "ATOM", "BNB", "CC", "ENA", "GRAM",
-                            "INJ", "LTC", "ONDO", "RENDER", "TAO", "XLM", "ZEC",
+                            "AAVE", "APT", "BNB", "ENA", "ETC", "GRAM",
+                            "INJ", "LTC", "ONDO", "TAO", "XLM", "ZEC",
                         ],
                     },
                     {
                         "label": "subset_2",
                         "coins": [
                             "ADA", "ARB", "AVAX", "BTC", "DOGE", "ETH", "HBAR",
-                            "KAS", "MORPHO", "POL", "SOL", "UNI", "XMR",
+                            "MORPHO", "POL", "SOL", "UNI", "XMR",
                         ],
                     },
                     {
                         "label": "subset_3",
                         "coins": [
-                            "ALGO", "ASTER", "BCH", "BTW", "DOT", "FIL", "HYPE",
-                            "LINK", "NEAR", "QNT", "SUI", "WLD", "XRP",
+                            "ALGO", "ASTER", "BCH", "DOT", "FIL", "HYPE",
+                            "LINK", "NEAR", "QNT", "SUI", "TRX", "WLD", "XRP",
                         ],
                     },
                     {
@@ -341,10 +341,10 @@ def get_starter_config():
     result["bot"]["long"]["enabled"] = True
     result["bot"]["short"]["enabled"] = False
     result["bot"]["global"]["universe"]["approved_coins"] = [
-        "AAVE", "ADA", "ALGO", "APT", "ARB", "ASTER", "ATOM", "AVAX", "BCH", "BNB",
-        "BTC", "BTW", "CC", "DOGE", "DOT", "ENA", "ETH", "FIL", "GRAM", "HBAR",
-        "HYPE", "INJ", "KAS", "LINK", "LTC", "MORPHO", "NEAR", "ONDO", "POL", "QNT",
-        "RENDER", "SOL", "SUI", "TAO", "UNI", "WLD", "XLM", "XMR", "XRP", "ZEC",
+        "AAVE", "ADA", "ALGO", "APT", "ARB", "ASTER", "AVAX", "BCH", "BNB", "BTC",
+        "DOGE", "DOT", "ENA", "ETC", "ETH", "FIL", "GRAM", "HBAR", "HYPE", "INJ",
+        "LINK", "LTC", "MORPHO", "NEAR", "ONDO", "POL", "QNT", "SOL", "SUI", "TAO",
+        "TRX", "UNI", "WLD", "XLM", "XMR", "XRP", "ZEC",
     ]
     result["live"]["account"]["user"] = STARTER_LIVE_USER
     kind = result["bot"]["portfolio"]["strategy_kind"]
