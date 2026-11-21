@@ -5166,7 +5166,7 @@ async def test_execute_orders_parent_records_order_opened_event(monkeypatch):
             return None
 
         def _log_order_action_summary(self, grouped_orders, action):
-            self.submission_summary = (grouped_orders, action)
+            self.candidate_summary = (grouped_orders, action)
 
         def _build_order_params(self, _order):
             return {}
@@ -5175,7 +5175,7 @@ async def test_execute_orders_parent_records_order_opened_event(monkeypatch):
             return None
 
         async def execute_orders(self, orders):
-            assert self.submission_summary[1] == "submit"
+            assert self.candidate_summary[1] == "create candidate"
             assert self._health_orders_placed == 0  # no acknowledgement yet
             context = self._execution_connector_call_context
             assert context["action"] == "create"
