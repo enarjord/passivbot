@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Recognize reviewed Hyperliquid crypto assets when CCXT returns numeric market
+  IDs. Validate the matching instrument metadata before resolving coin-age
+  evidence, including offline, so positive minimum-age filters can admit them.
+
 - Use each suite scenario’s start for trading and scoring when reusing a
   prepared OHLCV dataset.
 
