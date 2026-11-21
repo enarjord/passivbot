@@ -20,7 +20,7 @@ _EXCHANGE_ERROR_LABEL_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}")
 _EXCHANGE_ERROR_SECRET_VALUE_RE = re.compile(r"[A-Za-z0-9+/_=-]{24,}")
 _PUBLIC_WALLET_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
 _EXCHANGE_ERROR_AUTH_HEADER_RE = re.compile(
-    r"\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=].*",
+    r"""\b(?:authorization|proxy-authorization|cookie|set-cookie)['"]?\s*[:=].*""",
     re.IGNORECASE | re.DOTALL,
 )
 _EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
@@ -37,12 +37,13 @@ _EXCHANGE_ERROR_MULTIPLE_WORD_CREDENTIAL_RE = re.compile(
 )
 _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
     r"(?P<label>\b(?:api[-_ ]?(?:key|secret|token|passphrase)|private[-_ ]?key|"
-    r"client[-_ ]?secret|access[-_ ]?token|refresh[-_ ]?token|"
+    r"client[-_ ]?secret|access[-_ ]?(?:key|secret|sign(?:ature)?|token|passphrase)|"
+    r"refresh[-_ ]?token|"
     r"session(?:[-_ ]?(?:id|key|token))?|signing[-_ ]?key|"
     r"secret(?:[-_ ]?key)?|signature|passphrase|password|token|"
     r"listen[-_ ]?key|seed(?:[-_ ]?phrase)?|mnemonic)(?![\w-])"
     r"(?:['\"])?\s*[:=]\s*)"
-    r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|["'][^\r\n]*|[^\s,;|]+)""",
+    r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|["'][\s\S]*|[^\s,;|]+)""",
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE = re.compile(r"\{|\[\s*[\[{\x22\x27]")
