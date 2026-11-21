@@ -24,6 +24,10 @@ since the latest release tag; these features may already be available when insta
   other side's unused forager volatility span no longer count as proxy/exact
   constraint disagreement.
 
+- Apply the same punctuation boundaries to Bearer and Basic authentication values
+  and other credential echoes. Drop diagnostic reasons when a payload delimiter
+  interrupts an unfinished quoted value.
+
 - Prevent credential values starting with punctuation or containing a payload delimiter
   from appearing in live exchange diagnostics.
 
