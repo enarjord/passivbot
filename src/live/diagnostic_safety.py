@@ -23,9 +23,6 @@ _EXCHANGE_ERROR_AUTH_HEADER_RE = re.compile(
     r"""\b(?:authorization|proxy-authorization|cookie|set-cookie)['"]?\s*[:=].*""",
     re.IGNORECASE | re.DOTALL,
 )
-_EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
-    r"\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE
-)
 _EXCHANGE_ERROR_PEM_RE = re.compile(
     r"-----BEGIN [^\r\n]*PRIVATE KEY-----.*?(?:-----END [^\r\n]*PRIVATE KEY-----|\Z)",
     re.IGNORECASE | re.DOTALL,
@@ -42,21 +39,33 @@ _EXCHANGE_ERROR_CREDENTIAL_LABEL = (
 _EXCHANGE_ERROR_CREDENTIAL_VALUE = (
     r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[\s\S]+)"""
 )
+_EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
+    r"\b(?:bearer|basic)\s+(?!(?:authentication|auth|token)\b)"
+    + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
+    re.IGNORECASE,
+)
 _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
     rf"""(?P<label>(?:{_EXCHANGE_ERROR_CREDENTIAL_LABEL}|\b(?:seed|session)(?![\w-]))['"]?\s*[:=]\s*)"""
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
-    rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?P=quote)(?:\s+|(?=['"(\[]))|"""
-    rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=[(\[])))"""
+    rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?P=quote)\s*|"""
+    rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=['"(\[,;])))"""
     # Keep standalone diagnostic wording, including a credential followed by
     # a known status clause. Other trailing text may be a bare credential echo.
-    r"(?![\s.,!?;]|<redacted)"
+    r"(?![\s.!?:=]|<redacted)"
     r"(?!(?:(?:is |was |has )?(?:expired|invalid|missing|rejected|revoked|disabled|"
     r"incorrect|required|not found|not recognized|does not exist)|"
     r"for the configured private key)(?=\s*(?:[.!?](?:\s|$)|$)))"
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
+    re.IGNORECASE,
+)
+_EXCHANGE_ERROR_PREFIXED_CREDENTIAL_ECHO_RE = re.compile(
+    r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*')"""
+    r"\s+(?P<clause>(?:is|was)\s+(?:(?:an?|the)\s+)?"
+    r"(?:invalid|incorrect|expired|revoked)\s+"
+    + _EXCHANGE_ERROR_CREDENTIAL_LABEL + ")",
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE = re.compile(r"\{|\[\s*[\[{\x22\x27]")
@@ -322,6 +331,9 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
         text = _EXCHANGE_ERROR_AUTH_SCHEME_RE.sub("<redacted-auth>", text)
         text = _EXCHANGE_ERROR_PEM_RE.sub("<redacted-key>", text)
         text = _EXCHANGE_ERROR_CREDENTIAL_RE.sub(r"\g<label><redacted>", text)
+        text = _EXCHANGE_ERROR_PREFIXED_CREDENTIAL_ECHO_RE.sub(
+            r"<redacted> \g<clause>", text
+        )
         text = _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE.sub(r"\g<label><redacted>", text)
         text = _EXCHANGE_ERROR_SECRET_VALUE_RE.sub(
             lambda match: (
