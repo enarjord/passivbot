@@ -10,6 +10,10 @@ class FatalBotException(Exception):
     pass
 
 
+class FatalOrderWriteError(FatalBotException):
+    """The process must exit unsuccessfully without an internal restart."""
+
+
 class FillEventDataError(ValueError):
     """Fetched fill values cannot be decoded; unrelated parser bugs are not covered."""
 

@@ -604,6 +604,16 @@ def bounded_exchange_error_context_from_mapping(payload: dict) -> dict[str, str]
     return result
 
 
+def hyperliquid_wallet_rejected(exc: BaseException) -> bool:
+    """Classify only the exact structured response, not generic error labels."""
+    payload = _exception_payload_mapping(exc)
+    return (
+        payload is not None
+        and _hyperliquid_error_details((payload,)).get("error_label")
+        == HYPERLIQUID_UNRECOGNIZED_WALLET
+    )
+
+
 def bounded_exchange_error_context(exc: BaseException) -> dict[str, str]:
     """Extract only bounded, sanitized fields from a structured exchange error."""
     result: dict[str, str] = {}

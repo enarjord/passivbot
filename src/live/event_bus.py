@@ -208,6 +208,7 @@ class EventTypes:
     ORDER_WAVE_STARTED = "order_wave.started"
     ORDER_WAVE_COMPLETED = "order_wave.completed"
     EXECUTION_CREATE_SENT = "execution.create_sent"
+    EXECUTION_CREATE_HEALTH = "execution.create_health"
     EXECUTION_CREATE_CONNECTOR_CALL_STARTED = "execution.create_connector_call_started"
     EXECUTION_CREATE_SUCCEEDED = "execution.create_succeeded"
     EXECUTION_CREATE_FAILED = "execution.create_failed"
@@ -399,6 +400,8 @@ class ReasonCodes:
     STAGED_REFRESH_TIMING = "staged_refresh_timing"
     STATE_CHANGE_DETECTED = "state_change_detected"
     SUBMITTED_TO_EXCHANGE = "submitted_to_exchange"
+    CREATE_FAILURE_STREAK = "create_failure_streak"
+    ORDER_WRITE_SIGNER_REJECTED = "order_write_signer_rejected"
     REALIZED_LOSS_GATE_BLOCKED = "realized_loss_gate_blocked"
     TRAILING_STATUS = "trailing_status"
     UNSTUCK_SELECTION = "unstuck_selection"
@@ -541,6 +544,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.ORDER_WAVE_STARTED,
     EventTypes.ORDER_WAVE_COMPLETED,
     EventTypes.EXECUTION_CREATE_SENT,
+    EventTypes.EXECUTION_CREATE_HEALTH,
     EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED,
     EventTypes.EXECUTION_CREATE_SUCCEEDED,
     EventTypes.EXECUTION_CREATE_FAILED,
@@ -1365,6 +1369,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.ORDER_WAVE_STARTED: EventRoute(console=False),
     EventTypes.ORDER_WAVE_COMPLETED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_SENT: EventRoute(console=False),
+    EventTypes.EXECUTION_CREATE_HEALTH: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED: EventRoute(
         console=False, text=False
     ),
@@ -1515,6 +1520,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.RUST_ORCHESTRATOR_RETURNED: "rust",
     EventTypes.ORDER_WAVE_COMPLETED: "execute",
     EventTypes.EXECUTION_CREATE_SUCCEEDED: "order",
+    EventTypes.EXECUTION_CREATE_HEALTH: "order",
     EventTypes.EXECUTION_CREATE_FAILED: "order",
     EventTypes.EXECUTION_CREATE_REJECTED: "order",
     EventTypes.EXECUTION_CREATE_DEFERRED: "gate",
@@ -2721,6 +2727,15 @@ def _console_open_orders_snapshot_delta_summary(event: LiveEvent) -> list[str]:
 
 
 def _console_data_summary(event: LiveEvent) -> list[str]:
+    if event.event_type == EventTypes.EXECUTION_CREATE_HEALTH:
+        return _console_order_summary(event) + [
+            f"{key}={event.data[key]}"
+            for key in (
+                "action", "next_action", "failed_creates", "unconfirmed_creates",
+                "elapsed_seconds",
+            )
+            if key in event.data
+        ]
     if event.event_type == EventTypes.BOT_STARTUP_TIMING:
         return _console_startup_timing_summary(event)
     if event.event_type == EventTypes.ORDER_WAVE_COMPLETED:

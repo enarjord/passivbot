@@ -370,7 +370,8 @@ record a rejected order and delay new submissions for the same symbol and positi
 side for 60 seconds. Exclude matching entries before create-batch capacity is
 allocated, and recheck the interval at the connector. Retry only from a fresh
 plan after expiry. The interval is local to the current bot instance. Submitted orders still require account
-confirmation. This rejection does not count toward a bot restart. Closes,
+confirmation. This rejection is excluded from the bot-wide restart budget and the sustained
+create-failure guard. Closes,
 cancellations, and other failures retain their ordinary handling.
 
 ### UTA public candle history routing

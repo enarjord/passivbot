@@ -47,6 +47,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `execution.create_connector_call_started`
 - `execution.create_deferred`
 - `execution.create_failed`
+- `execution.create_health`
 - `execution.create_rejected`
 - `execution.create_sent`
 - `execution.create_skipped`
@@ -169,6 +170,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `config_stock_perp_unavailable_market`
 - `config_stock_perp_wrong_exchange`
 - `connector_call_started`
+- `create_failure_streak`
 - `current_balance_unavailable`
 - `ema_fallback_used`
 - `entry_cooldown_position_delta`
@@ -215,6 +217,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `order_churn_allowance_exhausted`
 - `order_churn_history`
 - `order_churn_market_data_unavailable`
+- `order_write_signer_rejected`
 - `ordinary_create_wave_stopped`
 - `pending_exchange_config`
 - `periodic_health_summary`

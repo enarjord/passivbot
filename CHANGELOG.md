@@ -39,6 +39,11 @@ its own version heading. See [release status](docs/releases.md).
   unrecognized API wallet. Preserve useful rejection wording and redact authentication
   values and embedded request payloads.
 
+- Stop the live process after sustained order creation failure. Five or more failed creates
+  with a failed attempt at least one hour into the streak trigger a nonzero exit, with bounded
+  confirmation for ambiguous results. A confirmed Hyperliquid API-wallet rejection stops
+  immediately with an actionable event.
+
 - Use each suite scenario’s start for trading and scoring when reusing a
   prepared OHLCV dataset.
 
