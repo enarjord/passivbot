@@ -180,3 +180,79 @@ async def test_live_create_counts_admitted_connector_outcome(monkeypatch, guard_
         )
     assert guard.failures == 1
     assert not guard.in_flight
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("snapshot_symbol", [SYMBOL, "ETH/USDC:USDC"])
+async def test_open_order_snapshot_confirms_only_matching_submitted_order(
+    guard_setup, snapshot_symbol
+):
+    from unittest.mock import AsyncMock
+
+    from passivbot import Passivbot
+
+    guard, bot, _, _ = guard_setup
+    bot._create_failure_guard = guard
+    bot._record_authoritative_surface = lambda *_: None
+    bot._open_orders_signature = lambda orders: ()
+    bot.order_matches_recent_execution = lambda order: True
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._detect_foreign_passivbot_orders = AsyncMock()
+    attempt(guard, bot, "submitted-id", error=RequestTimeout())
+
+    assert await Passivbot._apply_open_orders_snapshot(
+        bot,
+        [{"id": "resting", "symbol": snapshot_symbol, "clientOrderId": "submitted-id"}],
+        reconcile_balance=False,
+    )
+
+    assert guard.failures == (0 if snapshot_symbol == SYMBOL else 1)
+
+
+@pytest.mark.asyncio
+async def test_signer_rejection_stops_before_the_hourly_restart_budget(guard_setup):
+    from unittest.mock import AsyncMock
+
+    from passivbot import Passivbot
+
+    guard, bot, _, events = guard_setup
+    bot._create_failure_guard = guard
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    address = "0x" + "a" * 40
+    rejection = InvalidOrder("hyperliquid " + json.dumps({
+        "status": "err",
+        "response": f"User or API Wallet {address} does not exist.",
+    }))
+
+    with pytest.raises(FatalOrderWriteError):
+        await Passivbot._handle_order_write_failures(
+            bot, [("cancel", {"symbol": SYMBOL}, rejection)]
+        )
+
+    bot.restart_bot_on_too_many_errors.assert_not_awaited()
+    event, = events
+    assert event.reason_code == ReasonCodes.ORDER_WRITE_SIGNER_REJECTED
+    assert address not in format_console_event(event)
+
+
+@pytest.mark.asyncio
+async def test_live_loop_stops_after_confirmation_grace_without_another_write(guard_setup):
+    from unittest.mock import AsyncMock
+
+    from live.hsl_live import Owner
+
+    guard, bot, clock, events = guard_setup
+    bot._create_failure_guard = guard
+    for index in range(4):
+        attempt(guard, bot, str(index), error=RequestTimeout())
+    clock[0] = 3600
+    attempt(guard, bot, "deadline", error=RequestTimeout())
+    clock[0] = 3660
+
+    owner = Owner(bot)
+    owner.cycle = AsyncMock(return_value={"updated": False})
+    with pytest.raises(FatalOrderWriteError):
+        await owner.run()
+
+    owner.cycle.assert_awaited_once()
+    assert events[-1].status == "failed"
