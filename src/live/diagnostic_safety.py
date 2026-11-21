@@ -20,7 +20,7 @@ _EXCHANGE_ERROR_LABEL_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,79}")
 _EXCHANGE_ERROR_SECRET_VALUE_RE = re.compile(r"[A-Za-z0-9+/_=-]{24,}")
 _PUBLIC_WALLET_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]{40}")
 _EXCHANGE_ERROR_AUTH_HEADER_RE = re.compile(
-    r"""\b(?:authorization|proxy-authorization|cookie|set-cookie)['"]?\s*[:=].*""",
+    r"""(?<![a-z0-9])(?:[a-z0-9]+[-_]+)*(?:authorization|cookie)['"]?\s*[:=].*""",
     re.IGNORECASE | re.DOTALL,
 )
 _EXCHANGE_ERROR_PEM_RE = re.compile(
@@ -28,7 +28,8 @@ _EXCHANGE_ERROR_PEM_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _EXCHANGE_ERROR_CREDENTIAL_LABEL = (
-    r"\b(?:api[-_ ]?(?:key|secret|token|passphrase)|private[-_ ]?key|"
+    r"(?<![a-z0-9])(?:[a-z0-9]+[-_]+)*"
+    r"(?:api[-_ ]?(?:key|secret|token|passphrase)|private[-_ ]?key|"
     r"client[-_ ]?secret|access[-_ ]?(?:key|secret|sign(?:ature)?|token|passphrase)|"
     r"refresh[-_ ]?token|session[-_ ]?(?:id|key|token)|signing[-_ ]?key|"
     r"secret(?:[-_ ]?key)?|signature|passphrase|password|token|"
@@ -39,13 +40,21 @@ _EXCHANGE_ERROR_CREDENTIAL_LABEL = (
 _EXCHANGE_ERROR_CREDENTIAL_VALUE = (
     r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|[\s\S]+)"""
 )
+_SAFE_CREDENTIAL_STATUS = (
+    r"(?!(?:(?:is |was |has )?(?:expired|invalid|missing|rejected|revoked|disabled|"
+    r"incorrect|required|not found|not recognized|does not exist)|"
+    r"for the configured private key)(?=\s*(?:[.!?](?:\s|$)|$)))"
+)
 _EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
-    r"\b(?:bearer|basic)\s+(?!(?:authentication|auth|token)\b)"
+    r"\b(?:bearer|basic)(?>\s+(?:authentication|auth|token)\b|)"
+    r"\s+(?![\s.!?,;:=])"
+    + _SAFE_CREDENTIAL_STATUS
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
-    rf"""(?P<label>(?:{_EXCHANGE_ERROR_CREDENTIAL_LABEL}|\b(?:seed|session)(?![\w-]))['"]?\s*[:=]\s*)"""
+    rf"""(?P<label>(?:{_EXCHANGE_ERROR_CREDENTIAL_LABEL}|\b(?:seed|session)(?![\w-])|"""
+    r"""\b(?:basic|bearer)(?:[-_ ]+(?:auth(?:entication)?|token))?)['"]?\s*[:=]\s*)"""
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
 )
@@ -55,9 +64,7 @@ _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
     # Keep standalone diagnostic wording, including a credential followed by
     # a known status clause. Other trailing text may be a bare credential echo.
     r"(?![\s.!?:=]|<redacted)"
-    r"(?!(?:(?:is |was |has )?(?:expired|invalid|missing|rejected|revoked|disabled|"
-    r"incorrect|required|not found|not recognized|does not exist)|"
-    r"for the configured private key)(?=\s*(?:[.!?](?:\s|$)|$)))"
+    + _SAFE_CREDENTIAL_STATUS
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
 )
