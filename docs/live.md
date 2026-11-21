@@ -61,6 +61,8 @@ If you see this stop condition, first check for:
 
 The bot exits with status 1 after sustained create failures or an explicit Hyperliquid
 API-wallet rejection. See the `execution.create_health` event for the stop reason.
+Bitget UTA insufficient-margin entry rejections use a 60-second backoff per symbol and
+position side and are excluded from the failure streak.
 A supervisor configured to restart on failure can still launch another process. Configure
 a restart delay and a retry limit so a persistent authorization failure does not cause
 an endless restart loop.

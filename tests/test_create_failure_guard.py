@@ -141,13 +141,16 @@ def test_emitter_failure_cannot_prevent_stop(guard_setup, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_live_create_counts_admitted_connector_outcome(monkeypatch, guard_setup):
+@pytest.mark.parametrize("serial_wave", [False, True], ids=["single", "serial-wave"])
+async def test_live_create_counts_admitted_connector_outcome(monkeypatch, guard_setup, serial_wave):
     import asyncio
+    from functools import partial
+    from unittest.mock import AsyncMock
 
     from live import hsl_live, executor
     from passivbot import Passivbot
 
-    guard, bot, _, _ = guard_setup
+    guard, bot, clock, events = guard_setup
     bot._create_failure_guard = guard
     bot._build_order_params = lambda order: {}
     bot._request_authoritative_confirmation = lambda surfaces: None
@@ -165,20 +168,46 @@ async def test_live_create_counts_admitted_connector_outcome(monkeypatch, guard_
         ),
     )
 
+    requests = []
+
     class OfflineConnector:
         async def create_order(self, **kwargs):
             return await self.fetch("offline", method="POST")
 
         async def fetch(self, url, method):
+            requests.append((url, method))
             raise InvalidOrder("synthetic rejection")
 
     bot.cca = OfflineConnector()
-    with pytest.raises(InvalidOrder):
-        await Passivbot.execute_order(
-            bot, {"symbol": SYMBOL, "position_side": "long", "side": "buy",
-                  "price": 1, "qty": 1, "custom_id": "submitted"},
+    order = {"symbol": SYMBOL, "position_side": "long", "side": "buy",
+             "price": 1, "qty": 1, "custom_id": "submitted"}
+    bot.execute_order = partial(Passivbot.execute_order, bot)
+    if serial_wave:
+        for index in range(4):
+            attempt(guard, bot, str(index), error=InvalidOrder())
+        clock[0] = 3600
+        wave = SimpleNamespace(
+            submitted=[], confirmations=set(), continuing=False,
+            permits=lambda *args: True,
         )
-    assert guard.failures == 1
+        wave.record_submission = wave.submitted.append
+        bot._hsl_live = SimpleNamespace(_ordinary_create_wave=wave)
+        bot._activate_exchange_symbol_unavailable_cooldown = lambda *args: None
+        bot._log_order_write_failure = lambda **kwargs: None
+        bot.restart_bot_on_too_many_errors = AsyncMock()
+        bot._handle_order_write_failures = partial(Passivbot._handle_order_write_failures, bot)
+        sibling = dict(order, custom_id="sibling")
+        with pytest.raises(FatalOrderWriteError):
+            await executor._execute_ordinary_creates_serially(bot, [order, sibling], wave)
+        assert wave.submitted == [order]
+        assert guard.failures == 5
+        assert events[-1].status == "failed"
+        bot.restart_bot_on_too_many_errors.assert_not_awaited()
+    else:
+        with pytest.raises(InvalidOrder):
+            await bot.execute_order(order)
+        assert guard.failures == 1
+    assert requests == [("offline", "POST")]
     assert not guard.in_flight
 
 

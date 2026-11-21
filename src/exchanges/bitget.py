@@ -91,27 +91,30 @@ class BitgetBot(CCXTBot):
 
     async def execute_order(self, order: dict) -> dict | DeferredOrderCreation:
         scope = self._entry_margin_retry_scope(order)
-        if scope is None:
-            return await super().execute_order(order)
-        if deferred := self._entry_margin_deferral(scope):
-            return deferred
-        self._entry_margin_retry_after.pop(scope, None)
+        if scope is not None:
+            if deferred := self._entry_margin_deferral(scope):
+                return deferred
+            self._entry_margin_retry_after.pop(scope, None)
+        return await super().execute_order(order)
 
-        try:
-            return await super().execute_order(order)
-        except ExchangeError as exc:
-            error = bounded_exchange_error_context(exc)
-            if error.get("error_code") != _UTA_INSUFFICIENT_MARGIN_CODE:
-                raise
-            # The guarded submission has already requested fresh account facts.
-            # Normalize the definitive rejection so it neither becomes an
-            # ambiguous create nor consumes the bot-wide error budget.
-            self._entry_margin_retry_after[scope] = monotonic() + _ENTRY_MARGIN_RETRY_SECONDS
-            return {
-                "status": "rejected",
-                "info": {"code": _UTA_INSUFFICIENT_MARGIN_CODE, "msg": "Insufficient margin"},
-                "_retry_delay_seconds": _ENTRY_MARGIN_RETRY_SECONDS,
-            }
+    def _normalize_scoped_create_rejection(
+        self, order: dict, error: Exception
+    ) -> dict | None:
+        """Handle a definitive UTA entry rejection before bot-wide accounting."""
+        if not isinstance(error, ExchangeError):
+            return None
+        scope = self._entry_margin_retry_scope(order)
+        if scope is None:
+            return None
+        error_code = bounded_exchange_error_context(error).get("error_code")
+        if error_code != _UTA_INSUFFICIENT_MARGIN_CODE:
+            return None
+        self._entry_margin_retry_after[scope] = monotonic() + _ENTRY_MARGIN_RETRY_SECONDS
+        return {
+            "status": "rejected",
+            "info": {"code": _UTA_INSUFFICIENT_MARGIN_CODE, "msg": "Insufficient margin"},
+            "_retry_delay_seconds": _ENTRY_MARGIN_RETRY_SECONDS,
+        }
 
     def create_ccxt_sessions(self):
         """Bitget: set Passivbot channel code for broker rebate attribution."""

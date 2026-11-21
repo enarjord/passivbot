@@ -213,6 +213,7 @@ failed-batch restart counter and event delivery. An acknowledged create or an au
 open order/fill matching the exact submitted symbol and client ID clears the failure streak.
 Internal replacements of the bot preserve the streak for the current process. Cancellation
 and read outcomes do not advance or clear it. Skipped and never-submitted orders are excluded.
+Bitget UTA entry code 25203 is handled by its scoped margin backoff and is excluded from the streak.
 
 A failed create at least 60 minutes after the first failure is fatal if five or more creates
 have failed in the streak. An inconclusive transport result or missing acknowledgement can

@@ -20104,6 +20104,11 @@ class Passivbot:
         try:
             executed = await self.cca.create_order(**params)
         except Exception as exc:
+            normalize_rejection = getattr(self, "_normalize_scoped_create_rejection", None)
+            if normalize_rejection is not None:
+                rejection = normalize_rejection(order, exc)
+                if rejection is not None:
+                    return rejection
             if guard is not None:
                 guard.completed(self, order, error=exc)
             raise

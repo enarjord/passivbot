@@ -12,6 +12,7 @@ import pytest
 from config.schema import get_expanded_config_prototype
 from exchanges import bitget
 from live import executor
+from live.create_failure_guard import CreateFailureGuard
 from live.event_bus import (
     ConsoleSummarySink,
     EventTypes,
@@ -50,7 +51,11 @@ def connector(monkeypatch):
     bot._request_authoritative_confirmation = confirmations.append
     bot._handle_order_write_failures = charge_budget
     bot._emit_execution_connector_call_started_event = lambda **kwargs: None
-    monkeypatch.setattr(executor, "record_create_connector_admission", lambda *args: None)
+    bot._create_failure_guard = CreateFailureGuard(lambda: clock[0])
+    monkeypatch.setattr(
+        executor, "record_create_connector_admission",
+        lambda bot, order: bot._create_failure_guard.submitted(order),
+    )
     monkeypatch.setattr(bitget, "monotonic", lambda: clock[0])
     order = {
         "symbol": "TEST/USDT:USDT", "type": "limit", "side": "buy",
@@ -93,6 +98,25 @@ async def test_uta_entry_margin_rejection_uses_scope_local_pre_transport_retry(c
     assert (await c.bot.execute_orders([c.order]))[0]["id"] == "accepted"
     assert c.bot._entry_margin_retry_after == {}
     assert len(c.calls) == len(c.confirmations) == 5
+
+
+@pytest.mark.asyncio
+async def test_uta_scoped_margin_rejections_neither_advance_nor_clear_create_streak(connector):
+    c = connector
+    guard = c.bot._create_failure_guard
+    guard.submitted(c.order)
+    guard.completed(c.bot, c.order, error=ccxt.InvalidOrder("unrelated reject"))
+
+    for _ in range(62):
+        rejected, = await c.bot.execute_orders([c.order])
+        assert rejected["status"] == "rejected"
+        guard.check(c.bot)
+        c.clock[0] += 60.0
+
+    assert len(c.calls) == len(c.confirmations) == 62
+    assert not c.budget and not guard.in_flight
+    assert guard.failures == 1
+    assert guard.unconfirmed == 0
 
 
 @pytest.mark.parametrize("console_enabled", [True, False])
@@ -239,5 +263,7 @@ async def test_other_failures_retain_existing_order_write_error_budget(
     out, = await c.bot.execute_orders([order])
     assert isinstance(out, ccxt.ExchangeError)
     assert c.budget == [("create", order, out)]
+    assert c.bot._create_failure_guard.failures == 1
+    assert not c.bot._create_failure_guard.in_flight
     assert c.bot._entry_margin_retry_after == {}
     assert c.confirmations == [{"balance", "positions", "open_orders"}]
