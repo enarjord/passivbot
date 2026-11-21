@@ -10,6 +10,13 @@ its own version heading. See [release status](docs/releases.md).
   manage existing positions. Structured execution events report the retry
   interval and the time remaining on skipped submissions.
 
+- Use each suite scenario’s start for trading and scoring when reusing a
+  prepared OHLCV dataset.
+
+- Keep live forager RMS ranking available from complete local candles or a
+  recent valid score when remote candle work times out. Repair missing RMS
+  candle history in the background even when the latest candle is fresh.
+
 - Let explicitly selected OHLCV directories define each coin's simulation window.
   Warn and record the requested and available starts when history begins late.
   BTC benchmarks still require coverage across the full prepared range.
@@ -27,7 +34,8 @@ its own version heading. See [release status](docs/releases.md).
   initial data is being sent reach the connected client.
 
 - Retry unfinished monitor event and history rows after an append completes,
-  preserving split UTF-8 characters and live relay offsets.
+  preserving split UTF-8 characters and live relay offsets. Preserve row boundaries
+  during relay startup and reset the read offset when current files rotate.
 
 - Select backtest plots with `--plots` and cap the optimizer seed shortlist with
   `--compress-starting-configs`. Remove the duplicate flags.
@@ -81,6 +89,10 @@ its own version heading. See [release status](docs/releases.md).
 
 - Record ordinary close replacement timing in structured live events, from cancel
   acknowledgment through account confirmation, replanning, and create submission.
+
+- Distinguish confirmed full close coverage from partial and unconfirmed
+  coverage in close replacement diagnostics. Keep recording account
+  observations after a replacement is submitted.
 
 - Recover Binance USDⓈ-M trailing resets from a complete trade query at the exact
   position update millisecond when cached replay retains stale position residue.
@@ -222,6 +234,9 @@ its own version heading. See [release status](docs/releases.md).
 - Skip an unused gap scan when preparing provisional candle continuity.
 
 - Summarize sustained ordinary planning delays and their recovery in the live console.
+
+- Let ordinary live planning briefly join an in-flight required fill
+  confirmation before deferring for missing fills.
 
 - Skip formatting and caller lookup for suppressed candle logs.
 

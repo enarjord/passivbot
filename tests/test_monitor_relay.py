@@ -385,6 +385,60 @@ def test_monitor_relay_resets_unfinished_row_after_file_replacement(tmp_path, re
     assert relay._read_updates(path) == []
 
 
+@pytest.mark.parametrize("stream", ["events", "history"])
+@pytest.mark.parametrize("complete", [False, True])
+def test_monitor_relay_primes_at_start_of_unfinished_row(tmp_path, stream, complete, caplog):
+    monitor_root = _make_monitor_root(tmp_path)
+    relay = create_monitor_relay_app(monitor_root=str(monitor_root))[RELAY_APP_KEY]
+    filename = "current.ndjson" if stream == "events" else "price_ticks.current.ndjson"
+    path = monitor_root / "bybit" / "user01" / stream / filename
+    first = b'{"ts":1}\n'
+    second = b'{"ts":2,"payload":{"label":"' + b"a" * (80 * 1024) + b'"}}'
+    split = len(second) if complete else len(second) - 3
+    path.write_bytes(first + second[:split])
+
+    relay._prime_offsets()
+    assert relay._path_states[path].offset == (len(first) + len(second) if complete else len(first))
+    assert relay._read_updates(path) == []
+
+    with path.open("ab") as file:
+        file.write(second[split:] + b'\n{"ts":3}\n')
+
+    expected = [3] if complete else [2, 3]
+    assert [message["ts"] for message in relay._read_updates(path)] == expected
+    assert relay._read_updates(path) == []
+    assert not caplog.records
+
+
+def test_monitor_relay_reads_rotation_from_new_file_start(tmp_path, monkeypatch, caplog):
+    monitor_root = _make_monitor_root(tmp_path)
+    relay = create_monitor_relay_app(monitor_root=str(monitor_root))[RELAY_APP_KEY]
+    relay._initial_prime_completed = True
+    path = monitor_root / "bybit" / "user01" / "events" / "current.ndjson"
+    path.write_bytes(b'{"seq":1}\n')
+    assert [message["seq"] for message in relay._read_updates(path)] == [1]
+
+    # Make the prior inode appear to have pending rows. Rotate it at the
+    # same point the relay opens the stream after checking for updates.
+    with path.open("ab") as file:
+        file.write(b'{"seq":2}\n')
+    replacement = path.with_name("replacement")
+    replacement.write_bytes(b'{"seq":3,"payload":{"label":"new inode"}}\n{"seq":4}\n')
+    original_open = open
+
+    def open_after_rotation(candidate, *args, **kwargs):
+        if candidate == path and replacement.exists():
+            path.rename(path.with_name("rotated.ndjson"))
+            replacement.rename(path)
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", open_after_rotation)
+
+    assert [message["seq"] for message in relay._read_updates(path)] == [3, 4]
+    assert relay._read_updates(path) == []
+    assert not caplog.records
+
+
 @pytest.mark.asyncio
 async def test_monitor_relay_websocket_sends_snapshot_then_live_updates(tmp_path, monkeypatch):
     monitor_root = _make_monitor_root(tmp_path)

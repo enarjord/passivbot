@@ -3223,6 +3223,47 @@ def test_completed_candle_health_excludes_current_minute_and_reports_gaps(tmp_pa
     assert one_m["loaded_rows"] == 2
 
 
+def test_completed_candle_health_keeps_disk_window_out_of_runtime_cache(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    symbol = "HEALTH/USDT:USDT"
+    now_ms = 1725590400000
+    candle_count = 200
+    start_ts = now_ms - candle_count * ONE_MIN_MS
+    rows = np.array(
+        [(ts, 10, 10, 10, 10, 1) for ts in range(start_ts, now_ms, ONE_MIN_MS)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(symbol, rows, timeframe="1m")
+    # Simulate the hot cache retaining only the most recent candles.
+    tail = rows[-2:].copy()
+    cm._cache[symbol] = tail
+
+    report = cm.get_completed_candle_health(symbol, {"1m": candle_count}, now_ms=now_ms)
+
+    assert report["ok"]
+    assert report["timeframes"]["1m"]["disk_loaded_rows"] == candle_count
+    assert report["timeframes"]["1m"]["runtime_loaded_rows"] == len(tail)
+    assert cm._cache[symbol] is tail
+
+
+def test_completed_candle_health_finds_predecessor_in_detached_disk_shard(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path))
+    symbol = "HEALTH/USDT:USDT"
+    now_ms = 1725591000000
+    prior_ts = now_ms - 2 * ONE_MIN_MS
+    rows = np.array(
+        [(ts, 10, 10, 10, 10, 1) for ts in (prior_ts, now_ms)], dtype=CANDLE_DTYPE
+    )
+    cm._persist_batch(symbol, rows, timeframe="1m", last_refresh_ms=now_ms)
+    cm._cache.pop(symbol)
+
+    report = cm.get_completed_candle_health(symbol, {"1m": 1}, now_ms=now_ms)["timeframes"]["1m"]
+
+    assert report["last_cached_ts"] == prior_ts
+    assert report["tail_gap_age_ms"] == ONE_MIN_MS
+    assert symbol not in cm._cache
+
+
 def test_completed_candle_health_reports_open_tail_gap(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "TAILHEALTH/USDT:USDT"

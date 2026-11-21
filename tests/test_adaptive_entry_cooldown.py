@@ -1723,3 +1723,63 @@ async def test_live_rms_uses_latest_complete_pre_gap_window(long_span, age_minut
         bot.cm._ema_cache.clear()
         assert await load(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000}) == (result, rank, missing)
         assert calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("local_case", ["complete", "partial", "corrected", "expired"])
+async def test_live_rms_remote_timeout_uses_local_history_after_promotion(local_case):
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager
+    from live.rms_directionality import load
+
+    minute = 60_000
+    rows = np.zeros(22, dtype=CANDLE_DTYPE)
+    rows["ts"] = np.arange(22) * minute
+    rows["c"] = np.exp(np.arange(22) * 0.001)
+    now = 21 * minute
+    calls = []
+    promoted = False
+
+    async def candles(symbol, *, allow_remote_fetch, **kwargs):
+        calls.append(allow_remote_fetch)
+        if allow_remote_fetch:
+            if local_case == "corrected":
+                CandlestickManager._invalidate_ema_cache(cm, symbol, timeframe="1m")
+            raise TimeoutError("live candle acquisition budget expired")
+        if not promoted:
+            return rows[:-1].copy()
+        return rows.copy() if local_case == "complete" else rows[-1:].copy()
+
+    cm = SimpleNamespace(get_candles=candles, _ema_cache={}, _ema_inputs={})
+    bot = SimpleNamespace(
+        cm=cm,
+        get_exchange_time=lambda: now,
+        is_pside_enabled=lambda side: side == "long",
+        is_forager_mode=lambda side: True,
+        is_approved=lambda side, symbol: True,
+        bot_value=lambda side, key: (
+            {"rms_directionality": 1.0} if key == "forager_score_weights" else 1.0
+        ),
+        bp=lambda side, key, symbol: {
+            "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+            "risk_entry_cooldown_minutes": 0.0,
+            "entry_cooldown_min_duration_minutes": 0.0,
+            "entry_cooldown_max_duration_minutes": 60.0,
+        }[key],
+    )
+    initial, _, _ = await load(bot, ["APT"], {"APT"}, {"APT": minute})
+    promoted = True
+    now += 2 * minute if local_case == "expired" else minute
+    current, ranking, missing = await load(bot, ["APT"], set(), {"APT": minute})
+
+    assert calls == [False, True, False]
+    if local_case == "complete":
+        assert current == ranking
+        assert current["APT"][1.0] > 0.99
+        assert not missing
+    else:
+        assert current == {"APT": {}}
+        assert ranking == (initial if local_case == "partial" else {"APT": {}})
+        assert missing["APT"] == {
+            "current": [1.0],
+            "forager": [] if local_case == "partial" else [1.0],
+        }

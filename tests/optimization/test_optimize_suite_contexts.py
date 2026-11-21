@@ -133,6 +133,67 @@ def _make_lazy_dataset(
 
 
 @pytest.mark.asyncio
+async def test_lazy_suite_uses_scenario_start_with_master_override(monkeypatch):
+    from backtest import build_backtest_payload, execute_backtest
+
+    _stub_market_identity_validation(monkeypatch)
+    config = get_expanded_config_prototype()
+    config["bot"]["portfolio"]["warmup"].update(activation_span_fraction=0.0, max_minutes=10)
+    config["bot"]["long"]["enabled"] = True
+    config["backtest"].update(
+        start_date="2024-01-01",
+        end_date="2024-01-02",
+        exchanges=["binance"],
+        suite_enabled=True,
+        scenarios=[{"label": "later", "start_date": "2024-01-01T03:00:00",
+                    "end_date": "2024-01-02"}],
+    )
+    set_side_universe_sources(config, "approved_coins", {"long": ["HYPE"], "short": ["HYPE"]})
+    set_side_universe_sources(config, "ignored_coins", {"long": [], "short": []})
+    dataset = _make_lazy_dataset(
+        coin_exchange={"HYPE": "binance"}, available_exchanges=["binance"]
+    )
+    dataset.mss["HYPE"].update(
+        qty_step=0.001, price_step=0.01, min_qty=0.001, min_cost=1.0,
+        c_mult=1.0, maker=0.0, taker=0.0,
+    )
+    master_start = int(dataset.timestamps[0])
+    scenario_start = int(dataset.timestamps[180])
+    scenario_end = int(dataset.timestamps[-1])
+    dataset.mss["__meta__"]["effective_requested_start_ts"] = master_start
+    # Keep a usable candle prefix before the requested start.
+    monkeypatch.setattr("suite_runner.compute_backtest_warmup_minutes", lambda _: 10)
+
+    async def offline(*_args, **_kwargs):
+        return None
+
+    async def prepared(*_args, **_kwargs):
+        return {"combined": dataset}
+
+    monkeypatch.setattr(optimize_suite, "load_markets", offline)
+    monkeypatch.setattr(optimize_suite, "format_approved_ignored_coins", offline)
+    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", prepared)
+    contexts, _ = await optimize_suite.prepare_suite_contexts(
+        config, optimize_suite.extract_suite_config(config, None),
+        shared_array_manager=_NoSharedArrayManager(),
+    )
+    context, = contexts
+    start, end = context.time_slice["combined"]
+    assert int(dataset.timestamps[start]) < scenario_start
+    payload = build_backtest_payload(
+        dataset.hlcvs[start:end], context.msss["combined"], context.config, "combined",
+        dataset.btc_usd_prices[start:end], context.timestamps["combined"], metrics_only=True,
+        metric_requests=["backtest_completion_fraction"],
+    )
+    assert payload.backtest_params["requested_start_timestamp_ms"] == scenario_start
+    _, _, analysis = execute_backtest(payload, context.config)
+    assert analysis["metric_metadata"]["start_timestamp_ms"] == scenario_start
+    assert analysis["metric_metadata"]["actual_end_timestamp_ms"] == scenario_end
+    assert analysis["backtest_completion_fraction"] == 1.0
+    assert dataset.mss["__meta__"]["effective_requested_start_ts"] == master_start
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("rms_search", [False, True])
 @pytest.mark.parametrize("interval", [1, 5])
 async def test_prepare_suite_contexts_keeps_directional_scenarios_with_reachable_sides(

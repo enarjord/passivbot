@@ -7671,6 +7671,7 @@ class Passivbot:
                     "refreshable_missing_candles": int(
                         report.get("refreshable_missing_candles", missing_candles) or 0
                     ),
+                    "refreshable_missing_spans": report.get("refreshable_missing_spans", []),
                     "tail_gap_candles": tail_gap_candles,
                     "tail_only": bool(report.get("open_tail_gap"))
                     and missing_candles > 0
@@ -18756,9 +18757,6 @@ class Passivbot:
             if set(symbols) - urgent
         }
         candidates = sorted(set().union(*refreshable_by_side.values()))
-        if not candidates:
-            return
-
         cycle_cap = (
             max(1, int(math.ceil(float(max_calls) / 4.0))) if max_calls > 0 else 0
         )
@@ -18847,10 +18845,31 @@ class Passivbot:
             h1_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
             if h1_hours > 0 and sym in required_h1_symbols:
                 surface_specs.append(("1h", sym, h1_hours))
-        required_surface_count = len(surface_specs)
-        target_age_ms = self._forager_target_staleness_ms(
-            required_surface_count, max_calls
+        # Planning derives its age limit from the fresh candle surfaces.
+        # Historical repair shares the fetch budget without delaying tail refreshes.
+        target_age_ms = self._forager_target_staleness_ms(len(surface_specs), max_calls)
+
+        from live.rms_directionality import RMS_CACHE_KIND, history_candle_count
+
+        # An RMS window can be much deeper than the ordinary EMA/WS tail.
+        # Give its historical repair the same budget and fairness as other
+        # surfaces, including for coins just promoted out of the WS universe.
+        rms_spans: dict[str, float] = {}
+        for side, symbols in candidates_by_side.items():
+            weight = get_optional_config_value(
+                self.config, f"bot.{side}.forager.score_weights.rms_directionality"
+            )
+            if not weight:
+                continue
+            span = float(self.bot_value(side, "rms_directionality_ema_span_minutes"))
+            for symbol in symbols:
+                rms_spans[symbol] = max(rms_spans.get(symbol, span), span)
+        surface_specs.extend(
+            ("rms", symbol, history_candle_count(span)) for symbol, span in rms_spans.items()
         )
+        if not surface_specs:
+            return
+        required_surface_count = len(surface_specs)
         eligible_surface_keys = {
             (sym, timeframe) for timeframe, sym, _ in surface_specs
         }
@@ -18887,6 +18906,10 @@ class Passivbot:
         stale: List[
             Tuple[Tuple[int, int, int, int, str], str, str, int, Dict[str, Any]]
         ] = []
+        # A verified score for the newest historical minute already proves a
+        # dense window for its span. Avoid reloading that window for the scan.
+        latest_history = (now // ONE_MIN_MS - 2) * ONE_MIN_MS
+        candle_ema_cache = getattr(self.cm, "_ema_cache", {})
         for scan_idx, (timeframe, sym, required_candles) in enumerate(
             surface_specs[:health_scan_budget]
         ):
@@ -18901,14 +18924,34 @@ class Passivbot:
             if retry_after_ms > now:
                 surface_checks[surface_key] = int(utc_ms())
                 continue
+            if timeframe == "rms":
+                memo = candle_ema_cache.get(sym, {}).get((RMS_CACHE_KIND, rms_spans[sym], "60000"))
+                if memo is not None and latest_history <= memo[1] <= latest_history + ONE_MIN_MS:
+                    surface_checks[surface_key] = int(utc_ms())
+                    continue
             surface_health = Passivbot._candidate_candle_surface_health(
                 self,
                 sym,
-                timeframe,
+                "1m" if timeframe == "rms" else timeframe,
                 required_candles,
                 now_ms=now,
             )
             checked_ms = int(utc_ms())
+            if timeframe == "rms":
+                # Leave the just-completed minute to the regular 1m refresh.
+                # Work toward a dense suffix, one bounded range at a time.
+                for gap_start, gap_end in reversed(surface_health.get("refreshable_missing_spans", [])):
+                    page_end = min(gap_end, latest_history)
+                    if gap_start <= page_end:
+                        page_start = max(gap_start, page_end - 99 * ONE_MIN_MS)
+                        priority = (
+                            int(surface_attempts.get(surface_key, 0)), 1, 2, 0, f"{sym}:rms"
+                        )
+                        surface_health["repair_page"] = (page_start, page_end)
+                        stale.append((priority, sym, timeframe, required_candles, surface_health))
+                        break
+                surface_checks[surface_key] = checked_ms
+                continue
             age_ms = int(surface_health.get("age_ms", 0) or 0)
             no_basis = bool(surface_health.get("no_basis"))
             tail_only = bool(surface_health.get("tail_only")) and not no_basis
@@ -19060,9 +19103,12 @@ class Passivbot:
             if attempt_budget <= 0:
                 break
             try:
-                period_ms = ONE_MIN_MS if timeframe == "1m" else 60 * ONE_MIN_MS
-                end_ts = int(end_ts_by_timeframe[timeframe])
+                period_ms = ONE_MIN_MS if timeframe != "1h" else 60 * ONE_MIN_MS
+                candle_timeframe = "1m" if timeframe == "rms" else timeframe
+                end_ts = int(end_ts_by_timeframe[candle_timeframe])
                 start_ts = end_ts - period_ms * max(1, int(required_candles))
+                if timeframe == "rms":
+                    start_ts, end_ts = pre_health["repair_page"]
                 surface_checks[(sym, timeframe)] = int(utc_ms())
                 self._forager_surface_check_ms = surface_checks
                 surface_attempts[(sym, timeframe)] = int(utc_ms())
@@ -19081,6 +19127,11 @@ class Passivbot:
                         sym,
                         through_ts=end_ts,
                         force_overlap=True,
+                    )
+                elif timeframe == "rms":
+                    candle_task = self.cm.get_candles(
+                        sym, start_ts=start_ts, end_ts=end_ts, timeframe="1m",
+                        strict=False, standardize=False,
                     )
                 else:
                     candle_task = self.cm.get_candles(
@@ -19128,52 +19179,65 @@ class Passivbot:
                     refreshed = candle_fetch_task.result()
                 else:
                     refreshed = await candle_task
-                post_health = Passivbot._candidate_candle_surface_health(
-                    self,
-                    sym,
-                    timeframe,
-                    required_candles,
-                    now_ms=utc_ms(),
-                )
-                pre_last = pre_health.get("last_cached_ts")
-                post_last = post_health.get("last_cached_ts")
-                no_progress = post_last is None or (
-                    pre_last is not None and int(post_last) <= int(pre_last)
-                )
-                empty_or_unchanged_tail = bool(
-                    not post_health.get("coverage_ok")
-                    and no_progress
-                    and (post_health.get("no_basis") or post_health.get("tail_only"))
-                )
-                if empty_or_unchanged_tail:
-                    surface_failure_retry_after[(sym, timeframe)] = int(
-                        utc_ms() + _FORAGER_TERMINAL_EMPTY_RETRY_MS
-                    )
+                if timeframe == "rms":
+                    if not len(refreshed):
+                        surface_failure_retry_after[(sym, timeframe)] = (
+                            int(utc_ms()) + _FORAGER_TERMINAL_EMPTY_RETRY_MS
+                        )
+                    else:
+                        surface_failure_retry_after.pop((sym, timeframe), None)
                     logging.debug(
-                        "[candle] forager refresh made no tail progress | "
-                        "symbol=%s timeframe=%s action=defer_surface_retry",
-                        Passivbot._log_symbol(sym),
-                        timeframe,
+                        "[candle] RMS history repair | symbol=%s start=%d end=%d rows=%d required=%d missing_before=%d",
+                        Passivbot._log_symbol(sym), start_ts, end_ts, len(refreshed),
+                        required_candles, pre_health["missing_candles"],
                     )
                 else:
-                    surface_failure_retry_after.pop((sym, timeframe), None)
-                self._forager_surface_failure_retry_after_ms = (
-                    surface_failure_retry_after
-                )
-                if timeframe == "1h":
-                    try:
-                        refreshed_rows = int(refreshed.size)
-                    except (AttributeError, TypeError, ValueError):
-                        try:
-                            refreshed_rows = len(refreshed)
-                        except (TypeError, ValueError):
-                            refreshed_rows = 0
-                    success_key = (sym, timeframe, int(required_candles))
-                    if refreshed_rows > 0 and bool(post_health.get("leading_gap_only")):
-                        surface_successes[success_key] = int(utc_ms())
+                    post_health = Passivbot._candidate_candle_surface_health(
+                        self,
+                        sym,
+                        timeframe,
+                        required_candles,
+                        now_ms=utc_ms(),
+                    )
+                    pre_last = pre_health.get("last_cached_ts")
+                    post_last = post_health.get("last_cached_ts")
+                    no_progress = post_last is None or (
+                        pre_last is not None and int(post_last) <= int(pre_last)
+                    )
+                    empty_or_unchanged_tail = bool(
+                        not post_health.get("coverage_ok")
+                        and no_progress
+                        and (post_health.get("no_basis") or post_health.get("tail_only"))
+                    )
+                    if empty_or_unchanged_tail:
+                        surface_failure_retry_after[(sym, timeframe)] = int(
+                            utc_ms() + _FORAGER_TERMINAL_EMPTY_RETRY_MS
+                        )
+                        logging.debug(
+                            "[candle] forager refresh made no tail progress | "
+                            "symbol=%s timeframe=%s action=defer_surface_retry",
+                            Passivbot._log_symbol(sym),
+                            timeframe,
+                        )
                     else:
-                        surface_successes.pop(success_key, None)
-                self._forager_surface_success_ms = surface_successes
+                        surface_failure_retry_after.pop((sym, timeframe), None)
+                    self._forager_surface_failure_retry_after_ms = (
+                        surface_failure_retry_after
+                    )
+                    if timeframe == "1h":
+                        try:
+                            refreshed_rows = int(refreshed.size)
+                        except (AttributeError, TypeError, ValueError):
+                            try:
+                                refreshed_rows = len(refreshed)
+                            except (TypeError, ValueError):
+                                refreshed_rows = 0
+                        success_key = (sym, timeframe, int(required_candles))
+                        if refreshed_rows > 0 and bool(post_health.get("leading_gap_only")):
+                            surface_successes[success_key] = int(utc_ms())
+                        else:
+                            surface_successes.pop(success_key, None)
+                    self._forager_surface_success_ms = surface_successes
                 refreshed_count += 1
                 if fetch_delay_s > 0:
                     sleep_s = fetch_delay_s

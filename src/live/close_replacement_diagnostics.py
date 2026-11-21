@@ -32,6 +32,7 @@ class _Replacement:
     last_create_defer: str | None = None
     sent: bool = False
     warned: bool = False
+    reported_unknown: bool = False
     observed_uncovered: bool = False
 
 
@@ -53,7 +54,8 @@ def _observe_missing_surfaces(bot, replacement):
 
 
 def _emit_timing(
-    bot, scope, replacement, outcome, now_ms, *, create_wave=None, action_index=None
+    bot, scope, replacement, outcome, now_ms, *, create_wave=None, action_index=None,
+    resting_coverage=None,
 ):
     if now_ms < replacement.canceled_ms:
         return
@@ -67,6 +69,7 @@ def _emit_timing(
         ("cancel_wave_id", replacement.cancel_wave_id),
         ("create_wave_id", _wave_id(create_wave)),
         ("create_action_index", action_index),
+        ("resting_coverage", resting_coverage),
         ("last_create_defer", replacement.last_create_defer),
         ("last_missing_surfaces", list(replacement.last_missing_surfaces) or None),
     ):
@@ -153,10 +156,11 @@ def observe_plan(bot, wave, cancels, creates, now_ms):
     for scope, replacement in list(tracked.items()):
         if replacement.observed_uncovered and scope not in close_creates:
             if replacement.warned:
-                _log_resolution(scope, replacement, now_ms, "latest plan has no close to submit")
+                _log_end(
+                    scope, replacement, now_ms, "ended", "latest plan has no close to submit"
+                )
             del tracked[scope]
-            if not replacement.sent:
-                _emit_timing(bot, scope, replacement, "no_close_in_plan", now_ms)
+            _emit_timing(bot, scope, replacement, "no_close_in_plan", now_ms)
             continue
         if replacement.sent:
             continue
@@ -273,11 +277,47 @@ def observe_create_defer(bot, orders, reason):
             tracked[scope].last_create_defer = reason
 
 
-def _log_resolution(scope, replacement, now_ms, description):
+def _log_end(scope, replacement, now_ms, status, description):
     logging.info(
-        "[order] close replacement resolved | %s %s | elapsed=%.1fs | %s",
-        token(scope[0], 48), scope[1], (now_ms - replacement.canceled_ms) / 1000, description,
+        "[order] close replacement %s | %s %s | elapsed=%.1fs | %s",
+        status, token(scope[0], 48), scope[1],
+        (now_ms - replacement.canceled_ms) / 1000, description,
     )
+
+
+def _resting_coverage(bot, scope, canceled_id, position_qty):
+    """Classify current resting quantity without treating ambiguous rows as zero."""
+    remaining = {}
+    for order in bot.fetched_open_orders:
+        if _close_scope(order) != scope:
+            continue
+        order_id = str(order.get("id") or "")
+        if not order_id or order_id == canceled_id:
+            # The canceled order may still be visible before the venue confirms its absence.
+            remaining[order_id] = None
+            continue
+        reduce_only = bot._canonical_open_order_reduce_only(order)
+        if reduce_only is True:
+            qty = extract_order_remaining_qty(order)
+        elif reduce_only is False:
+            qty = 0.0
+        else:
+            qty = None
+        if order_id in remaining and remaining[order_id] != qty:
+            qty = None
+        remaining[order_id] = qty
+    known_qty = math.fsum(qty for qty in remaining.values() if qty is not None)
+    if known_qty >= position_qty:
+        return "full", known_qty
+    # Position size and order remainders are independently represented as floats.
+    # Accept only the immediately adjacent positive float, below half a known venue lot.
+    if 0.0 < known_qty == math.nextafter(position_qty, 0.0):
+        qty_step = getattr(bot, "qty_steps", {}).get(scope[0])
+        if not qty_step or position_qty - known_qty < qty_step * 0.5:
+            return "full", known_qty
+    if None in remaining.values():
+        return "unknown", None
+    return ("partial" if known_qty else "zero"), known_qty
 
 
 def observe_account(bot, refreshed_surfaces, now_ms):
@@ -301,35 +341,37 @@ def observe_account(bot, refreshed_surfaces, now_ms):
             continue
         if position_qty == 0:
             if replacement.warned:
-                _log_resolution(scope, replacement, now_ms, "position closed")
+                _log_end(scope, replacement, now_ms, "ended", "position closed")
             del tracked[scope]
-            if not replacement.sent:
-                _emit_timing(bot, scope, replacement, "position_closed", now_ms)
+            _emit_timing(bot, scope, replacement, "position_closed", now_ms)
             continue
 
-        resting = [order for order in bot.fetched_open_orders if _close_scope(order) == scope]
-        if resting:
-            replacement.observed_uncovered = False
-            # An old order still visible after cancel proves neither the gap nor recovery.
-            remaining = [
-                extract_order_remaining_qty(row)
-                for row in resting
-                if row.get("id") and str(row["id"]) != replacement.canceled_id
-                and bot._canonical_open_order_reduce_only(row) is True
-            ]
-            if any(qty is not None and qty > 0 for qty in remaining):
-                if replacement.warned:
-                    description = "resting close observed"
-                    if all(qty is not None for qty in remaining):
-                        description += f" | resting_close_qty={sum(remaining):g}/{position_qty:g}"
-                    _log_resolution(scope, replacement, now_ms, description)
-                del tracked[scope]
-                if not replacement.sent:
-                    _emit_timing(bot, scope, replacement, "resting_close_observed", now_ms)
-            continue
-
-        replacement.observed_uncovered = True
+        coverage, qty = _resting_coverage(bot, scope, replacement.canceled_id, position_qty)
+        replacement.observed_uncovered = coverage == "zero"
         elapsed_ms = now_ms - replacement.canceled_ms
+        if coverage in ("full", "partial"):
+            if replacement.warned:
+                status = "resolved" if coverage == "full" else "partially covered"
+                _log_end(
+                    scope, replacement, now_ms, status,
+                    f"resting_close_qty={qty:g}/{position_qty:g}",
+                )
+            del tracked[scope]
+            _emit_timing(
+                bot, scope, replacement, "resting_close_observed", now_ms,
+                resting_coverage=coverage,
+            )
+            continue
+
+        if coverage == "unknown":
+            if not replacement.reported_unknown and elapsed_ms >= _CLOSE_DELAY_MS:
+                replacement.reported_unknown = True
+                _emit_timing(
+                    bot, scope, replacement, "coverage_unconfirmed", now_ms,
+                    resting_coverage=coverage,
+                )
+            continue
+
         if replacement.warned or elapsed_ms < _CLOSE_DELAY_MS:
             continue
         defer = getattr(bot, "_console_ordinary_last_defer", None)
@@ -347,5 +389,6 @@ def observe_account(bot, refreshed_surfaces, now_ms):
             " ".join(blockers) or "blocker=unreported",
         )
         replacement.warned = True
-        if not replacement.sent:
-            _emit_timing(bot, scope, replacement, "still_waiting", now_ms)
+        _emit_timing(
+            bot, scope, replacement, "still_waiting", now_ms, resting_coverage=coverage
+        )

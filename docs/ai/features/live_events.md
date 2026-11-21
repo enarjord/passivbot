@@ -370,11 +370,22 @@ Milestones are omitted when unobserved. When present, `last_create_defer` identi
 create-side guard for this position side. `last_missing_surfaces` lists recent missing account
 surfaces from the ordinary planner. These observations do not assign elapsed time to a blocker.
 
-`outcome=create_sent` is recorded once at guarded submission. If the existing delayed-close
-warning fires first, `still_waiting` records one partial observation. A tracked replacement
-that resolves before a guarded send may report `position_closed`, `resting_close_observed`,
-or `no_close_in_plan`. Each tracked replacement produces at most one terminal observation.
-`create_sent` marks submission. Placement acknowledgments retain their existing event.
+`outcome=create_sent` is recorded once at guarded submission. Placement acknowledgments
+retain their existing event. Neither ends account observations for the tracked replacement.
+After the delay threshold, the first authoritative observation of zero resting close quantity
+reports `still_waiting` with `resting_coverage=zero`. Ambiguous order evidence can report
+`coverage_unconfirmed` with `resting_coverage=unknown` once per replacement. These observations
+can follow guarded submission.
+
+A current post-cancel positions and open-orders cohort may report `resting_close_observed` with
+`resting_coverage=full` when proven resting close quantity covers the current position, or
+`resting_coverage=partial` when it covers a known smaller quantity. For float roundoff, the
+comparison allows only the adjacent positive float below position size and only when the
+gap is below half a venue quantity step if the step is known. A partial close can be
+intentional. Both observations end replacement tracking. Only full coverage clears an earlier
+warning with a resolved log. The other terminal observations, `position_closed` and
+`no_close_in_plan`, end tracking without claiming resting coverage. Each tracked replacement
+produces at most one terminal observation.
 
 The event goes to structured and monitor sinks. It carries no prices, quantities, or venue
 order IDs. Tracking and publication are best effort and leave order admission, account
