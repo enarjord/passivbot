@@ -193,6 +193,8 @@ def test_hyperliquid_per_order_reason_reaches_the_structured_event(action):
     ("Rejected. Authorization: Basic aGk=", "Rejected. <redacted-header>"),
     ("Rejected. Cookie: session=hidden; second=value", "Rejected. <redacted-header>"),
     ("Rejected. Authorization: Invalid\n token=short", "Rejected. <redacted-header>"),
+    ("Rejected passphrase:\nshort-secret", "Rejected passphrase: <redacted>"),
+    ("Rejected API key:\t\r\nshort-secret", "Rejected API key: <redacted>"),
     ("Rejected. Seed phrase: synthetic multiword secret\n second line",
      "Rejected. Seed phrase: <redacted>"),
     ("Rejected. -----BEGIN PRIVATE KEY-----\n short-value\n-----END PRIVATE KEY-----",

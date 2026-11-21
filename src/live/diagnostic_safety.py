@@ -32,7 +32,7 @@ _EXCHANGE_ERROR_PEM_RE = re.compile(
 )
 _EXCHANGE_ERROR_MULTIPLE_WORD_CREDENTIAL_RE = re.compile(
     r"(?P<label>\b(?:mnemonic|seed[-_ ]?phrase|password|passphrase)"
-    r"(?:['\"])?[ \t]*[:=][ \t]*)(?!['\"])\S.*",
+    r"(?:['\"])?\s*[:=]\s*)(?!['\"])\S.*",
     re.IGNORECASE | re.DOTALL,
 )
 _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
@@ -41,7 +41,7 @@ _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
     r"session(?:[-_ ]?(?:id|key|token))?|signing[-_ ]?key|"
     r"secret(?:[-_ ]?key)?|signature|passphrase|password|token|"
     r"listen[-_ ]?key|seed(?:[-_ ]?phrase)?|mnemonic)(?![\w-])"
-    r"(?:['\"])?[ \t]*[:=][ \t]*)"
+    r"(?:['\"])?\s*[:=]\s*)"
     r"""(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|["'][^\r\n]*|[^\s,;|]+)""",
     re.IGNORECASE,
 )
