@@ -22,6 +22,9 @@ its own version heading. See [release status](docs/releases.md).
   for other orders. Structured execution events report the retry interval and the
   time remaining on skipped submissions.
 
+- Redact ambiguously quoted credentials and credentials echoed before negative validity
+  messages in live exchange diagnostics.
+
 - Redact authorization and cookie values echoed without field separators in exchange errors.
   Bound credential-label matching on long reasons and preserve common stock rejection messages.
 
