@@ -22,6 +22,23 @@ its own version heading. See [release status](docs/releases.md).
   for other orders. Structured execution events report the retry interval and the
   time remaining on skipped submissions.
 
+- Apply the same punctuation boundaries to Bearer and Basic authentication values
+  and other credential echoes. Drop diagnostic reasons when a payload delimiter
+  interrupts an unfinished quoted value.
+
+- Prevent credential values starting with punctuation or containing a payload delimiter
+  from appearing in live exchange diagnostics.
+
+- Redact ambiguously quoted credentials and credentials echoed before negative validity
+  messages in live exchange diagnostics.
+
+- Redact authorization and cookie values echoed without field separators in exchange errors.
+  Bound credential-label matching on long reasons and preserve common stock rejection messages.
+
+- Include sanitized Hyperliquid rejection reasons in live order events, including an
+  unrecognized API wallet. Preserve useful rejection wording and redact authentication
+  values and embedded request payloads.
+
 - Use each suite scenario’s start for trading and scoring when reusing a
   prepared OHLCV dataset.
 

@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from live.diagnostic_safety import (
     bounded_exception_code,
     bounded_exception_status,
@@ -126,7 +130,276 @@ def test_bounded_exchange_error_context_redacts_long_tokens_and_sensitive_reason
         "error_reason": "bad client id <redacted>",
     }
     assert bounded_exchange_error_context(sensitive) == {
-        "error_label": "INVALID_PARAM_VALUE"
+        "error_label": "INVALID_PARAM_VALUE",
+        "error_reason": "api_key=<redacted>",
+    }
+
+
+@pytest.mark.parametrize("prefix", ["", "L1 error: "])
+def test_hyperliquid_signer_rejection_has_stable_label_and_safe_reason(prefix):
+    payload = {
+        "status": "err",
+        "response": f"{prefix}User or API Wallet 0x{'a' * 40} does not exist.",
+    }
+    assert bounded_exchange_error_context(RuntimeError("hyperliquid " + json.dumps(payload))) == {
+        "error_label": "HYPERLIQUID_UNRECOGNIZED_WALLET",
+        "error_reason": "Hyperliquid does not recognize the API wallet.",
+    }
+
+
+@pytest.mark.parametrize("action", ["order", "cancel"])
+def test_hyperliquid_per_order_reason_reaches_the_structured_event(action):
+    from types import SimpleNamespace
+
+    from live.event_bus import EventTypes, LiveEvent, format_console_event
+    from live.event_emitters import emit_execution_order_event
+
+    events = []
+    bot = SimpleNamespace(
+        _current_live_event_cycle_id=lambda: "cy_1",
+        _emit_live_event=lambda event_type, **fields: events.append(LiveEvent(event_type, **fields)),
+    )
+    error = RuntimeError("hyperliquid " + json.dumps({
+        "status": "ok",
+        "response": {
+            "type": action,
+            "data": {
+                "statuses": [{"resting": {"oid": 1}}, {"error": "Order has invalid size."}],
+            },
+        },
+    }))
+
+    emit_execution_order_event(
+        bot,
+        event_type=EventTypes.EXECUTION_AMBIGUOUS,
+        order={"symbol": "ETH/USDC:USDC"},
+        action="create" if action == "order" else "cancel",
+        status="degraded",
+        error=error,
+    )
+
+    assert len(events) == 1
+    assert events[0].data["error_reason"] == "Order has invalid size."
+    assert "reason=Order has invalid size." in format_console_event(events[0])
+
+
+@pytest.mark.parametrize(("message", "sanitized"), [
+    ("API key expired. Generate a new token.", "API key expired. Generate a new token."),
+    ("Invalid signature for the configured private key.", "Invalid signature for the configured private key."),
+    ('Could not authenticate api_key="short value", retry later',
+     "Could not authenticate api_key=<redacted>, retry later"),
+    ("Rejected. X-MBX-APIKEY: tiny", "Rejected. X-MBX-APIKEY: <redacted>"),
+    ("Invalid token. Bearer ab.c.d", "Invalid token. <redacted-auth>"),
+    ("Invalid token. Bearer .tiny123", "Invalid token. <redacted-auth>"),
+    ("Rejected Bearer token ?tiny123", "Rejected <redacted-auth>"),
+    ("Rejected Bearer!tiny123", "Rejected <redacted-auth>"),
+    ("Rejected Bearer'tiny123'", "Rejected <redacted-auth>"),
+    ('Rejected Bearer"tiny123"', "Rejected <redacted-auth>"),
+    ("Rejected Bearer(tiny123)", "Rejected <redacted-auth>"),
+    ("Rejected Basic auth[tiny123]", "Rejected <redacted-auth>"),
+    ("Rejected Bearer`tiny123`", "Rejected <redacted-auth>"),
+    ("Rejected Bearer<tiny123>", "Rejected <redacted-auth>"),
+    ("Rejected Bearer <redactedTiny123>", "Rejected <redacted-auth>"),
+    ("Rejected Basic <redactedTiny123>", "Rejected <redacted-auth>"),
+    ("Rejected passphrase <redactedTiny123>", "Rejected passphrase <redacted>"),
+    ("Rejected passphrase<tiny123>", "Rejected passphrase<redacted>"),
+    ("Rejected passphrase‘tiny123’", "Rejected passphrase<redacted>"),
+    ("Invalid Bearer'abc.def.ghi' supplied", "Invalid <redacted-auth> supplied"),
+    ("Rejected Basic auth ,tiny123", "Rejected <redacted-auth>"),
+    ("Rejected Basic ;tiny123", "Rejected <redacted-auth>"),
+    ("Bearer! Rotate it.", "Bearer! Rotate it."),
+    ('Error: "Invalid API key."', 'Error: "Invalid API key."'),
+    ("(Invalid API key.)", "(Invalid API key.)"),
+    ("Invalid passphrase... try again", "Invalid passphrase... try again"),
+    ("Invalid passphrase!!", "Invalid passphrase!!"),
+    ("Rejected. Authorization: Basic aGk=", "Rejected. <redacted-header>"),
+    ("Rejected. Cookie: session=hidden; second=value", "Rejected. <redacted-header>"),
+    ('Rejected. Set-Cookie": "csrf=short; other=value"', "Rejected. <redacted-header>"),
+    ("Failed OK-ACCESS-KEY: small.", "Failed OK-ACCESS-KEY: <redacted>"),
+    ('Bad api_key="first\nsecond', "Bad api_key=<redacted>"),
+    ("Rejected. Authorization: Invalid\n token=short", "Rejected. <redacted-header>"),
+    ("Rejected passphrase:\nshort-secret", "Rejected passphrase: <redacted>"),
+    ("Rejected API key:\t\r\nshort-secret", "Rejected API key: <redacted>"),
+    ("Rejected. Seed phrase: synthetic multiword secret\n second line",
+     "Rejected. Seed phrase: <redacted>"),
+    ("Rejected. -----BEGIN PRIVATE KEY-----\n short-value\n-----END PRIVATE KEY-----",
+     "Rejected. <redacted-key>"),
+    ('Request invalid {"action":{"type":"order"},"signature":{"r":"short","s":"secret"}}',
+     "Request invalid <redacted-payload>"),
+    ('Request did not match "example" {"other": "value"}',
+     'Request did not match "example" <redacted-payload>'),
+    ("Order didn't pass validation {payload: marker}",
+     "Order didn't pass validation <redacted-payload>"),
+    ("Users' orders failed {payload: marker}", "Users' orders failed <redacted-payload>"),
+    ("Price 5' too high {payload: marker}", "Price 5' too high <redacted-payload>"),
+    ("Unable to verify signature=0x" + "a" * 130, "Unable to verify signature=<redacted>"),
+    ("Check wallet 0x" + "c" * 40, "Check wallet 0x" + "c" * 40),
+])
+def test_error_reason_preserves_words_and_redacts_authentication_values(message, sanitized):
+    assert bounded_exchange_error_context_from_mapping({"message": message}) == {
+        "error_reason": sanitized,
+    }
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["api_passphrase", "API key", "OK-ACCESS-PASSPHRASE", "session_id", "private key", "seed phrase"],
+)
+def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
+    assert bounded_exchange_error_context_from_mapping({
+        "message": f"Rejected {label}: synthetic multiword secret",
+    }) == {"error_reason": f"Rejected {label}: <redacted>"}
+
+
+@pytest.mark.parametrize(("message", "sanitized"), [
+    ("Invalid passphrase 'short-secret'", "Invalid passphrase <redacted>"),
+    ('Invalid "passphrase" "short-secret"', 'Invalid "passphrase" <redacted>'),
+    ("Invalid 'API key' ('short-secret')", "Invalid 'API key' <redacted>"),
+    ('Invalid "passphrase". Rotate it.', 'Invalid "passphrase". Rotate it.'),
+    ('Invalid "API key":"short-secret"', 'Invalid "API key":<redacted>'),
+    ('Invalid "passphrase"short-secret', 'Invalid "passphrase"<redacted>'),
+    ("Invalid passphrase'short-secret'", "Invalid passphrase<redacted>"),
+    ("Invalid passphrase !tiny123", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase .tiny123", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase ?tiny123", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase!tiny123", "Invalid passphrase<redacted>"),
+    ("Invalid passphrase! Rotate it.", "Invalid passphrase! Rotate it."),
+    ("Invalid api_key：tiny123", "Invalid api_key_<redacted>"),
+    ("'tiny123' is an invalid private key", "<redacted> is an invalid private key"),
+    (
+        "'tiny123' is an invalid x-a-b-c-d-e-api-key",
+        "<redacted> is an invalid x-a-b-c-d-e-api-key",
+    ),
+    ("Invalid passphrase; supplied short-secret", "Invalid passphrase<redacted>"),
+    ("Malformed Bearer 'short-secret'", "Malformed <redacted-auth>"),
+    ("Bearer token expired.", "Bearer token expired."),
+    ("Invalid x_api_key: short-secret", "Invalid x_api_key: <redacted>"),
+    ('Invalid "x_api_key" "short-secret"', 'Invalid "x_api_key" <redacted>'),
+    ('Invalid "x-a-b-c-d-e-api-key" "shortsec"', 'Invalid "x-a-b-c-d-e-api-key" <redacted>'),
+    ("Rejected x_authorization: Basic short-secret", "Rejected <redacted-header>"),
+    ("Authorization failed: Basic auth dGlueQ==", "Authorization failed: <redacted-auth>"),
+    ("Authorization failed: Basic authentication dGlueQ==", "Authorization failed: <redacted-auth>"),
+    ("Basic auth: dGlueQ==", "Basic auth: <redacted>"),
+    ("Bearer token=short-secret", "Bearer token=<redacted>"),
+    ("Basic authentication is required.", "Basic authentication is required."),
+    ("Authorization abc123", "Authorization <redacted>"),
+    ("authorization abc123 rejected", "authorization <redacted>"),
+    ("Authorization header abc123", "Authorization header <redacted>"),
+    ("Missing Authorization header", "Missing Authorization header"),
+    ("Authorization failed.", "Authorization failed."),
+    ("Authorization denied", "Authorization denied"),
+    ("Cookie expired", "Cookie expired"),
+    ("Proxy-Authorization abc123", "Proxy-Authorization <redacted>"),
+    ("Set-Cookie abc123", "Set-Cookie <redacted>"),
+    ("KC-API-SIGN: shortsig", "KC-API-SIGN: <redacted>"),
+    ("Invalid key=shortsec", "Invalid key=<redacted>"),
+    ("Rejected credentials=shortsec", "Rejected credentials=<redacted>"),
+    ("x-a-b-c-d-e-Api-Key=shortsec", "x-a-b-c-d-e-Api-Key=<redacted>"),
+    ("Invalid API-key, IP, or permissions for action.",
+     "Invalid API-key, IP, or permissions for action."),
+    ("Signature for this request is not valid.", "Signature for this request is not valid."),
+    ("The API key does not have trade permission.", "The API key does not have trade permission."),
+    ("Your token balance is too low", "Your token balance is too low"),
+    ("Basic order validation failed: price tick 0.01", "Basic order validation failed: price tick 0.01"),
+    ("Basic order validation failed: price tick 0.01 secret", "<redacted-auth>"),
+    ("Invalid api_key (short-secret)", "Invalid api_key <redacted>"),
+    ("Invalid api_key(short-secret)", "Invalid api_key<redacted>"),
+    ("Invalid access token short-secret", "Invalid access token <redacted>"),
+    ("Invalid private key\nshort-secret", "Invalid private key <redacted>"),
+    ("The API key is expired.", "The API key is expired."),
+    ("Invalid signature for the configured private key.", "Invalid signature for the configured private key."),
+])
+def test_reason_distinguishes_credential_echoes_from_status_words(message, sanitized):
+    assert bounded_exchange_error_context_from_mapping({"message": message}) == {
+        "error_reason": sanitized,
+    }
+
+
+@pytest.mark.parametrize(("message", "sanitized"), [
+    ("Invalid passphrase 'abc'def'", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase 'abc' def'", "Invalid passphrase <redacted>"),
+    ("Invalid passphrase 'abc'.def'", "Invalid passphrase <redacted>"),
+    ('Rejected api_key="abc"def"', "Rejected api_key=<redacted>"),
+    ('Malformed Bearer "abc"def"', "Malformed <redacted-auth>"),
+    (r'Invalid passphrase "abc\"def", retry later', "Invalid passphrase <redacted>, retry later"),
+    ("'tiny123' is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ('"tiny123" is not the correct password', "<redacted> is not the correct password"),
+    ("'tiny123' isn't a valid passphrase", "<redacted> isn't a valid passphrase"),
+    ("'tiny123' is no longer a valid passphrase", "<redacted> is no longer a valid passphrase"),
+    ("'tiny123' passphrase is invalid", "<redacted> passphrase is invalid"),
+    ("'tiny123' passphrase rejected", "<redacted> passphrase rejected"),
+    ("'tiny123': API key not found", "<redacted> API key not found"),
+    ("'tiny123' is an invalid or expired API key", "<redacted> is an invalid or expired API key"),
+    ("'tiny123' has expired api key", "<redacted> has expired api key"),
+    ("'tiny123' does not match any API key", "<redacted> does not match any API key"),
+    ("‘tiny123’ is next to an expired API key", "<redacted> is next to an expired API key"),
+    ("`tiny123` is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ('"tiny123" wasn\'t a recognized API key', "<redacted> wasn't a recognized API key"),
+    ("Rejected: 'abc'def' was not the correct private key",
+     "Rejected: <redacted> was not the correct private key"),
+    ("Rejected: 'abc' violet rabbit' was not the correct private key",
+     "Rejected: <redacted> was not the correct private key"),
+    ("'a' b 'c' is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ("‘abc’ def’ is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ("'tiny123': invalid API key", "<redacted> invalid API key"),
+    ("'tiny123', invalid API key", "<redacted> invalid API key"),
+    ("'tiny123' (invalid API key)", "<redacted> invalid API key)"),
+    ("'tiny123'. invalid API key", "<redacted> invalid API key"),
+    ("'tiny123' - invalid API key", "<redacted> invalid API key"),
+    ("«tiny123» is not a valid passphrase", "<redacted> is not a valid passphrase"),
+])
+def test_credential_echoes_require_unambiguous_quotes(message, sanitized):
+    assert bounded_exchange_error_context_from_mapping({"message": message}) == {
+        "error_reason": sanitized,
+    }
+
+
+@pytest.mark.parametrize("message", [
+    "Invalid passphrase=\"first' violet rabbit API key\"",
+    "Invalid passphrase \"first' violet rabbit API key\"",
+    "Bearer \"first' violet rabbit API key\"",
+    "'first api_key=second' is not a valid passphrase",
+    "Invalid 'api_key' violet rabbit passphrase",
+    "'short-secret' is an invalid private key",
+    "'abc' my token' is not a valid passphrase",
+    "'abc' my token.' is not a valid passphrase",
+    "User 'bob' sent 'hunter' which is invalid passphrase",
+    "'abc' and hunter is not a valid passphrase",
+    "Key 'main' hunter is not a valid passphrase",
+    "'tiny{secret' is not a valid passphrase",
+    "'tiny{secret' passphrase is invalid",
+    "'tiny{secret': passphrase invalid",
+    "Unknown failure near 'tiny{secret' message",
+    "The bots' order 'tiny{secret",
+    "Users' orders 'tiny{secret' message",
+    "Unknown failure near ’tiny{secret’ message",
+    "Unknown failure near ”tiny{secret” message",
+    'Unknown failure near "unclosed {payload: marker}',
+    "'tiny{secret' is not a valid passphrase {payload: canary}",
+    "'tiny[{\"secret\"}]' is not a valid passphrase",
+    "tiny123 is an invalid passphrase",
+    "tiny123 is not a valid passphrase",
+    "tiny123 has expired API key",
+    "tiny123 does not match any API key",
+    "tiny123 is an invalid passphrase; 'other' is an invalid API key",
+])
+def test_credential_echoes_with_ambiguous_boundaries_drop_reason(message):
+    assert bounded_exchange_error_context_from_mapping({"message": message}) == {
+        "error_reason": "<redacted>",
+    }
+
+
+@pytest.mark.parametrize("label", ["pass", "pwd", "auth", "creds", "sig", "hmac", "jwt", "otp"])
+def test_short_authentication_field_aliases_are_redacted(label):
+    assert bounded_exchange_error_context_from_mapping({"message": f"Rejected {label}=tiny123"}) == {
+        "error_reason": f"Rejected {label}=<redacted>",
+    }
+
+
+def test_long_noncredential_hyphenated_reason_uses_bounded_prefix_scan():
+    # Fill the parser's input budget without matching a credential label.
+    assert bounded_exchange_error_context_from_mapping({"message": "a-" * 4096}) == {
+        "error_reason": "<redacted>",
     }
 
 

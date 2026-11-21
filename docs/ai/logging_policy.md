@@ -54,7 +54,13 @@ never receive private runtime artifacts. The credential prohibition applies to e
 authentication material must not be copied from its configured credential store into any sink.
 
 - Connector-local and structured execution events retain stable classifications, bounded context,
-  and exception type—not raw responses, exception text, or tracebacks.
+  and exception type. For known exchange response fields, retain an actionable rejection
+  reason in the event and project it to the console. Redact values that grant access or
+  authorize or replay actions, including authentication headers, session values, keys, signatures,
+  and signed payload fragments. Credential-related words alone do not make a reason sensitive.
+  Preserve stock rejection wording that cannot include echoed values. Public wallet addresses
+  in the canonical 40-hex-digit format can appear as diagnostic identifiers. Mask opaque values
+  whose safety cannot be established. Never retain raw responses, exception text, or tracebacks.
 - Unexpected failures that abort startup or a running bot emit a bounded traceback at ERROR in
   the console and text log. Reuse the diagnostic frame formatter: retain exception classes,
   cause/context chains, file names, functions, and line numbers, without locals, source lines,

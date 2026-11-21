@@ -518,7 +518,9 @@ profiles. When an outcome carries an exception object or result, its payload may
 `error_type`, numeric status/code, a constrained exchange error label, and a bounded sanitized
 reason extracted from a structured exchange error payload. Exact top-level mappings, their
 `info` mapping, and up to eight exact OKX per-order `data` mappings use the same sanitizer;
-per-order `sCode`/`sMsg` takes precedence over a generic OKX envelope code/message. This
+per-order OKX fields take precedence over generic envelope details. Hyperliquid's error response
+string and the first error among up to eight per-order statuses are also recognized. An exact
+unrecognized API-wallet response receives a stable label and actionable wording. This
 structured rejection extraction applies only to failed or ambiguous/degraded outcomes; successful
 outcomes must not project connector-native success codes or messages as errors. This operator-facing reason is
 deliberately retained because the exchange's rejection explanation is often required to repair a
