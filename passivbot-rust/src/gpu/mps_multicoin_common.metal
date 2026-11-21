@@ -320,9 +320,16 @@ inline void configure_joint_realized_memory(
     bool unstuck_enabled, bool loss_gate_enabled, int interval_minutes
 ) {
     float alpha;
-    account.realized_decay_valid = account.realized_decay_valid
-        && hsl_decay_rate(unstuck_span, alpha, account.unstuck_memory.beta)
-        && hsl_decay_rate(loss_gate_span, alpha, account.loss_gate_memory.beta);
+    // A disabled memory is never consulted; mirror the CPU reference and fold
+    // only enabled policies' decay-rate validity into the account.
+    if (unstuck_enabled) {
+        account.realized_decay_valid = account.realized_decay_valid
+            && hsl_decay_rate(unstuck_span, alpha, account.unstuck_memory.beta);
+    }
+    if (loss_gate_enabled) {
+        account.realized_decay_valid = account.realized_decay_valid
+            && hsl_decay_rate(loss_gate_span, alpha, account.loss_gate_memory.beta);
+    }
     account.unstuck_memory.enabled = unstuck_enabled;
     account.loss_gate_memory.enabled = loss_gate_enabled;
     account.realized_decay_interval_minutes = interval_minutes;

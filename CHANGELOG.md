@@ -221,6 +221,9 @@ its own version heading. See [release status](docs/releases.md).
 - Stream EMA Anchor tick inputs on CUDA when needed to fit long optimizer histories
   within the existing GPU memory limit.
 
+- Keep GPU replay running when an inactive realized-loss or auto-unstuck policy carries
+  an unused decay span.
+
 - Avoid copying unrelated configuration when calculating how much fill history live entry cooldowns require.
 
 - Omit raw open-order failures and full order payloads from live minimum-cost adjustment logs.
