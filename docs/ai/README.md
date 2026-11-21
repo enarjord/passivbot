@@ -13,7 +13,7 @@ current task.
 | Analysis quantity units, denominators and observation populations | `generated/metric_fields.md` |
 | Numeric names, units, denominators, and metric spelling | `numeric_conventions.md` |
 | Validation selection or code review | `validation.md` |
-| Logging levels, redaction, sinks, console behavior | `logging_policy.md` |
+| Adding or changing diagnostics, event routing, console or text logging | `logging_policy.md` |
 | Active architectural rationale | `decisions.md` |
 
 ## Task-Specific Routing

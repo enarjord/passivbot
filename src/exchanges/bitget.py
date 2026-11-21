@@ -73,8 +73,12 @@ class BitgetBot(CCXTBot):
         scope = (order["symbol"], direction[1])
         retry_after = self._entry_margin_retry_after.get(scope)
         if retry_after is not None:
-            if monotonic() < retry_after:
-                return DeferredOrderCreation(ReasonCodes.EXCHANGE_MARGIN_RETRY)
+            retry_remaining_seconds = retry_after - monotonic()
+            if retry_remaining_seconds > 0:
+                return DeferredOrderCreation(
+                    ReasonCodes.EXCHANGE_MARGIN_RETRY,
+                    retry_remaining_seconds=retry_remaining_seconds,
+                )
             del self._entry_margin_retry_after[scope]
 
         try:
@@ -87,13 +91,10 @@ class BitgetBot(CCXTBot):
             # Normalize the definitive rejection so it neither becomes an
             # ambiguous create nor consumes the bot-wide error budget.
             self._entry_margin_retry_after[scope] = monotonic() + _ENTRY_MARGIN_RETRY_SECONDS
-            logging.warning(
-                "[order] Bitget UTA entry rejected | symbol=%s pside=%s code=%s retry_seconds=%g",
-                scope[0], scope[1], _UTA_INSUFFICIENT_MARGIN_CODE, _ENTRY_MARGIN_RETRY_SECONDS,
-            )
             return {
                 "status": "rejected",
                 "info": {"code": _UTA_INSUFFICIENT_MARGIN_CODE, "msg": "Insufficient margin"},
+                "_retry_delay_seconds": _ENTRY_MARGIN_RETRY_SECONDS,
             }
 
     def create_ccxt_sessions(self):

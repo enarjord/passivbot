@@ -44,6 +44,8 @@ account mutations are involved.
 
 - Review the complete change against its current merge base and record base/head SHAs.
 - Trace changed behavior through direct callers and consumers.
+- For telemetry or log changes, apply the
+  [event-stream-first review gate](logging_policy.md#event-stream-first).
 - Distinguish regressions introduced by the change from failures reproduced on the target branch.
 - Prefer findings about correctness, trading safety, security, operations, and maintainability over
   style-only commentary.

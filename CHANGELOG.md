@@ -7,7 +7,8 @@ its own version heading. See [release status](docs/releases.md).
 
 - Back off Bitget UTA entry submissions for 60 seconds after an insufficient-margin
   rejection for that symbol and position side, while keeping the bot online to
-  manage existing positions.
+  manage existing positions. Structured execution events report the retry
+  interval and the time remaining on skipped submissions.
 
 - Let explicitly selected OHLCV directories define each coin's simulation window.
   Warn and record the requested and available starts when history begins late.

@@ -24,6 +24,7 @@ class DeferredOrderCreation:
     """An order deliberately withheld before exchange submission."""
 
     reason_code: str = ReasonCodes.STATE_CHANGE_DETECTED
+    retry_remaining_seconds: float | None = None
 
 
 class DeferredOrderCancellation:
@@ -1489,10 +1490,15 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             _record_fresh_entry_orders(
                 bot, "record_blocked_orders", [order], ex.reason_code
             )
+            data = None
             if ex.reason_code == ReasonCodes.ORDINARY_CREATE_WAVE_STOPPED:
                 message = "create order skipped because an earlier create stopped the wave"
             elif ex.reason_code == ReasonCodes.EXCHANGE_MARGIN_RETRY:
                 message = "entry order deferred during the exchange margin retry interval"
+                data = {
+                    "position_side": order.get("position_side"),
+                    "retry_remaining_seconds": ex.retry_remaining_seconds,
+                }
             else:
                 message = "create order skipped because account state changed before exchange submission"
             passivbot_cls._emit_execution_create_filter_event(
@@ -1504,6 +1510,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 symbols=[order["symbol"]],
                 wave=wave,
                 message=message,
+                data=data,
             )
             continue
         if not bot.did_create_order(ex):
@@ -1537,6 +1544,19 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                     if reason_code == "terminal_rejection"
                     else EventTypes.EXECUTION_CREATE_FAILED
                 )
+                extra = None
+                if (
+                    isinstance(ex, dict)
+                    and event_type == EventTypes.EXECUTION_CREATE_REJECTED
+                ):
+                    # This private field is set by the connector when it starts a retry window.
+                    retry_delay_seconds = ex.get("_retry_delay_seconds")
+                    if (
+                        type(retry_delay_seconds) is float
+                        and math.isfinite(retry_delay_seconds)
+                        and retry_delay_seconds > 0
+                    ):
+                        extra = {"retry_delay_seconds": retry_delay_seconds}
                 passivbot_cls._emit_execution_order_event(
                     bot,
                     event_type=event_type,
@@ -1548,6 +1568,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                     index=idx,
                     wave=wave,
                     result=ex if isinstance(ex, dict) else None,
+                    extra=extra,
                 )
             if not _live_event_console_available(bot, passivbot_cls):
                 logging.warning(
