@@ -64,12 +64,13 @@ _SAFE_CREDENTIAL_STATUS = (
 )
 # Punctuation attached to text can start a credential. A completed sentence
 # has whitespace or ends the reason, optionally inside closing punctuation.
+_EXCHANGE_ERROR_CREDENTIAL_LABEL_END = r"""(?:\s+|(?=['"(\[,;.!?]))"""
 _EXCHANGE_ERROR_CREDENTIAL_VALUE_START = (
     r"""(?!\s|[:=：＝]|<redacted|[.!?]+(?=\s|\Z|["')\]]+\Z))"""
 )
 _EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
     r"\b(?:bearer|basic)(?>\s+(?:authentication|auth|token)\b|)"
-    r"(?:\s+|(?=[.!?,;]))"
+    + _EXCHANGE_ERROR_CREDENTIAL_LABEL_END
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE_START
     + _SAFE_CREDENTIAL_STATUS
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
@@ -87,7 +88,9 @@ _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
 _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
     rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX}"""
     rf"""{_EXCHANGE_ERROR_CREDENTIAL_NAME}(?P=quote)\s*|"""
-    rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=['"(\[,;.!?])))"""
+    rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}"""
+    + _EXCHANGE_ERROR_CREDENTIAL_LABEL_END
+    + ")"
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE_START
     + _SAFE_CREDENTIAL_STATUS
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
