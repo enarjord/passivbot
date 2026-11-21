@@ -22,6 +22,10 @@ its own version heading. See [release status](docs/releases.md).
   for other orders. Structured execution events report the retry interval and the
   time remaining on skipped submissions.
 
+- Apply the same punctuation boundaries to Bearer and Basic authentication values
+  and other credential echoes. Drop diagnostic reasons when a payload delimiter
+  interrupts an unfinished quoted value.
+
 - Prevent credential values starting with punctuation or containing a payload delimiter
   from appearing in live exchange diagnostics.
 

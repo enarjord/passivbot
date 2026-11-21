@@ -62,9 +62,16 @@ _SAFE_CREDENTIAL_STATUS = (
     r"incorrect|required|failed|denied|not found|not recognized|does not exist)|"
     r"for the configured private key|failed: <redacted-auth>)(?=\s*(?:[.!?](?:\s|$)|$)))"
 )
+# Punctuation attached to text can start a credential. A completed sentence
+# has whitespace or ends the reason, optionally inside closing punctuation.
+_EXCHANGE_ERROR_CREDENTIAL_LABEL_END = r"""(?:\s+|(?=['"\x60‘’“”«»<(\[,;.!?]))"""
+_EXCHANGE_ERROR_CREDENTIAL_VALUE_START = (
+    r"""(?!\s|[:=：＝]|[.!?]+(?=\s|\Z|["')\]]+\Z))"""
+)
 _EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
     r"\b(?:bearer|basic)(?>\s+(?:authentication|auth|token)\b|)"
-    r"\s+(?![\s.!?,;:=])"
+    + _EXCHANGE_ERROR_CREDENTIAL_LABEL_END
+    + _EXCHANGE_ERROR_CREDENTIAL_VALUE_START
     + _SAFE_CREDENTIAL_STATUS
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
@@ -81,24 +88,27 @@ _EXCHANGE_ERROR_CREDENTIAL_RE = re.compile(
 _EXCHANGE_ERROR_CREDENTIAL_ECHO_RE = re.compile(
     rf"""(?P<label>(?P<quote>['"]){_EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX}"""
     rf"""{_EXCHANGE_ERROR_CREDENTIAL_NAME}(?P=quote)\s*|"""
-    rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}(?:\s+|(?=['"(\[,;.!?])))"""
-    # Sentence punctuation has a boundary. Attached punctuation can be the
-    # first character of a credential value.
-    r"(?!\s|[.!?](?=\s|\Z)|[:=：＝]|<redacted)"
+    rf"""(?<!['"]){_EXCHANGE_ERROR_CREDENTIAL_LABEL}"""
+    + _EXCHANGE_ERROR_CREDENTIAL_LABEL_END
+    + ")"
+    + _EXCHANGE_ERROR_CREDENTIAL_VALUE_START
     + _SAFE_CREDENTIAL_STATUS
     + _EXCHANGE_ERROR_CREDENTIAL_VALUE,
     re.IGNORECASE,
 )
-# A short phrase between a closing quote and a credential label is an
-# ambiguous echo. Bound the phrase without assuming a fixed exchange wording.
+# A quoted value directly before a credential label is an echo. Match a
+# short intervening phrase as well, without assuming fixed exchange wording.
 _EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE = re.compile(
     r"""(?P<quote>['"\x60’”»])(?:\s*[:,;(.\-–—]\s*|\s+)"""
-    r"""(?P<clause>(?:[a-z]++(?:['’][a-z]++)*+\s+){1,6}?"""
+    r"""(?P<clause>(?:[a-z]++(?:['’][a-z]++)*+\s+){0,6}?"""
     + _EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX
     + _EXCHANGE_ERROR_CREDENTIAL_NAME + ")",
     re.IGNORECASE,
 )
-_EXCHANGE_ERROR_REVERSE_OPEN_QUOTE = {"’": "‘", "”": "“", "»": "«"}
+_EXCHANGE_ERROR_QUOTE_CLOSE = {"'": "'", '"': '"', "\x60": "\x60", "‘": "’", "“": "”", "«": "»"}
+_EXCHANGE_ERROR_QUOTE_OPEN = {
+    close: open_quote for open_quote, close in _EXCHANGE_ERROR_QUOTE_CLOSE.items()
+}
 _EXCHANGE_ERROR_BARE_REVERSE_RE = re.compile(
     r"\b(?:(?:is|was)\s+(?:(?:an?|the)\s+)?(?:invalid|incorrect|expired|revoked)"
     r"|(?:(?:is|was)\s+(?:not|no\s+longer)|(?:isn|wasn)['’]t)\s+"
@@ -405,8 +415,7 @@ def _redact_reverse_credential_echoes(text: str) -> str:
     parts = []
     offset = 0
     for match in matches:
-        close_quote = match["quote"]
-        open_quote = _EXCHANGE_ERROR_REVERSE_OPEN_QUOTE.get(close_quote, close_quote)
+        open_quote = _EXCHANGE_ERROR_QUOTE_OPEN[match["quote"]]
         opening = text.find(open_quote, offset, match.start())
         if opening < 0:
             return "<redacted>"
@@ -415,6 +424,34 @@ def _redact_reverse_credential_echoes(text: str) -> str:
         offset = match.end()
     parts.append(text[offset:])
     return "".join(parts)
+
+
+def _payload_prefix_has_open_quote(text: str) -> bool:
+    closing_quote = None
+    escaped = False
+    for index, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if (
+            char in {"'", "’"}
+            and index > 0
+            and text[index - 1].isalnum()
+            and (
+                closing_quote is None
+                or (index + 1 < len(text) and text[index + 1].isalnum())
+            )
+        ):
+            continue
+        if closing_quote is None:
+            closing_quote = _EXCHANGE_ERROR_QUOTE_CLOSE.get(char)
+            if closing_quote is None and char in _EXCHANGE_ERROR_QUOTE_OPEN:
+                closing_quote = char
+        elif char == closing_quote:
+            closing_quote = None
+        elif char == "\\":
+            escaped = True
+    return closing_quote is not None
 
 
 def _bounded_exchange_error_reason(value: object) -> str | None:
@@ -431,10 +468,11 @@ def _bounded_exchange_error_reason(value: object) -> str | None:
         # value can otherwise hide the closing quote and credential label.
         text = _redact_reverse_credential_echoes(value)
         if payload := _EXCHANGE_ERROR_EMBEDDED_PAYLOAD_RE.search(value):
-            if text != value:
+            prefix = value[:payload.start()].rstrip()
+            if text != value or _payload_prefix_has_open_quote(prefix):
                 return "<redacted>"
             # Use the original delimiter so sanitizing cannot expose the dump.
-            text = value[:payload.start()].rstrip() + " <redacted-payload>"
+            text = prefix + " <redacted-payload>"
         text = _EXCHANGE_ERROR_URL_RE.sub("<redacted-url>", text)
         if "@" in text:
             text = _EXCHANGE_ERROR_EMAIL_RE.sub("<redacted-email>", text)
