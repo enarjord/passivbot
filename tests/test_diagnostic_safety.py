@@ -252,6 +252,8 @@ def test_ambiguous_unquoted_credential_does_not_leak_a_suffix(label):
     ("authorization abc123 rejected", "authorization <redacted>"),
     ("Authorization header abc123", "Authorization header <redacted>"),
     ("Missing Authorization header", "Missing Authorization header"),
+    ("Authorization failed.", "Authorization failed."),
+    ("Authorization denied", "Authorization denied"),
     ("Cookie expired", "Cookie expired"),
     ("Proxy-Authorization abc123", "Proxy-Authorization <redacted>"),
     ("Set-Cookie abc123", "Set-Cookie <redacted>"),
@@ -287,6 +289,8 @@ def test_reason_distinguishes_credential_echoes_from_status_words(message, sanit
     ('Malformed Bearer "abc"def"', "Malformed <redacted-auth>"),
     (r'Invalid passphrase "abc\"def", retry later', "Invalid passphrase <redacted>, retry later"),
     ("'tiny123' is not a valid passphrase", "<redacted> is not a valid passphrase"),
+    ('"tiny123" is not the correct password', "<redacted> is not the correct password"),
+    ("'tiny123' isn't a valid passphrase", "<redacted> isn't a valid passphrase"),
     ("'tiny123' is no longer a valid passphrase", "<redacted> is no longer a valid passphrase"),
     ("'tiny123' is an invalid or expired API key", "<redacted> is an invalid or expired API key"),
     ("'tiny123' has expired api key", "<redacted> has expired api key"),
@@ -322,8 +326,13 @@ def test_credential_echoes_require_unambiguous_quotes(message, sanitized):
     "'short-secret' is an invalid private key",
     "'abc' my token' is not a valid passphrase",
     "'abc' my token.' is not a valid passphrase",
+    "tiny123 is an invalid passphrase",
+    "tiny123 is not a valid passphrase",
+    "tiny123 has expired API key",
+    "tiny123 does not match any API key",
+    "tiny123 is an invalid passphrase; 'other' is an invalid API key",
 ])
-def test_overlapping_credential_echoes_drop_ambiguous_reason(message):
+def test_credential_echoes_with_ambiguous_boundaries_drop_reason(message):
     assert bounded_exchange_error_context_from_mapping({"message": message}) == {
         "error_reason": "<redacted>",
     }

@@ -59,7 +59,7 @@ _EXCHANGE_ERROR_CREDENTIAL_VALUE = (
 )
 _SAFE_CREDENTIAL_STATUS = (
     r"(?!(?:(?:is |was |has )?(?:expired|invalid|missing|rejected|revoked|disabled|"
-    r"incorrect|required|not found|not recognized|does not exist)|"
+    r"incorrect|required|failed|denied|not found|not recognized|does not exist)|"
     r"for the configured private key|failed: <redacted-auth>)(?=\s*(?:[.!?](?:\s|$)|$)))"
 )
 _EXCHANGE_ERROR_AUTH_SCHEME_RE = re.compile(
@@ -98,6 +98,15 @@ _EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE = re.compile(
     re.IGNORECASE,
 )
 _EXCHANGE_ERROR_REVERSE_OPEN_QUOTE = {"’": "‘", "”": "“", "»": "«"}
+_EXCHANGE_ERROR_BARE_REVERSE_RE = re.compile(
+    r"\b(?:(?:is|was)\s+(?:(?:an?|the)\s+)?(?:invalid|incorrect|expired|revoked)"
+    r"|(?:(?:is|was)\s+(?:not|no\s+longer)|(?:isn|wasn)['’]t)\s+"
+    r"(?:(?:an?|the)\s+)?(?:valid|correct|recognized|accepted)"
+    r"|has\s+expired|(?:does|did)\s+not\s+match(?:\s+(?:any|the))?)\s+"
+    + _EXCHANGE_ERROR_ANCHORED_FIELD_PREFIX
+    + _EXCHANGE_ERROR_CREDENTIAL_NAME,
+    re.IGNORECASE,
+)
 # Exact stock text with no echoed values. Keep the safety decision independent
 # of a potentially spoofed exchange code or message prefix.
 _SAFE_EXCHANGE_REJECTION_TEXT = frozenset({
@@ -363,6 +372,13 @@ def _redact_reverse_credential_echoes(text: str) -> str:
     # Start with the status clause. An earlier quote inside the value must
     # not let a later quote become the apparent start of the credential.
     matches = tuple(_EXCHANGE_ERROR_REVERSE_CREDENTIAL_RE.finditer(text))
+    for bare in _EXCHANGE_ERROR_BARE_REVERSE_RE.finditer(text):
+        if not any(
+            match.start("clause") <= bare.start() and bare.end() <= match.end()
+            for match in matches
+        ):
+            # Without a quoted value, there is no reliable start to the echo.
+            return "<redacted>"
     if not matches:
         return text
 
