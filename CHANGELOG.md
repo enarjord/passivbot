@@ -5,6 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Label pre-submit live order summaries as create candidates, including market orders.
+  Use execution outcomes to see which orders were acknowledged, skipped, or deferred.
+
 - Back off Bitget UTA entry submissions for 60 seconds after an insufficient-margin
   rejection for that symbol and position side, while keeping the bot online to
   manage existing positions. Deferred entries leave create-batch slots available
