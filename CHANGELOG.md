@@ -5,6 +5,12 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Back off Bitget UTA entry submissions for 60 seconds after an insufficient-margin
+  rejection for that symbol and position side, while keeping the bot online to
+  manage existing positions. Deferred entries leave create-batch slots available
+  for other orders. Structured execution events report the retry interval and the
+  time remaining on skipped submissions.
+
 - Use each suite scenario’s start for trading and scoring when reusing a
   prepared OHLCV dataset.
 

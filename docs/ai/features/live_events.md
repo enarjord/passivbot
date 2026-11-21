@@ -4,7 +4,9 @@
 
 `src/live/event_bus.py` owns event types, tags, reason codes, debug profiles, envelope semantics,
 and redaction helpers. Use registry constants for query-facing or repeated values. Do not add
-aliases for temporary branch-local spellings.
+aliases for temporary branch-local spellings. Follow the
+[event-stream-first logging policy](../logging_policy.md#event-stream-first) for new or changed
+diagnostics and their console projections.
 
 Event emission and sink failures are observability-only unless a feature contract explicitly
 requires durable publication. Diagnostic producers must not mutate order lists, execution results,
@@ -521,6 +523,14 @@ credentials, sensitive-marked values, long token-like values, and tracebacks. Li
 logs remain private operational artifacts and must not be published without review. This
 diagnostic projection does not alter event routing, emitter isolation, executor retries or
 re-raises, exchange calls, or trading behavior.
+
+`execution.create_rejected` reports a terminal Bitget UTA insufficient-margin rejection with
+`data.error_code="25203"` and `data.retry_delay_seconds`, the new retry window for the event's
+symbol and position side. The console warning projects that duration from the event.
+`execution.create_skipped` with `reason_code=exchange_margin_retry` reports a subsequent attempt
+withheld before submission. It carries the scoped symbol in `data.symbols`, `data.position_side`,
+and `data.retry_remaining_seconds` measured from the process-local monotonic deadline when the
+batch filter or connector withheld the attempt. Skips retain DEBUG console visibility.
 
 ## Fill Confirmation Fallbacks
 

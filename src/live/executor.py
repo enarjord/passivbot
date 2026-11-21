@@ -24,6 +24,7 @@ class DeferredOrderCreation:
     """An order deliberately withheld before exchange submission."""
 
     reason_code: str = ReasonCodes.STATE_CHANGE_DETECTED
+    retry_remaining_seconds: float | None = None
 
 
 class DeferredOrderCancellation:
@@ -207,6 +208,52 @@ def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[d
         else:
             removed.append(order)
     return removed
+
+
+def _record_create_submission_skip(bot, passivbot_cls, order, deferred, wave) -> None:
+    reason_code = deferred.reason_code
+    _observe_close_create_defer(bot, [order], reason_code)
+    if wave is not None:
+        wave["skipped_create"] = wave.get("skipped_create", 0) + 1
+    _record_fresh_entry_orders(bot, "record_blocked_orders", [order], reason_code)
+
+    data = None
+    if reason_code == ReasonCodes.ORDINARY_CREATE_WAVE_STOPPED:
+        message = "create order skipped because an earlier create stopped the wave"
+    elif reason_code == ReasonCodes.EXCHANGE_MARGIN_RETRY:
+        message = "entry order deferred during the exchange margin retry interval"
+        data = {
+            "position_side": order.get("position_side"),
+            "retry_remaining_seconds": deferred.retry_remaining_seconds,
+        }
+    else:
+        message = "create order skipped because account state changed before exchange submission"
+    passivbot_cls._emit_execution_create_filter_event(
+        bot,
+        event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+        status="skipped",
+        reason_code=reason_code,
+        order_count=1,
+        symbols=[order["symbol"]],
+        wave=wave,
+        message=message,
+        data=data,
+    )
+
+
+def _filter_connector_deferred_creations(bot, passivbot_cls, orders, wave) -> list[dict]:
+    """Keep connector-deferred orders out of create batch capacity."""
+    get_deferral = getattr(bot, "_create_order_deferral", None)
+    if not callable(get_deferral):
+        return orders
+    admitted = []
+    for order in orders:
+        deferred = get_deferral(order)
+        if deferred is None:
+            admitted.append(order)
+        else:
+            _record_create_submission_skip(bot, passivbot_cls, order, deferred, wave)
+    return admitted
 
 
 def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
@@ -1087,6 +1134,9 @@ async def execute_order_plan(
             order_wave["skipped_create"] += max(
                 0, before_market_filter - len(to_create_mod)
             )
+        to_create_mod = _filter_connector_deferred_creations(
+            bot, passivbot_cls, to_create_mod, order_wave
+        )
         before_churn_admission = list(to_create_mod)
         to_create_mod = _apply_order_churn_admission(bot, to_create_mod)
         if order_wave is not None:
@@ -1344,6 +1394,11 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     )
     if not orders:
         return []
+    wave = getattr(bot, "_order_wave_in_progress", None)
+    orders = _filter_connector_deferred_creations(bot, passivbot_cls, orders, wave)
+    if not orders:
+        _emit_fresh_entry_eligibility(bot, passivbot_cls, wave)
+        return []
     requested_orders = orders
     orders = orders[: int(bot.live_value("max_n_creations_per_batch"))]
     _record_fresh_entry_orders(
@@ -1375,7 +1430,6 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             )
         grouped_orders[order["symbol"]].append(order)
     bot._log_order_action_summary(grouped_orders, "submit")
-    wave = getattr(bot, "_order_wave_in_progress", None)
     connector_call_context = {
         "action": "create",
         "orders": orders,
@@ -1483,28 +1537,10 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     to_return = []
     for idx, (ex, order) in enumerate(zip(res, orders)):
         if isinstance(ex, DeferredOrderCreation):
-            _observe_close_create_defer(bot, [order], ex.reason_code)
-            if wave is not None:
-                wave["skipped_create"] = wave.get("skipped_create", 0) + 1
-            _record_fresh_entry_orders(
-                bot, "record_blocked_orders", [order], ex.reason_code
-            )
-            passivbot_cls._emit_execution_create_filter_event(
-                bot,
-                event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
-                status="skipped",
-                reason_code=ex.reason_code,
-                order_count=1,
-                symbols=[order["symbol"]],
-                wave=wave,
-                message=(
-                    "create order skipped because an earlier create stopped the wave"
-                    if ex.reason_code == ReasonCodes.ORDINARY_CREATE_WAVE_STOPPED
-                    else "create order skipped because account state changed before exchange submission"
-                ),
-            )
+            _record_create_submission_skip(bot, passivbot_cls, order, ex, wave)
             continue
         if not bot.did_create_order(ex):
+            extra = None
             if isinstance(ex, Exception):
                 reason_code = "result_exception"
                 passivbot_cls._emit_execution_order_event(
@@ -1535,6 +1571,17 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                     if reason_code == "terminal_rejection"
                     else EventTypes.EXECUTION_CREATE_FAILED
                 )
+                if (
+                    isinstance(ex, dict)
+                    and event_type == EventTypes.EXECUTION_CREATE_REJECTED
+                ):
+                    # This private field is set by the connector when it starts a retry window.
+                    retry_delay_seconds = ex.get("_retry_delay_seconds")
+                    if (
+                        type(retry_delay_seconds) in (int, float)
+                        and 0 < retry_delay_seconds <= sys.float_info.max
+                    ):
+                        extra = {"retry_delay_seconds": retry_delay_seconds}
                 passivbot_cls._emit_execution_order_event(
                     bot,
                     event_type=event_type,
@@ -1546,14 +1593,16 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                     index=idx,
                     wave=wave,
                     result=ex if isinstance(ex, dict) else None,
+                    extra=extra,
                 )
             if not _live_event_console_available(bot, passivbot_cls):
                 logging.warning(
-                    "[order] create not acknowledged | symbol=%s type=%s reason=%s error_type=%s",
+                    "[order] create not acknowledged | symbol=%s type=%s reason=%s error_type=%s%s",
                     passivbot_cls._log_symbol(order.get("symbol")),
                     bot._resolve_pb_order_type(order),
                     reason_code,
                     bounded_exception_type(ex) if isinstance(ex, BaseException) else "",
+                    f" retry_delay={extra['retry_delay_seconds']:g}s" if extra else "",
                 )
             continue
         normalized_fields: dict[str, list[str]] = {}

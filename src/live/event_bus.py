@@ -343,6 +343,7 @@ class ReasonCodes:
     ACCOUNT_CANCEL_FIRST_BARRIER = "account_cancel_first_barrier"
     UNRESOLVED_CREATE_ATTEMPT = "unresolved_create_attempt"
     ORDINARY_CREATE_WAVE_STOPPED = "ordinary_create_wave_stopped"
+    EXCHANGE_MARGIN_RETRY = "exchange_margin_retry"
     CANCEL_BATCH_CAPACITY = "cancel_batch_capacity"
     BATCH_CAPACITY = "batch_capacity"
     LENGTH_MISMATCH = "length_mismatch"
@@ -1671,6 +1672,9 @@ def _console_order_summary(event: LiveEvent) -> list[str]:
     error_type = _data_str(data, "error_type")
     if error_type:
         parts.append(f"error_type={error_type}")
+    retry_delay = _data_float(data, "retry_delay_seconds")
+    if retry_delay is not None:
+        parts.append(f"retry_delay={retry_delay}s")
     for key in ("error_status", "error_code", "error_label", "error_reason"):
         value = _data_str(data, key)
         if value:
@@ -1691,6 +1695,13 @@ def _console_create_filter_summary(event: LiveEvent) -> list[str]:
     symbols = _compact_csv(data.get("symbols"), limit=4)
     if symbols:
         parts.append(f"symbols={symbols}")
+    if event.reason_code == ReasonCodes.EXCHANGE_MARGIN_RETRY:
+        position_side = _data_str(data, "position_side")
+        if position_side:
+            parts.append(f"pside={position_side}")
+        retry_remaining = _data_number(data, "retry_remaining_seconds")
+        if retry_remaining is not None:
+            parts.append(f"retry_remaining={retry_remaining:.3g}s")
     raw_balance = _data_number(data, "raw_balance")
     quote = _data_str(data, "quote")
     if raw_balance is not None:

@@ -176,6 +176,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `exchange_config_refresh`
 - `exchange_config_refresh_failed`
 - `exchange_exception`
+- `exchange_margin_retry`
 - `exchange_time_sync`
 - `exchange_time_sync_unavailable`
 - `execution_loop_error_burst`

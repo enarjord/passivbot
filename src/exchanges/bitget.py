@@ -5,6 +5,7 @@ import json
 import os
 import re
 from copy import deepcopy
+from time import monotonic
 from typing import Dict, List, Tuple
 from bitget_normalization import (
     bitget_payload_context as _bitget_payload_context,
@@ -12,13 +13,19 @@ from bitget_normalization import (
     normalize_uta_fill_payload,
 )
 from utils import symbol_to_coin, utc_ms, ts_to_date
+from ccxt.base.errors import ExchangeError
 from config.access import require_live_value
+from live.diagnostic_safety import bounded_exchange_error_context
+from live.event_bus import ReasonCodes
+from live.executor import DeferredOrderCreation
 from passivbot_exceptions import FatalBotException
 import passivbot_rust as pbr
 
 calc_order_price_gap_fraction = pbr.calc_order_price_gap_fraction
 
 _CLASSIC_ACCOUNT_MODE_CODES = {"40084", "25245"}
+_UTA_INSUFFICIENT_MARGIN_CODE = "25203"
+_ENTRY_MARGIN_RETRY_SECONDS = 60.0
 
 
 def _bitget_error_code_from_exception(exc: Exception) -> str:
@@ -52,6 +59,59 @@ class BitgetBot(CCXTBot):
         # is_uta == False and every code path below behaves exactly as before.
         self.is_uta = False
         self._account_mode_detected = False
+        self._entry_margin_retry_after: dict[tuple[str, str], float] = {}
+
+    def _entry_margin_retry_scope(self, order: dict) -> tuple[str, str] | None:
+        direction = (order.get("side"), order.get("position_side"))
+        if (
+            self.is_uta
+            and order.get("reduce_only") is False
+            and direction in {("buy", "long"), ("sell", "short")}
+        ):
+            return order["symbol"], direction[1]
+        return None
+
+    def _entry_margin_deferral(
+        self, scope: tuple[str, str]
+    ) -> DeferredOrderCreation | None:
+        retry_after = self._entry_margin_retry_after.get(scope)
+        if retry_after is None:
+            return None
+        retry_remaining_seconds = retry_after - monotonic()
+        if retry_remaining_seconds > 0:
+            return DeferredOrderCreation(
+                ReasonCodes.EXCHANGE_MARGIN_RETRY,
+                retry_remaining_seconds=retry_remaining_seconds,
+            )
+        return None
+
+    def _create_order_deferral(self, order: dict) -> DeferredOrderCreation | None:
+        scope = self._entry_margin_retry_scope(order)
+        return self._entry_margin_deferral(scope) if scope is not None else None
+
+    async def execute_order(self, order: dict) -> dict | DeferredOrderCreation:
+        scope = self._entry_margin_retry_scope(order)
+        if scope is None:
+            return await super().execute_order(order)
+        if deferred := self._entry_margin_deferral(scope):
+            return deferred
+        self._entry_margin_retry_after.pop(scope, None)
+
+        try:
+            return await super().execute_order(order)
+        except ExchangeError as exc:
+            error = bounded_exchange_error_context(exc)
+            if error.get("error_code") != _UTA_INSUFFICIENT_MARGIN_CODE:
+                raise
+            # The guarded submission has already requested fresh account facts.
+            # Normalize the definitive rejection so it neither becomes an
+            # ambiguous create nor consumes the bot-wide error budget.
+            self._entry_margin_retry_after[scope] = monotonic() + _ENTRY_MARGIN_RETRY_SECONDS
+            return {
+                "status": "rejected",
+                "info": {"code": _UTA_INSUFFICIENT_MARGIN_CODE, "msg": "Insufficient margin"},
+                "_retry_delay_seconds": _ENTRY_MARGIN_RETRY_SECONDS,
+            }
 
     def create_ccxt_sessions(self):
         """Bitget: set Passivbot channel code for broker rebate attribution."""
