@@ -22,6 +22,9 @@ its own version heading. See [release status](docs/releases.md).
   for other orders. Structured execution events report the retry interval and the
   time remaining on skipped submissions.
 
+- Redact authorization and cookie values echoed without field separators in exchange errors.
+  Bound credential-label matching on long reasons and preserve common stock rejection messages.
+
 - Include sanitized Hyperliquid rejection reasons in live order events, including an
   unrecognized API wallet. Preserve useful rejection wording and redact authentication
   values and embedded request payloads.
