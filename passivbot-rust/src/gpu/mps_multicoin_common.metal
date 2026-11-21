@@ -347,21 +347,6 @@ inline void advance_realized_memory(
     memory.minute = minute;
 }
 
-// Read-only variant of advance_realized_memory: returns the memory folded to
-// `minute` while leaving the account untouched. The fold is the same fma loop
-// in the same order, so the result is bit-identical to the mutating advance.
-inline RealizedDecayMemory advance_realized_memory_by_value(
-    RealizedDecayMemory memory, long minute, thread bool& valid
-) {
-    if (!memory.enabled) return memory;
-    if (minute < memory.minute) { valid = false; return memory; }
-    for (long m = memory.minute; m < minute; ++m)
-        memory.drawdown = fma(memory.beta, memory.drawdown, 0.0f);
-    memory.minute = minute;
-    return memory;
-}
-
-
 inline void advance_joint_realized_memory(thread JointPortfolioAccount& account, int bar_index) {
     const long minute = long(bar_index) * long(account.realized_decay_interval_minutes);
     advance_realized_memory(account.unstuck_memory, minute, account.realized_decay_valid);
