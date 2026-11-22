@@ -207,9 +207,10 @@ def matches(scope, symbol, side):
 class OrdinaryPlanDeferred(RuntimeError):
     """Discard preparation when its current-account facts cannot be confirmed."""
 
-    def __init__(self, reason, missing=()):
+    def __init__(self, reason, missing=(), *, changed_account_facts=()):
         self.reason = str(reason)
         self.missing = tuple(missing)
+        self.changed_account_facts = tuple(changed_account_facts)
         super().__init__(self.reason)
 
 
@@ -650,7 +651,7 @@ class Owner:
                 return False
         return self._account_facts_mismatch_reason(wave) is None
 
-    def _defer_ordinary(self, reason, *, phase, missing=()):
+    def _defer_ordinary(self, reason, *, phase, missing=(), changed_account_facts=()):
         # This describes an existing discard, never an admission decision.
         from live.events import run_diagnostic_step
 
@@ -663,6 +664,8 @@ class Owner:
             invalid={"ordinary_plan": [{"reason": reason}]},
             epoch=bot._ensure_freshness_ledger().epoch,
         )
+        if changed_account_facts:
+            details["changed_account_facts"] = changed_account_facts
         run_diagnostic_step(
             "observe ordinary plan discard",
             lambda: bot._log_staged_execution_defer(details),
@@ -736,8 +739,10 @@ class Owner:
             return False
         if self._shutdown_requested():
             raise OrdinaryPlanDeferred("shutdown")
-        if not self.same_account_facts(prepared_account, self.account_facts()):
-            raise OrdinaryPlanDeferred("account_facts_changed_during_preparation")
+        if changed := self._ordinary_account_fact_changes(prepared_account):
+            raise OrdinaryPlanDeferred(
+                "account_facts_changed_during_preparation", changed_account_facts=changed
+            )
         if allow_new_refresh and self._current_account_unavailable(int(utc_ms())):
             from ccxt.base.errors import InvalidNonce, NetworkError
             from live.state_refresh import AuthoritativeSurfaceUnavailable
@@ -766,8 +771,10 @@ class Owner:
 
         if self._shutdown_requested():
             raise OrdinaryPlanDeferred("shutdown")
-        if not self.same_account_facts(prepared_account, self.account_facts()):
-            raise OrdinaryPlanDeferred("account_facts_changed_during_preparation")
+        if changed := self._ordinary_account_fact_changes(prepared_account):
+            raise OrdinaryPlanDeferred(
+                "account_facts_changed_during_preparation", changed_account_facts=changed
+            )
         missing = self._current_account_unavailable(int(utc_ms()))
         if missing:
             raise OrdinaryPlanDeferred("current_account_inputs_unavailable", missing)
@@ -1189,15 +1196,17 @@ class Owner:
             self.required_fill_facts(),
         )
 
-    @staticmethod
-    def same_account_facts(before, after):
-        # Observation timestamps may advance on a confirming unchanged read.
-        # Changing facts or invalidation still void the entire prepared universe.
-        return (
-            before[0].payload == after[0].payload
-            and before[0].generation == after[0].generation
-            and before[1:] == after[1:]
+    def _ordinary_account_fact_changes(self, before):
+        after = self.account_facts()
+        # Confirming reads can advance timestamps without changing the facts.
+        comparisons = (
+            ("positions", before[0].payload, after[0].payload),
+            ("account_generation", before[0].generation, after[0].generation),
+            ("open_orders", before[1], after[1]),
+            ("strategy_balance", before[2], after[2]),
+            ("required_fills", before[3], after[3]),
         )
+        return tuple(fact for fact, previous, current in comparisons if previous != current)
 
     def ordinary_receipts(self):
         # Quotes acquired by preparation are deliberately excluded. HSL candle
@@ -1244,14 +1253,18 @@ class Owner:
     async def _prepare_ordinary_universe(self, account):
         bot = self.bot
         await bot.prepare_planning_universe()
-        if not self.same_account_facts(account, self.account_facts()):
-            self._defer_ordinary("account_facts_changed", phase="preparation")
+        if changed := self._ordinary_account_fact_changes(account):
+            self._defer_ordinary(
+                "account_facts_changed", phase="preparation", changed_account_facts=changed
+            )
             return None
         if not await bot.refresh_market_state_if_needed(trailing_acquisition_only=True):
             self._defer_ordinary("market_inputs_unavailable", phase="preparation")
             return None
-        if not self.same_account_facts(account, self.account_facts()):
-            self._defer_ordinary("account_facts_changed", phase="preparation")
+        if changed := self._ordinary_account_fact_changes(account):
+            self._defer_ordinary(
+                "account_facts_changed", phase="preparation", changed_account_facts=changed
+            )
             return None
         ready, details = bot._staged_execution_ready_state(
             include_market_snapshot=False, context="hsl ordinary planning"
@@ -1271,7 +1284,10 @@ class Owner:
         try:
             cancels, creates = await bot.calc_orders_to_cancel_and_create()
         except OrdinaryPlanDeferred as exc:
-            self._defer_ordinary(exc.reason, phase="consumption", missing=exc.missing)
+            self._defer_ordinary(
+                exc.reason, phase="consumption", missing=exc.missing,
+                changed_account_facts=exc.changed_account_facts,
+            )
             return None
         return self._freeze_ordinary_plan(account, initial_receipts, cancels, creates)
 
@@ -1298,8 +1314,10 @@ class Owner:
             await self.wait_for_ordinary_fill_refresh()
             anchors = bot._get_last_position_change_anchors()
             quotes = await self._acquire_ordinary_quotes(symbols)
-            if not self.same_account_facts(account, self.account_facts()):
-                raise OrdinaryPlanDeferred("account_facts_changed_during_preparation")
+            if changed := self._ordinary_account_fact_changes(account):
+                raise OrdinaryPlanDeferred(
+                    "account_facts_changed_during_preparation", changed_account_facts=changed
+                )
             return _OrdinaryPreparation(account, strategy, strategy_minute, anchors, quotes)
         except Exception:
             reconciler.record_ordinary_planning_failure(bot)
@@ -1442,8 +1460,10 @@ class Owner:
         from utils import utc_ms
 
         bot = self.bot
-        if not self.same_account_facts(account, self.account_facts()):
-            self._defer_ordinary("account_facts_changed", phase="after_reconciliation")
+        if changed := self._ordinary_account_fact_changes(account):
+            self._defer_ordinary(
+                "account_facts_changed", phase="after_reconciliation", changed_account_facts=changed
+            )
             return None
         receipts = bot._hsl_planning_wave.ordinary_receipts
         if not isinstance(receipts, OrdinaryReceipts):
@@ -1583,7 +1603,10 @@ class Owner:
         try:
             return task.result(), elapsed_ms
         except OrdinaryPlanDeferred as exc:
-            self._defer_ordinary(exc.reason, phase="preparation", missing=exc.missing)
+            self._defer_ordinary(
+                exc.reason, phase="preparation", missing=exc.missing,
+                changed_account_facts=exc.changed_account_facts,
+            )
             return None, elapsed_ms
         except MarketSnapshotUnavailable:
             self._defer_ordinary(
@@ -1846,7 +1869,10 @@ class Owner:
                             and preparation.strategy.allow_quote_retry
                         ):
                             self._ordinary_quote_retry = preparation
-                        self._defer_ordinary(exc.reason, phase="consumption", missing=exc.missing)
+                        self._defer_ordinary(
+                            exc.reason, phase="consumption", missing=exc.missing,
+                            changed_account_facts=exc.changed_account_facts,
+                        )
                     except RuntimeError as exc:
                         handled, details = bot._handle_staged_execution_precondition_error(exc)
                         if not handled:
