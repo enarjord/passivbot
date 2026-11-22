@@ -12,6 +12,8 @@ from candlestick_manager import OhlcvFetchError
 from config.entry_cooldown import uses_adverse_rms
 from live.console_health import token
 from live.diagnostic_safety import bounded_exception_type
+from live.event_bus import EventTags, EventTypes, emit_event, format_rms_read_failed_console
+from live.events import run_diagnostic_step
 
 
 RMS_CACHE_KIND = "signed_rms_directionality"
@@ -70,24 +72,33 @@ def adverse_enabled(bot, side, symbol):
 
 def _log_read_failure(bot, symbol, exc):
     error_type = bounded_exception_type(exc)
-    logging.debug(
-        "[ema] RMS directionality read failed | symbol=%s error_type=%s",
-        token(symbol, 32), error_type,
-    )
     states = getattr(bot, "_rms_read_warning_state", None)
     if states is None:
         states = {}
         bot._rms_read_warning_state = states
     now = time.monotonic()
     last, repeats = states.get(error_type, (None, 0))
-    if last is not None and now - last < 300:
-        states[error_type] = (last, repeats + 1)
-        return
-    logging.warning(
-        "[ema] RMS directionality unavailable | sample=%s error_type=%s failures=%d",
-        token(symbol, 32), error_type, repeats + 1,
-    )
-    states[error_type] = (now, 0)
+    show_warning = last is None or now - last >= 300
+    states[error_type] = (now, 0) if show_warning else (last, min(repeats + 1, 999_998))
+    data = {
+        "sample": token(symbol, 32),
+        "error_type": error_type,
+        "failures": repeats + 1 if show_warning else 1,
+    }
+    event = emit_event(bot, {
+        "event_type": EventTypes.EMA_RMS_READ_FAILED,
+        "level": "warning" if show_warning else "debug",
+        "component": "ema.rms",
+        "tags": [EventTags.EMA, EventTags.UNAVAILABLE],
+        "status": "degraded",
+        "data": data,
+    })
+    console = getattr(bot, "_live_event_console_available", None)
+    if event is None or not (callable(console) and console()):
+        logging.log(
+            logging.WARNING if show_warning else logging.DEBUG,
+            format_rms_read_failed_console(data),
+        )
 
 
 async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
@@ -159,7 +170,10 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
                 logging.debug("[ema] RMS directionality retrying local candles | symbol=%s", symbol)
                 rows = await bot.cm.get_candles(symbol, allow_remote_fetch=False, **read_args)
         except (ccxt.NetworkError, OhlcvFetchError, OSError, asyncio.TimeoutError) as exc:
-            _log_read_failure(bot, symbol, exc)
+            run_diagnostic_step(
+                "record RMS candle read failure",
+                lambda: _log_read_failure(bot, symbol, exc),
+            )
             continue
 
         # Find the latest complete segment for each span. A partial segment

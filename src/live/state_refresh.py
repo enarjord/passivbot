@@ -731,6 +731,9 @@ async def log_staged_refresh_progress_until(
             )
             repeated = pending in logged_pending
             logged_pending.add(pending)
+            level, repeats = _refresh_progress_log_level(
+                bot, plan, pending, now, repeated=repeated
+            )
             event_emitters.emit_state_refresh_progress_event(
                 bot,
                 plan=plan,
@@ -744,9 +747,7 @@ async def log_staged_refresh_progress_until(
                 threshold_s=threshold_s,
                 repeated=repeated,
                 level="debug" if repeated else "info",
-            )
-            level, repeats = _refresh_progress_log_level(
-                bot, plan, pending, now, repeated=repeated
+                suppressed_refreshes=repeats,
             )
             logging.log(
                 level,

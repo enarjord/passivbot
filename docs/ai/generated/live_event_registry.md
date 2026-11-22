@@ -28,6 +28,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `ema.bundle.completed`
 - `ema.bundle.started`
 - `ema.fallback_used`
+- `ema.rms_read_failed`
 - `ema.unavailable`
 - `entry.initial_eligibility`
 - `entry.min_effective_cost_blocked`

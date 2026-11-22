@@ -5,9 +5,6 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Coalesce repeated live RMS candle-read warnings and staged account-refresh
-  progress messages while retaining detailed diagnostics.
-
 - Update the Trailing Martingale starter universe and suite subsets. Add ETC and
   TRX and remove ATOM, BTW, CC, KAS, and RENDER. Resolve verified TRX asset age
   for Binance and Bybit perpetuals.
@@ -15,6 +12,10 @@ its own version heading. See [release status](docs/releases.md).
 - Recognize reviewed Hyperliquid crypto assets when CCXT returns numeric market
   IDs. Validate the matching instrument metadata before resolving coin-age
   evidence, including offline, so positive minimum-age filters can admit them.
+
+- Coalesce repeated live RMS candle-read warnings and staged account-refresh
+  progress messages while retaining detailed diagnostics. Use a compact warning
+  for HSL input expiry without an additional unavailable or RED condition.
 
 - Label pre-submit live order summaries as create candidates, including market orders.
   Use execution outcomes to see which orders were acknowledged, skipped, or deferred.
