@@ -64,6 +64,9 @@ its own version heading. See [release status](docs/releases.md).
 - Retry a KuCoin Futures private read once with a fresh signature when KuCoin
   rejects its request timestamp. Persistent timestamp errors still surface to the bot.
 
+- Verify KuCoin Futures hedge mode with a read before changing it. Skip the
+  configuration write when hedge mode is already active and verify any switch.
+
 - Buffer live monitor messages during connection replay so events published while
   initial data is being sent reach the connected client.
 

@@ -1,6 +1,7 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from itertools import count
 import logging
 import math
 import socket
@@ -24,7 +25,7 @@ from market_snapshot import MarketSnapshotProvider
     ids=["rest", "pro"],
 )
 def kucoin_transport(request, monkeypatch):
-    def build(*response_codes):
+    def build(*responses):
         exchange = request.param({
             "apiKey": "test-key",
             "secret": "test-secret",
@@ -37,14 +38,18 @@ def kucoin_transport(request, monkeypatch):
         })
         requests = []
         throttles = []
-        codes = iter(response_codes)
-        timestamps = iter((1_700_000_000_000, 1_700_000_006_000))
+        responses = iter(responses)
+        timestamps = count(1_700_000_000_000, 6_000)
 
         @asynccontextmanager
         async def respond(url, *, headers, **kwargs):
             requests.append((url, headers))
-            code = next(codes)
-            payload = {"code": code, "data": []} if code == "200000" else {"code": code}
+            response = next(responses)
+            if isinstance(response, dict):
+                payload = response
+            else:
+                payload = {"code": response, "data": []} if response == "200000" else {"code": response}
+            code = payload["code"]
 
             async def text(**_kwargs):
                 return json.dumps(payload)
@@ -124,11 +129,16 @@ class DummyTask:
 class DummyCCA:
     def __init__(self):
         self.position_mode_calls = []
+        self.position_mode = 0
         self.margin_calls = []
         self.leverage_calls = []
 
+    async def fetch_position_mode(self):
+        return {"info": {"positionMode": self.position_mode}, "hedged": self.position_mode == 1}
+
     async def set_position_mode(self, hedged):
         self.position_mode_calls.append(hedged)
+        self.position_mode = int(hedged)
         return {"code": "200000", "hedged": hedged, "apiKey": "SECRET"}
 
     async def set_margin_mode(self, **params):
@@ -376,7 +386,7 @@ async def test_kucoin_native_book_is_valid_market_snapshot():
 
 
 @pytest.mark.asyncio
-async def test_update_exchange_config_sets_position_mode_when_supported(caplog):
+async def test_update_exchange_config_switches_confirmed_one_way_mode(caplog):
     caplog.set_level(logging.INFO)
     bot = make_bot()
     await bot.update_exchange_config()
@@ -386,13 +396,62 @@ async def test_update_exchange_config_sets_position_mode_when_supported(caplog):
 
 
 @pytest.mark.asyncio
-async def test_update_exchange_config_handles_missing_position_mode(caplog):
-    caplog.set_level(logging.INFO)
+async def test_update_exchange_config_retries_position_mode_read_without_writing(kucoin_transport):
+    exchange, requests, throttles = kucoin_transport(
+        "400002", {"code": "200000", "data": {"positionMode": 1}},
+    )
     bot = make_bot()
-    bot.cca = types.SimpleNamespace()
-    with pytest.raises(NotImplementedError, match="set_position_mode not supported"):
+    bot.cca = exchange
+
+    await bot.update_exchange_config()
+
+    assert [url.path for url, _ in requests] == ["/api/v2/position/getPositionMode"] * 2
+    assert len(throttles) == 2
+    (_, first_headers), (_, second_headers) = requests
+    assert second_headers["KC-API-SIGN"] != first_headers["KC-API-SIGN"]
+    assert second_headers["KC-API-PARTNER-SIGN"] != first_headers["KC-API-PARTNER-SIGN"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unknown_mode", [None, False, 1.0, 2, "unknown"])
+async def test_update_exchange_config_rejects_unknown_position_mode(unknown_mode):
+    bot = make_bot()
+    bot.cca.position_mode = unknown_mode
+
+    with pytest.raises(ValueError, match="position mode response"):
         await bot.update_exchange_config()
-    assert "set_position_mode hedged=True not applied" in caplog.text
+
+    assert bot.cca.position_mode_calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_exchange_config_requires_fresh_confirmation_after_switch(kucoin_transport):
+    one_way = {"code": "200000", "data": {"positionMode": 0}}
+    exchange, requests, _ = kucoin_transport(one_way, "200000", one_way)
+    exchange.markets = {}
+    bot = make_bot()
+    bot.cca = exchange
+
+    with pytest.raises(RuntimeError, match="did not confirm hedge position mode"):
+        await bot.update_exchange_config()
+
+    assert [url.path for url, _ in requests] == [
+        "/api/v2/position/getPositionMode",
+        "/api/v2/position/switchPositionMode",
+        "/api/v2/position/getPositionMode",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_exchange_config_propagates_position_mode_read_failure(kucoin_transport):
+    exchange, requests, _ = kucoin_transport("400002", "400002")
+    bot = make_bot()
+    bot.cca = exchange
+
+    with pytest.raises(InvalidNonce):
+        await bot.update_exchange_config()
+
+    assert [url.path for url, _ in requests] == ["/api/v2/position/getPositionMode"] * 2
 
 
 def test_determine_pos_side_prefers_explicit_payload_over_existing_long_position():
