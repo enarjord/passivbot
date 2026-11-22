@@ -4,6 +4,7 @@ from .gpu import GPU_SCREENING_DEFAULTS, GPU_TUNING_DEFAULT
 from .prefilter import PREFILTER_DEFAULTS
 from .optimize_bounds import get_optimize_bounds_defaults
 from .bot_defaults import get_common_bot_defaults
+from .risk_memory import DEFAULT_REALIZED_LOSS_MEMORY_EMA_SPAN_MINUTES
 from .strategy_spec import get_strategy_spec, get_supported_strategy_kinds
 
 CONFIG_SCHEMA_VERSION = "v9.0.0"
@@ -119,12 +120,13 @@ def _build_template_config():
                         "market_order_near_touch_fraction": 0.001,
                     },
                     "warmup": {"activation_span_fraction": 0.3, "max_minutes": None},
-                    "hsl": {"scope": "coin"},
-                    "loss_gate": {
-                        "max_drawdown_fraction": 1.0,
-                        "memory_ema_span_minutes": 43200.0,
+                    "risk": {
+                        "hsl": {"scope": "coin"},
+                        "loss_realization": {
+                            "memory_ema_span_minutes": DEFAULT_REALIZED_LOSS_MEMORY_EMA_SPAN_MINUTES,
+                            "loss_gate": {"enabled": False},
+                        },
                     },
-                    "unstuck": {"memory_ema_span_minutes": 85511.137},
                 },
                 "global": get_common_bot_defaults(),
                 "long": _side_bot_prototype(),
@@ -350,10 +352,10 @@ def get_starter_config():
     kind = result["bot"]["portfolio"]["strategy_kind"]
     common_bounds = get_optimize_bounds_defaults()["long"]
     common_bounds["strategy"] = {kind: common_bounds["strategy"][kind]}
-    hsl_memory = result["bot"]["global"]["hsl"]["memory_ema_span_minutes"]
-    common_bounds["hsl"]["memory_ema_span_minutes"] = [hsl_memory, hsl_memory]
+    hsl_memory = result["bot"]["global"]["risk"]["hsl"]["memory_ema_span_minutes"]
+    common_bounds["risk"]["hsl"]["memory_ema_span_minutes"] = [hsl_memory, hsl_memory]
     result["optimize"]["bounds"] = {
         "global": common_bounds,
-        "portfolio": {"unstuck": {"memory_ema_span_minutes": [10080, 129600]}},
+        "portfolio": {"risk": {"loss_realization": {"memory_ema_span_minutes": [10080, 129600]}}},
     }
     return result

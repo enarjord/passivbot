@@ -12,7 +12,7 @@ from optimization.gpu.datasets import PreparedGpuDataset
 from optimization.native_planning import NativeCandidatePlanner, ScenarioBinding
 from optimize import Evaluator, SuiteEvaluator, config_to_individual
 from shared_arrays import SharedArraySpec
-from test_native_planning import set_value
+from test_native_planning import MEMORY_KEY, MEMORY_PATH, set_value
 from tools.gpu_parity import build_parser, fixture_inputs, DEFAULT_METRICS
 
 
@@ -57,7 +57,7 @@ def projection_inputs(*, strategy="ema_anchor", suite=False, fixed=False, mirror
         for side in ("long", "short"):
             config["bot"][side]["risk"]["max_positions"] = max_positions
     config["optimize"]["bounds"] = {
-        "portfolio": {"unstuck": {"memory_ema_span_minutes": [1000.0, 50000.0]}}
+        "portfolio": {"risk": {"loss_realization": {"memory_ema_span_minutes": [1000.0, 50000.0]}}}
     }
     for side in ("long", "short"):
         config["optimize"]["bounds"][side] = {"risk": {
@@ -70,7 +70,7 @@ def projection_inputs(*, strategy="ema_anchor", suite=False, fixed=False, mirror
     ]
     config["optimize"]["limits"] = []
     if fixed:
-        config["optimize"]["fixed_runtime_overrides"] = {"bot.portfolio.unstuck.memory_ema_span_minutes": 4096.5}
+        config["optimize"]["fixed_runtime_overrides"] = {MEMORY_PATH: 4096.5}
     if mirror:
         config["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
     columns = config["backtest"].pop("coins")
@@ -80,7 +80,7 @@ def projection_inputs(*, strategy="ema_anchor", suite=False, fixed=False, mirror
     base = Evaluator({"binance": spec}, {}, {"binance": markets}, config)
     contexts = [SimpleNamespace(
         label=label, exchanges=["binance"], config=deepcopy(base.config), msss={"binance": markets},
-        overrides={"bot.portfolio.unstuck.memory_ema_span_minutes": 2048.5} if label == "stress" else {},
+        overrides={MEMORY_PATH: 2048.5} if label == "stress" else {},
     ) for label in ("base", "stress")]
     evaluator = SuiteEvaluator(base, contexts, {"default": "mean"}) if suite else base
     bindings = []
@@ -150,9 +150,9 @@ def test_planner_projection_reuses_only_validated_static_inputs(monkeypatch, sui
         return cleaner(config)
     monkeypatch.setattr(planning, "clean_config", observed)
     planner, vector = projection_inputs(strategy=strategy, suite=suite, fixed=fixed, mirror=mirror)
-    first = planner.prepare("first", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 1000.0))
+    first = planner.prepare("first", set_value(planner, vector, MEMORY_PATH, 1000.0))
     calls.clear()
-    second = planner.prepare("second", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
+    second = planner.prepare("second", set_value(planner, vector, MEMORY_PATH, 50000.0))
     assert not calls
     assert [request.dataset_id for request in first.requests] == [request.dataset_id for request in second.requests]
     assert len(planner._execution_projections) == (2 if suite else 1)
@@ -187,7 +187,7 @@ def test_multicoin_and_ineligible_mixed_pairs_never_skip_cleaning(monkeypatch, v
     planner.prepare("warmup", vector)
     calls.clear()
     for candidate, value in (("low", 1000.0), ("high", 50000.0)):
-        planner.prepare(candidate, set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", value))
+        planner.prepare(candidate, set_value(planner, vector, MEMORY_PATH, value))
     assert len(calls) == 2
     assert planner._projection_eligible == {("base", "binance"): False}
     assert planner._execution_projections == {}
@@ -203,7 +203,7 @@ def test_max_multicoin_projection_matches_full_candidate_preparation(monkeypatch
     assert len(first.requests) == len(planner._execution_projections) == 2
     assert all(len(binding.dataset.coin_indices) == 2 for binding in planner.bindings)
 
-    second = set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0)
+    second = set_value(planner, vector, MEMORY_PATH, 50000.0)
     expected = []
     with monkeypatch.context() as patch:
         patch.setattr(planner, "_projection_eligible", dict.fromkeys(planner._projection_eligible, False))
@@ -224,11 +224,36 @@ def test_max_multicoin_projection_matches_full_candidate_preparation(monkeypatch
     )
     pair = ("base", "binance")
     assert planner._execution_projections[pair].matches(effective)
-    effective["coin_overrides"] = {"COIN00": {"bot": {"long": {"unstuck": {"close_fraction": 0.03}}}}}
+    effective["coin_overrides"] = {
+        "COIN00": {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.03}}}}},
+    }
     assert not planner._execution_projections[pair].matches(effective)
     full_key = planning.execution_key(effective)
     assert full_key != planner._execution_projections[pair].key
     assert planner._execution_key(pair, effective) == full_key
+
+
+def test_coupled_coin_unstuck_spans_do_not_change_dataset_identity():
+    from optimizer_overrides import apply_coupled_unstuck_ema_spans
+
+    planner, _ = projection_inputs()
+    config = deepcopy(planner.base.config)
+    config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
+    coin = config["backtest"]["coins"]["binance"][0]
+    config["coin_overrides"] = {
+        coin: {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.03}}}}},
+    }
+    apply_coupled_unstuck_ema_spans(config)
+    first = planning.execution_key(config)
+
+    span = "ema_span_0_minutes"
+    config["bot"]["long"]["strategy"]["ema_anchor"][span] += 1.0
+    apply_coupled_unstuck_ema_spans(config)
+    unstuck = config["coin_overrides"][coin]["bot"]["long"]["risk"]["unstuck"]
+    assert unstuck[span] == config["bot"]["long"]["strategy"]["ema_anchor"][span]
+    assert planning.execution_key(config) == first
+    unstuck["loss_allowance_fraction"] = 0.04
+    assert planning.execution_key(config) != first
 
 
 @pytest.mark.parametrize("indices,eligible", [((2,), True), ((0, 2), False)])
@@ -247,14 +272,14 @@ def test_projection_uses_selected_indices_instead_of_source_column_count(monkeyp
     monkeypatch.setattr(planning, "clean_config", observed)
     planner.prepare("warmup", vector)
     calls.clear()
-    low = planner.prepare("low", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 1000.0))
-    high = planner.prepare("high", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
+    low = planner.prepare("low", set_value(planner, vector, MEMORY_PATH, 1000.0))
+    high = planner.prepare("high", set_value(planner, vector, MEMORY_PATH, 50000.0))
     assert len(calls) == (0 if eligible else 2)
     assert planner._projection_eligible == {("base", "binance"): eligible}
     assert len(planner._execution_projections) == int(eligible)
     assert low.effective_key != high.effective_key
     assert low.requests[0].dataset_id == high.requests[0].dataset_id
-    assert [plan.requests[0].parameters["unstuck_memory_ema_span_minutes"]
+    assert [plan.requests[0].parameters[MEMORY_KEY]
             for plan in (low, high)] == [1000.0, 50000.0]
 
 
@@ -307,7 +332,7 @@ def test_single_coin_variants_qualify_across_strategies(monkeypatch, first):
     assert [len(binding.dataset.coin_indices) for binding in planner.bindings] == [1, 1]
     planner.prepare("warmup", vector)
     monkeypatch.setattr(planning, "execution_key", lambda _config: pytest.fail("qualified warm pair was cleaned again"))
-    planner.prepare("next", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
+    planner.prepare("next", set_value(planner, vector, MEMORY_PATH, 50000.0))
     assert planner._projection_eligible == {("base", "binance"): True}
     assert len(planner._execution_projections) == 1
 
@@ -322,7 +347,7 @@ def test_single_coin_pair_qualifies_with_multiple_execution_variants(monkeypatch
     planner = NativeCandidatePlanner(planner.scorer.evaluator, [*planner.bindings, variant])
     planner.prepare("warmup", vector)
     monkeypatch.setattr(planning, "execution_key", lambda _config: pytest.fail("eligible warm single-coin pair was cleaned again"))
-    planner.prepare("next", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
+    planner.prepare("next", set_value(planner, vector, MEMORY_PATH, 50000.0))
     assert planner._projection_eligible == {("base", "binance"): True}
     assert len(planner._execution_projections) == 1
 
@@ -340,7 +365,7 @@ def test_scenario_pairs_decide_eligibility_independently(monkeypatch, strategy):
     require_eligible_projection_calls(monkeypatch, planner)
     planner.prepare("warmup", vector)
     calls.clear()
-    planner.prepare("next", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
+    planner.prepare("next", set_value(planner, vector, MEMORY_PATH, 50000.0))
     assert len(calls) == 1
     assert planner._projection_eligible == {("base", "binance"): True, ("stress", "binance"): False}
     assert set(planner._execution_projections) == {("base", "binance")}
@@ -468,7 +493,7 @@ def test_changed_cleaner_validation_is_not_skipped(change):
     elif change == "retired":
         changed["live"]["hsl_engine"] = "legacy"
     elif change == "portfolio_bounds":
-        changed["optimize"]["bounds"].setdefault("portfolio", {})["hsl"] = []
+        changed["optimize"]["bounds"].setdefault("portfolio", {}).setdefault("risk", {})["hsl"] = []
     elif change == "weights":
         changed["bot"]["long"]["forager"]["score_weights"]["volume"] = -0.1
     else:
@@ -495,7 +520,10 @@ def test_dynamic_side_enablement_still_selects_a_distinct_static_contract(value)
 @pytest.mark.parametrize("path,value", [
     ("backtest.starting_balance", 2000.0),
     ('bot.portfolio.execution.market_orders_allowed', True),
-    ("bot.portfolio.loss_gate.max_drawdown_fraction", 0.5),
+    (
+        "bot.portfolio.risk.loss_realization.loss_gate",
+        {"enabled": True, "max_realized_drawdown_fraction": 0.5},
+    ),
 ])
 def test_post_construction_static_policies_still_require_a_compatible_dataset(path, value):
     planner, vector = projection_inputs()
@@ -573,14 +601,14 @@ def test_raw_activation_snapshot_does_not_disable_planner_projection(monkeypatch
         return cleaner(config)
 
     monkeypatch.setattr(planning, "clean_config", observed)
-    first = planner.prepare("first", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 1000.0))
+    first = planner.prepare("first", set_value(planner, vector, MEMORY_PATH, 1000.0))
     pair = next(iter(planner._variants))
     projection = planner._execution_projections[pair]
     assert projection.guard is not None
     calls.clear()
     # Snapshot provenance remains owned by the config, outside static identity.
     planner.base.config["_raw_effective"]["bot"]._activation_source = ActivationSource(False, True)
-    second = planner.prepare("second", set_value(planner, vector, "bot.portfolio.unstuck.memory_ema_span_minutes", 50000.0))
+    second = planner.prepare("second", set_value(planner, vector, MEMORY_PATH, 50000.0))
     assert not calls
     assert first.effective_key != second.effective_key
     assert projection.matches(second.record_config)

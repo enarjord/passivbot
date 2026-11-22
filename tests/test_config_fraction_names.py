@@ -12,6 +12,7 @@ from config.param_paths import resolve_optimizer_key_path
 from config.migrations.released_public_names import PUBLIC_PATH_RENAMES, SHARED_SIDE_PATH_RENAMES
 from config.schema import get_template_config, get_expanded_config_prototype
 from config.migrations.released_v8_strategy import RELEASED_V8_STRATEGY_PATH_RENAMES
+from config.migrations.released_v8_risk import released_risk_path
 from released_v8_fixtures import released_v8_policy
 from tools.migrate_config_v9 import migrate
 
@@ -29,8 +30,9 @@ PUBLIC_PAIRS = list(PUBLIC_PATH_RENAMES.items()) + [
     (("bot", "long", "strategy", kind, *old), ("bot", "long", "strategy", kind, *new))
     for kind, fields in RELEASED_V8_STRATEGY_PATH_RENAMES.items() for old, new in fields.items()
 ]
-PUBLIC_PAIRS = [(old, new) for old, new in PUBLIC_PAIRS
-                if new[-1].endswith(("_fraction", "_margin"))]
+PUBLIC_PAIRS = [(old, tuple(released_risk_path(".".join(new)).split("."))) for old, new in PUBLIC_PAIRS
+                if new[-1].endswith(("_fraction", "_margin"))
+                and new[-1] != "close_fraction" and new[:3] != ("bot", "portfolio", "loss_gate")]
 
 
 @pytest.mark.parametrize("old,new", PUBLIC_PAIRS, ids=lambda path: ".".join(path))
@@ -48,7 +50,7 @@ def test_old_development_spellings_are_not_normal_loader_aliases(old, new):
 def test_nondefault_fraction_bounds_keep_stable_native_optimizer_ids(kind):
     config = get_template_config()
     config["bot"]["portfolio"]["strategy_kind"] = kind
-    keys = ["long_unstuck_close_fraction", "long_unstuck_loss_allowance_fraction", "long_risk_we_excess_allowance_fraction"]
+    keys = ["long_unstuck_loss_allowance_fraction", "long_unstuck_ema_distance_fraction", "long_risk_we_excess_allowance_fraction"]
     keys += (["long_entry_initial_qty_fraction", "long_entry_initial_ema_distance_fraction", "long_close_qty_fraction"]
              if kind == "trailing_martingale" else ["long_base_qty_fraction", "long_offset_fraction"])
     bounds = {}
@@ -107,9 +109,9 @@ def test_nondefault_live_fee_and_backtest_policy_lower_without_rescaling():
 
 
 @pytest.mark.parametrize("selector,expected", [
-    ("close_pct", {"long_unstuck_close_fraction", "short_unstuck_close_fraction"}),
-    ("long.unstuck.close_pct", {"long_unstuck_close_fraction"}),
-    ("bot.*.unstuck.close_pct", {"long_unstuck_close_fraction", "short_unstuck_close_fraction"}),
+    ("close_pct", set()),
+    ("long.unstuck.close_pct", set()),
+    ("bot.*.unstuck.close_pct", set()),
     ("initial_qty_pct", {"long_entry_initial_qty_fraction", "short_entry_initial_qty_fraction"}),
     ("strategy.trailing_martingale.close.qty_pct", {"long_close_qty_fraction", "short_close_qty_fraction"}),
 ])
@@ -142,22 +144,17 @@ def test_resume_detects_changed_canonical_execution_assumptions(field):
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("close,allowance", [(None, None), (0.0, 0.0), (0.117, 0.0031)])
-def test_trailing_inspection_reads_authored_unstuck_fractions(side, close, allowance):
+@pytest.mark.parametrize("allowance", [0.0, 0.0031])
+def test_trailing_inspection_reads_authored_unstuck_fractions(side, allowance):
     from tools.trailing_inspect import _extract_side_context
 
     source = get_expanded_config_prototype()
-    for name, value in (("close_fraction", close), ("loss_allowance_fraction", allowance)):
-        if value is None:
-            source["bot"][side]["unstuck"].pop(name)
-        else:
-            source["bot"][side]["unstuck"][name] = value
+    source["bot"][side]["risk"]["unstuck"]["loss_allowance_fraction"] = allowance
     original = deepcopy(source)
     report = _extract_side_context(source, side)
-    assert report["unstuck_close_fraction"] == (close or 0.0)
-    assert report["unstuck_loss_allowance_fraction"] == (allowance or 0.0)
-    for old in ("unstuck_close_pct", "unstuck_loss_allowance_pct", "entry_initial_qty_pct",
-                "entry_initial_ema_dist", "close_qty_pct"):
+    assert report["unstuck_loss_allowance_fraction"] == allowance
+    for old in ("unstuck_close_pct", "unstuck_close_fraction", "unstuck_loss_allowance_pct",
+                "entry_initial_qty_pct", "entry_initial_ema_dist", "close_qty_pct"):
         assert old not in report
     entry = source["bot"][side]["strategy"]["trailing_martingale"]["entry"]
     assert report["entry_initial_qty_fraction"] == entry["initial_qty_fraction"]
@@ -204,13 +201,9 @@ def test_released_conversion_projects_root_bounds_pins_scenarios_and_file_preced
     original = deepcopy(source)
     result = migrate(source, base_config_path=str(tmp_path / "input.json"), memory_span_minutes=720.0)
     config = result.config
-    assert config["bot"]["long"]["unstuck"]["close_fraction"] == 0.071
-    assert config["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["close_fraction"] == 0.121
-    assert config["optimize"]["fixed_runtime_overrides"]["bot.long.unstuck.close_fraction"] == 0.081
-    assert config["backtest"]["scenarios"][0]["overrides"]["bot.long.unstuck.close_fraction"] == 0.091
+    assert "close_fraction" not in json.dumps(config)
     flat = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind=kind)
-    assert "long_unstuck_close_fraction" in flat
-    assert any("close_pct" in change["path"] and "close_fraction" in str(change["new"])
-               for change in result.changes)
+    assert "long_unstuck_close_fraction" not in flat
+    assert any("retired quantity sizing" in change["reason"] for change in result.changes)
     prepare_config(config, verbose=False)
     assert source == original

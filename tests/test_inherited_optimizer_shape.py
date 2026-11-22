@@ -14,9 +14,9 @@ def real_prepared(*, short_enabled=True, short_pin=False):
     raw = {"portfolio": deepcopy(config["bot"]["portfolio"]), "long": {"enabled": True},
            "short": {"enabled": short_enabled}}
     if short_pin:
-        raw["short"]["unstuck"] = {"close_fraction": 0.041}
+        raw["short"]["risk"] = {"unstuck": {"loss_allowance_fraction": 0.041}}
     install_bot_policy(config, resolve_bot_policy(raw, real_catalog()))
-    config["optimize"]["bounds"] = {"global": {"unstuck": {"close_fraction": [0.02, 0.06]}}}
+    config["optimize"]["bounds"] = {"global": {"risk": {"unstuck": {"loss_allowance_fraction": [0.02, 0.06]}}}}
     prepare_bound_plan(config)
     return config
 
@@ -29,29 +29,29 @@ def test_shape_and_adapter_use_one_common_coordinate_without_losing_side_pins(sh
     config = real_prepared(short_enabled=short_enabled, short_pin=short_pin)
     shape = build_optimization_shape(config)
     selected = [(key, path, bound) for (key, path), bound in zip(shape.key_paths, shape.bounds)
-                if path[-2:] == ("unstuck", "close_fraction")]
-    assert selected[0][0] == "bot.global.unstuck.close_fraction"
-    assert selected[0][1] == ("bot", "global", "unstuck", "close_fraction")
+                if path[-3:] == ("risk", "unstuck", "loss_allowance_fraction")]
+    assert selected[0][0] == "bot.global.risk.unstuck.loss_allowance_fraction"
+    assert selected[0][1] == ("bot", "global", "risk", "unstuck", "loss_allowance_fraction")
     assert selected[0][2].low == 0.02 and selected[0][2].high == 0.06
     assert len(selected) == (2 if short_pin else 1)
     if short_pin:
-        assert selected[1][0] == "bot.short.unstuck.close_fraction"
+        assert selected[1][0] == "bot.short.risk.unstuck.loss_allowance_fraction"
         assert selected[1][2].low == selected[1][2].high == 0.041
     assert shape.key_paths == tuple(get_optimization_key_paths(config))
-    assert resolve_optimization_bound_path(config, "long_unstuck_close_fraction") == selected[0][1]
+    assert resolve_optimization_bound_path(config, "long_unstuck_loss_allowance_fraction") == selected[0][1]
 
 
 def test_adapter_target_fixed_selector_does_not_create_a_directional_axis():
     from optimization.shape import build_optimization_shape
     config = real_prepared()
-    close_fraction = config["bot"]["global"]["unstuck"]["close_fraction"]
-    config["optimize"]["fixed_params"] = ["short.unstuck.close_fraction"]
+    allowance = config["bot"]["global"]["risk"]["unstuck"]["loss_allowance_fraction"]
+    config["optimize"]["fixed_params"] = ["short.risk.unstuck.loss_allowance_fraction"]
     prepare_bound_plan(config)
     shape = build_optimization_shape(config)
     selected = [(key, bound) for (key, path), bound in zip(shape.key_paths, shape.bounds)
-                if path[-2:] == ("unstuck", "close_fraction")]
-    assert len(selected) == 1 and selected[0][0] == "bot.global.unstuck.close_fraction"
-    assert selected[0][1].low == selected[0][1].high == close_fraction
+                if path[-3:] == ("risk", "unstuck", "loss_allowance_fraction")]
+    assert len(selected) == 1 and selected[0][0] == "bot.global.risk.unstuck.loss_allowance_fraction"
+    assert selected[0][1].low == selected[0][1].high == allowance
 
 
 @pytest.mark.parametrize("short_pin", [False, True])
@@ -62,14 +62,14 @@ def test_actual_vector_writer_fans_common_gene_out_and_retains_sparse_source(sho
     config = real_prepared(short_pin=short_pin)
     before = deepcopy(config)
     shape = build_optimization_shape(config)
-    vector = [0.055 if key == "bot.global.unstuck.close_fraction" else bound.low
+    vector = [0.055 if key == "bot.global.risk.unstuck.loss_allowance_fraction" else bound.low
               for (key, _), bound in zip(shape.key_paths, shape.bounds)]
     candidate = build_optimizer_vector_config(vector, config, key_paths=shape.key_paths)
-    assert candidate["bot"]["long"]["unstuck"]["close_fraction"] == 0.055
-    assert candidate["bot"]["short"]["unstuck"]["close_fraction"] == (0.041 if short_pin else 0.055)
+    assert candidate["bot"]["long"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.055
+    assert candidate["bot"]["short"]["risk"]["unstuck"]["loss_allowance_fraction"] == (0.041 if short_pin else 0.055)
     source = universe_source_view(candidate)["bot"]
-    assert source["global"]["unstuck"]["close_fraction"] == 0.055
-    assert ("unstuck" in source.get("short", {})) is short_pin
+    assert source["global"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.055
+    assert ("unstuck" in source.get("short", {}).get("risk", {})) is short_pin
     assert source["long"] == {"enabled": True}
     assert universe_source_view(config) == universe_source_view(before)
 
@@ -100,9 +100,9 @@ def test_runtime_patch_owner_retains_unrelated_direct_edits_and_authored_bound_r
     from optimization.warmup import _apply_config_overrides
     config = real_prepared()
     config["bot"]["global"]["risk"]["total_wallet_exposure_limit_ratio"] = 2.3
-    bounds = {"short": {"unstuck": {"close_fraction": [0.02, 0.06]}}}
+    bounds = {"short": {"risk": {"unstuck": {"loss_allowance_fraction": [0.02, 0.06]}}}}
     _apply_config_overrides(config, {"optimize.bounds": bounds,
-                                   "bot.global.unstuck.close_fraction": 0.05})
+                                   "bot.global.risk.unstuck.loss_allowance_fraction": 0.05})
     assert optimize_bounds_source_view(config)["optimize"]["bounds"] == bounds
     assert universe_source_view(config)["bot"]["global"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.3
     assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.3
@@ -114,7 +114,7 @@ def test_runtime_patch_owner_leaves_plain_preflight_ranges_to_their_existing_own
     from optimization.warmup import _apply_config_overrides
     config = real_prepared()
     config["optimize"]["bounds"] = {}
-    raw = {"global": {"unstuck": {"close_fraction": [0.02, 0.06]}}}
+    raw = {"global": {"risk": {"unstuck": {"loss_allowance_fraction": [0.02, 0.06]}}}}
     _apply_config_overrides(config, {"optimize.bounds": raw})
     assert config["optimize"]["bounds"] == raw
     assert get_bound_plan(config) is None
@@ -141,12 +141,12 @@ def test_fine_tune_effective_target_freezes_common_domain_without_a_side_copy():
     from config.inherited_bounds import optimize_bounds_source_view
     from optimize import apply_fine_tune_bounds
     config = real_prepared()
-    close_fraction = config["bot"]["global"]["unstuck"]["close_fraction"]
-    config["optimize"]["fixed_params"] = ["short.unstuck.close_fraction"]
+    allowance = config["bot"]["global"]["risk"]["unstuck"]["loss_allowance_fraction"]
+    config["optimize"]["fixed_params"] = ["short.risk.unstuck.loss_allowance_fraction"]
     prepare_bound_plan(config)
     apply_fine_tune_bounds(config, [], set())
     raw = optimize_bounds_source_view(config)["optimize"]["bounds"]
-    assert raw["global"]["unstuck"]["close_fraction"] == [close_fraction, close_fraction]
+    assert raw["global"]["risk"]["unstuck"]["loss_allowance_fraction"] == [allowance, allowance]
     assert "short" not in raw
 
 
@@ -156,14 +156,14 @@ def test_anchored_vector_installs_common_fixed_values_through_gene_authority():
     from config.universe import universe_source_view
     config = real_prepared(short_pin=True)
     config[ANCHOR_PLAN_KEY] = {"anchors": [{"source": "public synthetic fixture", "fixed_values": [
-        {"key": "bot.global.unstuck.close_fraction", "path": ["bot", "global", "unstuck", "close_fraction"], "value": 0.05}
-    ]}], "key_paths": [], "tunable_keys": [], "fixed_keys": ["bot.global.unstuck.close_fraction"]}
+        {"key": "bot.global.risk.unstuck.loss_allowance_fraction", "path": ["bot", "global", "risk", "unstuck", "loss_allowance_fraction"], "value": 0.05}
+    ]}], "key_paths": [], "tunable_keys": [], "fixed_keys": ["bot.global.risk.unstuck.loss_allowance_fraction"]}
     candidate = build_optimizer_vector_config([0.0], config)
-    assert candidate["bot"]["long"]["unstuck"]["close_fraction"] == 0.05
-    assert candidate["bot"]["short"]["unstuck"]["close_fraction"] == 0.041
+    assert candidate["bot"]["long"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.05
+    assert candidate["bot"]["short"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.041
     source = universe_source_view(candidate)["bot"]
-    assert source["global"]["unstuck"]["close_fraction"] == 0.05
-    assert source["short"]["unstuck"]["close_fraction"] == 0.041
+    assert source["global"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.05
+    assert source["short"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.041
     assert source["long"] == {"enabled": True}
 
 
@@ -172,12 +172,12 @@ def test_mirrored_and_coupled_targets_do_not_create_unused_independent_axes():
     from optimization.config_adapter import get_optimization_key_paths
     config = real_prepared(short_pin=True)
     raw = optimize_bounds_source_view(config)["optimize"]["bounds"]
-    raw["short"] = {"unstuck": {"close_fraction": [0.01, 0.04]}}
-    raw["global"]["unstuck"]["ema_span_0_minutes"] = [100.0, 200.0]
+    raw["short"] = {"risk": {"unstuck": {"loss_allowance_fraction": [0.01, 0.04]}}}
+    raw["global"]["risk"]["unstuck"]["ema_span_0_minutes"] = [100.0, 200.0]
     prepare_bound_plan(config, authored_bounds=raw)
     config["optimize"]["enable_overrides"] = ["mirror_short_from_long", "couple_unstuck_ema_spans"]
     paths = get_optimization_key_paths(config)
-    assert ("bot.global.unstuck.close_fraction", ("bot", "global", "unstuck", "close_fraction")) in paths
+    assert ("bot.global.risk.unstuck.loss_allowance_fraction", ("bot", "global", "risk", "unstuck", "loss_allowance_fraction")) in paths
     assert not any(path[:2] == ("bot", "short") for _, path in paths)
     assert not any(path[2:3] == ("unstuck",) and path[-1] in {"ema_span_0_minutes", "ema_span_1_minutes"}
                    for _, path in paths)
@@ -293,18 +293,18 @@ def test_actual_anchor_install_uses_effective_targets_and_preserves_base_side_pi
     from optimization.warmup import build_optimizer_vector_config
     config = real_prepared(short_pin=side_pin)
     anchor = get_template_config()
-    anchor["bot"]["global"]["unstuck"]["close_fraction"] = 0.045
-    anchor["bot"]["long"] = {"unstuck": {"close_fraction": 0.052}}
-    anchor["bot"]["short"] = {"unstuck": {"close_fraction": 0.052 if not side_pin else 0.041}}
+    anchor["bot"]["global"]["risk"]["unstuck"]["loss_allowance_fraction"] = 0.045
+    anchor["bot"]["long"] = {"risk": {"unstuck": {"loss_allowance_fraction": 0.052}}}
+    anchor["bot"]["short"] = {"risk": {"unstuck": {"loss_allowance_fraction": 0.052 if not side_pin else 0.041}}}
     install_anchored_fine_tune_plan(config, ["global.risk.total_wallet_exposure_limit_ratio"],
                                   "unused", starting_configs_override=[anchor])
     shape = build_optimization_shape(config)
     candidate = build_optimizer_vector_config([bound.low for bound in shape.bounds], config)
-    assert candidate["bot"]["long"]["unstuck"]["close_fraction"] == 0.052
-    assert candidate["bot"]["short"]["unstuck"]["close_fraction"] == (0.041 if side_pin else 0.052)
+    assert candidate["bot"]["long"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.052
+    assert candidate["bot"]["short"]["risk"]["unstuck"]["loss_allowance_fraction"] == (0.041 if side_pin else 0.052)
     source = universe_source_view(candidate)["bot"]
-    assert source["global"]["unstuck"]["close_fraction"] == 0.052
-    assert ("unstuck" in source.get("short", {})) is side_pin
+    assert source["global"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.052
+    assert ("unstuck" in source.get("short", {}).get("risk", {})) is side_pin
 
 
 def test_anchor_and_seed_reject_values_that_one_shared_coordinate_cannot_represent(caplog):
@@ -313,8 +313,8 @@ def test_anchor_and_seed_reject_values_that_one_shared_coordinate_cannot_represe
     from optimization.shape import build_optimization_shape
     config = real_prepared()
     anchor = get_template_config()
-    anchor["bot"]["long"] = {"unstuck": {"close_fraction": 0.052}}
-    anchor["bot"]["short"] = {"unstuck": {"close_fraction": 0.048}}
+    anchor["bot"]["long"] = {"risk": {"unstuck": {"loss_allowance_fraction": 0.052}}}
+    anchor["bot"]["short"] = {"risk": {"unstuck": {"loss_allowance_fraction": 0.048}}}
     with pytest.raises(ValueError, match="at least one valid"):
         install_anchored_fine_tune_plan(config, ["global.risk.total_wallet_exposure_limit_ratio"],
                                       "unused", starting_configs_override=[anchor])
@@ -333,9 +333,9 @@ def test_seed_stream_retains_an_existing_prepared_binding_plan_when_shape_is_omi
     vectors = configs_to_individuals([config], shape.bounds, 6)
     assert len(vectors) == 1 and len(vectors[0]) == len(shape.bounds)
     values = dict(zip((key for key, _ in shape.key_paths), vectors[0]))
-    # The inherited starter value exceeds the fixture's authored upper bound.
-    assert values["bot.global.unstuck.close_fraction"] == 0.06
-    assert values["bot.short.unstuck.close_fraction"] == 0.041
+    # The inherited starter allowance falls below the fixture's authored lower bound.
+    assert values["bot.global.risk.unstuck.loss_allowance_fraction"] == 0.02
+    assert values["bot.short.risk.unstuck.loss_allowance_fraction"] == 0.041
 
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
@@ -352,26 +352,26 @@ def test_actual_loader_shape_candidate_and_reload_keep_shared_gene_authority(kin
     source["bot"]["portfolio"]["strategy_kind"] = kind
     source["bot"]["long"]["enabled"] = True
     source["bot"]["global"]["universe"]["approved_coins"] = []
-    source["bot"]["short"] = {"enabled": True, "unstuck": {"close_fraction": 0.041}}
-    raw_bounds = {"global": {"unstuck": {"close_fraction": [0.02, 0.06]},
-                              "risk": {"max_positions": [0.0, 8.0]}}}
+    source["bot"]["short"] = {"risk": {"unstuck": {"loss_allowance_fraction": 0.041}}, "enabled": True}
+    raw_bounds = {"global": {
+                              "risk": {"unstuck": {"loss_allowance_fraction": [0.02, 0.06]}, "max_positions": [0.0, 8.0]}}}
     source["optimize"]["bounds"] = deepcopy(raw_bounds)
     original = deepcopy(source)
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
     shape = build_optimization_shape(prepared)
-    vector = [0.055 if key == "bot.global.unstuck.close_fraction" else
+    vector = [0.055 if key == "bot.global.risk.unstuck.loss_allowance_fraction" else
               4.5 if key == "bot.global.risk.max_positions" else bound.low
               for (key, _), bound in zip(shape.key_paths, shape.bounds)]
     candidate = build_optimizer_vector_config(vector, prepared, key_paths=shape.key_paths)
     loaded = prepare_config(clean_config(candidate), verbose=False, target="canonical", runtime=None)
     for result in (candidate, loaded):
-        assert result["bot"]["long"]["unstuck"]["close_fraction"] == 0.055
-        assert result["bot"]["short"]["unstuck"]["close_fraction"] == 0.041
+        assert result["bot"]["long"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.055
+        assert result["bot"]["short"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.041
         assert result["bot"]["long"]["risk"]["max_positions"] == 4
         assert result["bot"]["short"]["risk"]["max_positions"] == 4
         assert optimize_bounds_source_view(result)["optimize"]["bounds"] == raw_bounds
         raw = universe_source_view(result)["bot"]
-        assert raw["short"] == {"enabled": True, "unstuck": {"close_fraction": 0.041}}
+        assert raw["short"] == {"risk": {"unstuck": {"loss_allowance_fraction": 0.041}}, "enabled": True}
         assert raw["long"] == {"enabled": True}
     assert get_bound_plan(loaded).identity() == get_bound_plan(prepared).identity()
     assert source == original

@@ -7029,19 +7029,18 @@ def _smoke_hsl_enabled_scopes(config: dict[str, Any]) -> list[str]:
     bot = config.get("bot")
     if not isinstance(bot, dict):
         return enabled
-    risk = bot.get("portfolio") if isinstance(bot.get("portfolio"), dict) else {}
-    policy = risk.get("hsl") if isinstance(risk.get("hsl"), dict) else {}
+    portfolio = bot.get("portfolio")
+    risk = portfolio.get("risk") if isinstance(portfolio, dict) else None
+    policy = risk.get("hsl") if isinstance(risk, dict) else None
+    policy = policy if isinstance(policy, dict) else {}
     if _normalize_smoke_hsl_signal_mode(policy.get("scope")) == "portfolio":
-        return (
-            ["portfolio"]
-            if isinstance(policy, dict) and _truthy_config_flag(policy.get("enabled"))
-            else []
-        )
+        return ["portfolio"] if _truthy_config_flag(policy.get("enabled")) else []
     for pside in ("long", "short"):
         side_config = bot.get(pside)
         if not isinstance(side_config, dict):
             continue
-        hsl_config = side_config.get("hsl")
+        side_risk = side_config.get("risk")
+        hsl_config = side_risk.get("hsl") if isinstance(side_risk, dict) else None
         nested_enabled = (
             hsl_config.get("enabled") if isinstance(hsl_config, dict) else None
         )
@@ -7102,7 +7101,7 @@ def _smoke_config_check_records(
             )
             continue
         live = config.get("live") if isinstance(config.get("live"), dict) else {}
-        global_hsl = config.get("bot", {}).get("portfolio", {}).get("hsl", {})
+        global_hsl = config.get("bot", {}).get("portfolio", {}).get("risk", {}).get("hsl", {})
         signal_mode = _normalize_smoke_hsl_signal_mode(global_hsl.get("scope"))
         config_balance_override = live.get("account", {}).get("balance_override")
         launch_balance_override = record.get("balance_override")

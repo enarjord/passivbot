@@ -52,11 +52,11 @@ async def test_hsl_protective_wave_uses_actual_executor_without_history(
         from copy import deepcopy
 
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
-        cfg["bot"]["long"]["hsl"]["enabled"] = False
+        cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
             max_positions=0, total_wallet_exposure_limit_ratio=0.0
         )
-    blocks = [cfg["bot"]["portfolio"]["hsl"]] if mode == "portfolio" else [cfg["bot"][side]["hsl"]]
+    blocks = [cfg["bot"]["portfolio"]["risk"]["hsl"]] if mode == "portfolio" else [cfg["bot"][side]["risk"]["hsl"]]
     for block in blocks:
         block.update(
             enabled=True,
@@ -409,9 +409,9 @@ def test_hsl_wave_is_not_execution_authority_after_inputs_change(monkeypatch, ch
     elif change == "stale_quote":
         instance.quotes[SYMBOL] = replace(quotes()[SYMBOL], fetched_ms=NOW - 10_001)
     elif change == "policy":
-        bot.config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.99
+        bot.config["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] = 0.99
     elif change == "disabled":
-        bot.config["bot"]["long"]["hsl"]["enabled"] = False
+        bot.config["bot"]["long"]["risk"]["hsl"]["enabled"] = False
     elif change == "generation":
         bot._account_invalidation_generation = 1
     else:
@@ -436,12 +436,12 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
     )
     cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     for side in ("long", "short"):
-        cfg["bot"][side]["unstuck"]["enabled"] = False
+        cfg["bot"][side]["risk"]["unstuck"]["enabled"] = False
         cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
+    cfg["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]["enabled"] = False
     cfg['bot']["long"]['universe']['approved_coins'] = ["BTC"]
     set_risk_memory_spans(cfg, 288.0)
-    policy = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    policy = cfg["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["risk"]["hsl"]
     policy.update(enabled=True, drawdown_fraction_ema_span_minutes=1.0, drawdown_threshold_fraction=0.5)
     cfg = {key: value for key, value in cfg.items() if not key.startswith("_")}
     config_path = tmp_path / "config.json"
@@ -542,7 +542,7 @@ async def test_hsl_other_coin_closes_while_first_coin_is_pending(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
     )
     cfg = generated_template(mutable_runtime_fixture(legacy), "coin")
-    cfg["bot"]["long"]["hsl"].update(
+    cfg["bot"]["long"]["risk"]["hsl"].update(
         enabled=True,
         drawdown_fraction_ema_span_minutes=1.0,
         drawdown_threshold_fraction=0.06,
@@ -576,7 +576,7 @@ async def test_hsl_other_coin_closes_while_first_coin_is_pending(
         instance.sources.clear()
         bot._pnls_manager = None
         bot.coin_overrides[second] = {
-            "bot": {"long": {"hsl": {"panic_close_order_type": "market"}}}
+            "bot": {"long": {"risk": {"hsl": {"panic_close_order_type": "market"}}}}
         }
         crossed = bot.cca._limit_crossed_now
         # Model a venue leaving the aggressive limit unfilled. The fake client
@@ -867,11 +867,11 @@ async def test_hsl_real_close_reconstructs_halt_on_fresh_bot_then_expires(
     )
     cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     set_risk_memory_spans(cfg, 288.0)
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
+    cfg["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]["enabled"] = False
     for side in ("long", "short"):
-        cfg["bot"][side]["unstuck"]["enabled"] = False
+        cfg["bot"][side]["risk"]["unstuck"]["enabled"] = False
         cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
-    block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    block = cfg["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["risk"]["hsl"]
     block.update(
         enabled=True,
         drawdown_threshold_fraction=0.06,
@@ -1061,7 +1061,7 @@ async def test_hsl_startup_services_new_red_during_stalled_warmup(
     )
     cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     set_risk_memory_spans(cfg, 288.0)
-    block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    block = cfg["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["risk"]["hsl"]
     block.update(
         enabled=True,
         drawdown_threshold_fraction=0.06,
@@ -1332,6 +1332,12 @@ async def test_hsl_batch_waits_for_write_then_requires_new_account(
 
     monkeypatch.setattr(utils, "utc_ms", lambda: NOW)
     bot = make_bot("portfolio")
+    for method_name in (
+        "_orchestrator_uses_realized_pnl",
+        "_loss_gate_enabled",
+        "_unstuck_uses_realized_pnl",
+    ):
+        setattr(bot, method_name, getattr(Passivbot, method_name).__get__(bot))
     bot.get_exchange_time = lambda: NOW
     bot.approved_coins_minus_ignored_coins = {"long": {SYMBOL}, "short": set()}
     bot._live_market_snapshot_max_age_ms = lambda: 10_000
@@ -1735,7 +1741,7 @@ async def test_stalled_startup_retries_completed_sources_with_bounded_cadence():
         _pnls_manager=None,
         config={
             "live": {},
-            "bot": {"portfolio": {'hsl': {'scope': 'portfolio', 'enabled': True}}},
+            "bot": {"portfolio": {"risk": {'hsl': {'scope': 'portfolio', 'enabled': True}}}},
         },
     )
     instance = hsl_live.Owner(bot)
@@ -1783,7 +1789,7 @@ async def test_source_retry_does_not_replace_resistant_task_or_hide_late_failure
             _pnls_manager=None,
             config={
                 "live": {},
-                "bot": {"portfolio": {'hsl': {'scope': 'portfolio', 'enabled': True}}},
+                "bot": {"portfolio": {"risk": {'hsl': {'scope': 'portfolio', 'enabled': True}}}},
             },
         )
     )
@@ -1974,9 +1980,9 @@ def test_ordinary_admission_rejects_changed_risk_inputs(
     monkeypatch.setattr(utils, "utc_ms", lambda: NOW)
     bot = make_bot(mode, side=side)
     block = (
-        bot.config["bot"]["portfolio"]["hsl"]
+        bot.config["bot"]["portfolio"]["risk"]["hsl"]
         if mode == "portfolio"
-        else bot.config["bot"][side]["hsl"]
+        else bot.config["bot"][side]["risk"]["hsl"]
     )
     block["drawdown_threshold_fraction"] = 0.2
     bot.get_exchange_time = lambda: NOW
@@ -2250,7 +2256,7 @@ async def test_partial_panic_recovery_retires_resting_close_without_ordinary_pla
     )
     cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     set_risk_memory_spans(cfg, 288.0)
-    block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    block = cfg["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["risk"]["hsl"]
     block.update(
         enabled=True,
         drawdown_threshold_fraction=0.06,
@@ -2432,7 +2438,7 @@ async def test_disabled_hsl_owner_keeps_ordinary_fill_refresh_without_hsl_window
 
     value = bot()
     for side in ("long", "short"):
-        value.config["bot"][side]["hsl"]["enabled"] = False
+        value.config["bot"][side]["risk"]["hsl"]["enabled"] = False
     set_risk_memory_spans(value.config, span)
     owner = hsl_live.Owner(value)
     calls = []
@@ -2457,9 +2463,9 @@ async def test_disabled_hsl_protection_does_not_acquire_quotes(mode):
 
     value = bot(mode)
     for side in ("long", "short"):
-        value.config["bot"][side]["hsl"]["enabled"] = False
+        value.config["bot"][side]["risk"]["hsl"]["enabled"] = False
     if mode == "portfolio":
-        value.config["bot"]["portfolio"]["hsl"]["enabled"] = False
+        value.config["bot"]["portfolio"]["risk"]["hsl"]["enabled"] = False
     value.open_orders = {SYMBOL: [{"id": "resting"}]}
     instance = hsl_live.Owner(value)
 
@@ -2476,8 +2482,8 @@ async def test_coin_override_keeps_protective_quote_acquisition_enabled():
 
     value = bot()
     for side in ("long", "short"):
-        value.config["bot"][side]["hsl"]["enabled"] = False
-    value.coin_overrides[SYMBOL] = {"bot": {"long": {"hsl": {"enabled": True}}}}
+        value.config["bot"][side]["risk"]["hsl"]["enabled"] = False
+    value.coin_overrides[SYMBOL] = {"bot": {"long": {"risk": {"hsl": {"enabled": True}}}}}
     instance = hsl_live.Owner(value)
 
     class QuotesRequested(Exception):
@@ -2587,11 +2593,11 @@ async def test_flat_unselected_order_only_panic_is_retired_by_protective_executo
     cfg = generated_template(mutable_runtime_fixture(load_fake_hsl_config()))
     if side == "short":
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
-        cfg["bot"]["long"]["hsl"]["enabled"] = False
+        cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
             max_positions=0, total_wallet_exposure_limit_ratio=0.0
         )
-    cfg["bot"][side]["hsl"].update(enabled=True)
+    cfg["bot"][side]["risk"]["hsl"].update(enabled=True)
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")})

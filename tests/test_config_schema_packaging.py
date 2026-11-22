@@ -130,7 +130,7 @@ assert main(["--version"]) == 0
 assert DEFAULT_OUTPUT == Path(sys.argv[1])
 assert main(["tool", "config-schema", "--check"]) == 0
 assert main(["tool", "config-schema", "--output", sys.argv[2]]) == 0
-assert main(["tool", "config-schema", "--field", "bot.long.unstuck.ema_span_0_minutes"]) == 0
+assert main(["tool", "config-schema", "--field", "bot.long.risk.unstuck.ema_span_0_minutes"]) == 0
 """, str(resource), str(destination), __version__, cwd=tmp_path, pythonpath=installed,
     )
     assert checked.returncode == 0, checked.stdout + checked.stderr

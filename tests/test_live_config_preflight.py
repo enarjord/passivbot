@@ -32,53 +32,90 @@ def _sample_config() -> dict:
             },
         },
         "bot": {
-            "portfolio": {"unstuck": {"memory_ema_span_minutes": 10080.0}, "loss_gate": {
-                    "memory_ema_span_minutes": 20160.0,
-                    "max_drawdown_fraction": 0.2,
-                }, "hsl": {
-                    "scope": "portfolio",
-                    "enabled": True,
-                    "drawdown_threshold_fraction": 0.05,
-                    "cooldown_after_red_minutes": 60.0,
-                    "memory_ema_span_minutes": 43200.0,
-                    "drawdown_fraction_ema_span_minutes": 120.0,
-                    "scale_budget_with_excess_allowance": False,
-                    "panic_close_order_type": "limit",
-                }, "warmup": {"max_minutes": 30}}, "global": {"forager": {"score_hysteresis_margin": 0.02}},
-            "long": {
-                "risk": {"max_positions": 3, "total_wallet_exposure_limit_ratio": 1.0},
-                "unstuck": {"enabled": True},
-                "forager": {"volume_ema_span_minutes": 120.0},
-                "hsl": {
-                    "enabled": True,
-                    "drawdown_threshold_fraction": 0.05,
-                    "cooldown_after_red_minutes": 60,
-                    "memory_ema_span_minutes": 43200.0,
-                    "drawdown_fraction_ema_span_minutes": 120.0,
-                    "scale_budget_with_excess_allowance": False,
-                    "panic_close_order_type": "limit",
+            "portfolio": {
+                "risk": {
+                    "loss_realization": {
+                        "memory_ema_span_minutes": 20160.0,
+                        "loss_gate": {"enabled": True, "max_realized_drawdown_fraction": 0.2},
+                    },
+                    "hsl": {
+                        "scope": "portfolio",
+                        "enabled": True,
+                        "drawdown_threshold_fraction": 0.05,
+                        "cooldown_after_red_minutes": 60.0,
+                        "memory_ema_span_minutes": 43200.0,
+                        "drawdown_fraction_ema_span_minutes": 120.0,
+                        "scale_budget_with_excess_allowance": False,
+                        "panic_close_order_type": "limit",
+                    },
                 },
+                "warmup": {"max_minutes": 30},
+            },
+            "global": {"forager": {"score_hysteresis_margin": 0.02}},
+            "long": {
+                "risk": {
+                    "max_positions": 3, "total_wallet_exposure_limit_ratio": 1.0,
+                    "unstuck": {"enabled": True},
+                    "hsl": {
+                        "enabled": True,
+                        "drawdown_threshold_fraction": 0.05,
+                        "cooldown_after_red_minutes": 60,
+                        "memory_ema_span_minutes": 43200.0,
+                        "drawdown_fraction_ema_span_minutes": 120.0,
+                        "scale_budget_with_excess_allowance": False,
+                        "panic_close_order_type": "limit",
+                    },
+                },
+                "forager": {"volume_ema_span_minutes": 120.0},
                 "universe": {
                     "approved_coins": ["BTC", "ETH", "SOL", "XMR"],
                     "ignored_coins": ["DOGE"],
                 },
             },
             "short": {
-                "risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 0.0},
-                "unstuck": {"enabled": False},
-                "hsl": {
-                    "enabled": False,
-                    "drawdown_threshold_fraction": 0.04,
-                    "cooldown_after_red_minutes": 30,
-                    "memory_ema_span_minutes": 43200.0,
-                    "drawdown_fraction_ema_span_minutes": 120.0,
-                    "scale_budget_with_excess_allowance": False,
-                    "panic_close_order_type": "limit",
+                "risk": {
+                    "max_positions": 1, "total_wallet_exposure_limit_ratio": 0.0,
+                    "unstuck": {"enabled": False},
+                    "hsl": {
+                        "enabled": False,
+                        "drawdown_threshold_fraction": 0.04,
+                        "cooldown_after_red_minutes": 30,
+                        "memory_ema_span_minutes": 43200.0,
+                        "drawdown_fraction_ema_span_minutes": 120.0,
+                        "scale_budget_with_excess_allowance": False,
+                        "panic_close_order_type": "limit",
+                    },
                 },
                 "universe": {"approved_coins": ["BTC"], "ignored_coins": []},
             },
         },
     }
+
+
+@pytest.mark.parametrize(
+    "gate,ok",
+    [
+        ({"enabled": True}, False),
+        ({"enabled": False, "max_realized_drawdown_fraction": 1.0}, False),
+        ({"enabled": True, "max_realized_drawdown_fraction": 0.0}, True),
+        ({"enabled": False}, True),
+    ],
+)
+def test_preflight_validates_explicit_realized_loss_gate_policy(tmp_path, gate, ok):
+    config = _sample_config()
+    config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] = gate
+    path = tmp_path / "config.json"
+    _write_config(path, config)
+
+    report = live_config_preflight.build_live_config_preflight_report(path)
+
+    assert report["ok"] is ok
+    if not ok:
+        assert any(
+            issue["code"] == "config_schema_invalid"
+            and "max_realized_drawdown_fraction" in issue["message"]
+            for issue in report["issues"]
+        )
 
 
 @pytest.mark.parametrize("cap,expected", [(None, None), (30.0, None), (0, "zero")])
@@ -169,8 +206,7 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
         "warning_threshold": 0.05,
     }
     fill_evidence = {row["code"]: row for row in report["cache"]["readiness"]["surfaces"]["fills"]["evidence"]}
-    assert fill_evidence["unstuck_memory_ema_span_minutes_configured"]["value"] == 10080.0
-    assert fill_evidence["loss_gate_memory_ema_span_minutes_configured"]["value"] == 20160.0
+    assert fill_evidence["realized_loss_memory_ema_span_minutes_configured"]["value"] == 20160.0
     assert "realized_loss_gate_lookback_minutes" not in report["cache"]["live_settings"]
     assert report["cache"]["readiness"]["status"] == "attention"
     assert report["cache"]["readiness"]["summary"] == {
@@ -404,7 +440,7 @@ def test_live_config_preflight_blocks_invalid_runtime_override_with_account_hsl(
 
 def test_live_config_preflight_allows_coin_hsl_with_balance_override(tmp_path):
     config = _sample_config()
-    config["bot"]["portfolio"]["hsl"] = {"scope": "coin"}
+    config["bot"]["portfolio"]["risk"]["hsl"] = {"scope": "coin"}
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 
@@ -427,7 +463,7 @@ def test_live_config_preflight_uses_schema_default_for_missing_hsl_signal_mode(
     tmp_path,
 ):
     config = _sample_config()
-    config["bot"]["portfolio"]["hsl"] = {}
+    config["bot"]["portfolio"]["risk"]["hsl"] = {}
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
 
@@ -461,16 +497,18 @@ def test_sparse_canonical_preflight_cli_serializes_absent_hsl_scope(tmp_path, ca
 def test_live_config_preflight_reports_canonical_shared_bot_keys(tmp_path):
     config = _sample_config()
     config["bot"]["long"] = {
-        "risk": {"max_positions": 3},
-        "forager": {"volume_ema_span_minutes": 120.0},
-        "hsl": {
-            "enabled": True,
-            "drawdown_threshold_fraction": 0.05,
-            "cooldown_after_red_minutes": 60,
-            "memory_ema_span_minutes": 43200.0,
-            "drawdown_fraction_ema_span_minutes": 120.0,
-            "panic_close_order_type": "limit",
+        "risk": {
+            "max_positions": 3,
+            "hsl": {
+                "enabled": True,
+                "drawdown_threshold_fraction": 0.05,
+                "cooldown_after_red_minutes": 60,
+                "memory_ema_span_minutes": 43200.0,
+                "drawdown_fraction_ema_span_minutes": 120.0,
+                "panic_close_order_type": "limit",
+            },
         },
+        "forager": {"volume_ema_span_minutes": 120.0},
     }
     config_path = tmp_path / "live.json"
     _write_config(config_path, config)
@@ -495,13 +533,13 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
     target = _sample_config()
     target["live"]["account"]["user"] = "okx_01"
     target["backtest"]["exchanges"] = ["okx"]
-    target["bot"]["portfolio"]["hsl"] = {"scope": "position_side"}
+    target["bot"]["portfolio"]["risk"]["hsl"] = {"scope": "position_side"}
     target['bot']["long"]['universe']['approved_coins'] = ["BTC", "ETH", "SOL", "ADA", "BNB"]
     target['bot']["short"]['universe']['ignored_coins'] = ["DOGE", "XRP"]
     target["live"]["candles"]["max_forager_candle_staleness_minutes"] = 20
     target['bot']["portfolio"]['warmup']['max_minutes'] = 45
     target["_raw"]["live"]["api_key"] = "new-secret-api-key"
-    target["bot"]["long"]["hsl"]["enabled"] = False
+    target["bot"]["long"]["risk"]["hsl"]["enabled"] = False
     target["bot"]["short"]["risk"]["max_positions"] = 2
 
     baseline_path = tmp_path / "baseline.json"
@@ -520,18 +558,18 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
     assert report["ok"] is True
     assert report["diff"]["ok"] is True
     assert report["diff"]["summary"]["category_counts"]["hsl"] == 3
-    assert changes["bot.portfolio.hsl.enabled"]["before"] == {"present": True, "value": True}
-    assert changes["bot.portfolio.hsl.enabled"]["after"] == {"present": False}
+    assert changes["bot.portfolio.risk.hsl.enabled"]["before"] == {"present": True, "value": True}
+    assert changes["bot.portfolio.risk.hsl.enabled"]["after"] == {"present": False}
     assert changes["live.account.user"]["before"] == {
         "present": True,
         "value": "binance_01",
     }
     assert changes["backtest.exchanges"]["after"] == {"present": True, "value": ["okx"]}
-    assert changes["bot.portfolio.hsl.scope"]["after"] == {
+    assert changes["bot.portfolio.risk.hsl.scope"]["after"] == {
         "present": True,
         "value": "position_side",
     }
-    assert changes["bot.long.hsl.enabled"]["after"] == {
+    assert changes["bot.long.risk.hsl.enabled"]["after"] == {
         "present": True,
         "value": False,
     }
@@ -568,8 +606,7 @@ def test_live_config_preflight_compare_resolves_canonical_shared_bot_keys(tmp_pa
     baseline = _sample_config()
     target = _sample_config()
     target["bot"]["short"] = {
-        "risk": {"max_positions": 2},
-        "hsl": {"enabled": True},
+        "risk": {"max_positions": 2, "hsl": {"enabled": True}},
     }
     baseline_path = tmp_path / "baseline.json"
     target_path = tmp_path / "target.json"
@@ -583,11 +620,11 @@ def test_live_config_preflight_compare_resolves_canonical_shared_bot_keys(tmp_pa
     changes = {change["field"]: change for change in report["diff"]["changes"]}
 
     assert report["ok"] is True
-    assert changes["bot.short.hsl.enabled"]["before"] == {
+    assert changes["bot.short.risk.hsl.enabled"]["before"] == {
         "present": True,
         "value": False,
     }
-    assert changes["bot.short.hsl.enabled"]["after"] == {
+    assert changes["bot.short.risk.hsl.enabled"]["after"] == {
         "present": True,
         "value": True,
     }
@@ -779,9 +816,9 @@ def test_live_config_preflight_cli_zero_balance_override_returns_nonzero(
 def test_portfolio_preflight_uses_only_portfolio_policy(tmp_path, portfolio_enabled):
     config = _sample_config()
     config["live"]["account"]["balance_override"] = 1000
-    config["bot"]["portfolio"]["hsl"]["enabled"] = portfolio_enabled
+    config["bot"]["portfolio"]["risk"]["hsl"]["enabled"] = portfolio_enabled
     for side in ("long", "short"):
-        config["bot"][side]["hsl"]["enabled"] = not portfolio_enabled
+        config["bot"][side]["risk"]["hsl"]["enabled"] = not portfolio_enabled
     path = tmp_path / "config.json"
     _write_config(path, config)
     report = live_config_preflight.build_live_config_preflight_report(path)

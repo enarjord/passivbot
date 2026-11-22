@@ -23,13 +23,15 @@ def get_shared_optimizer_bindings():
     """Project existing shared bound adapters into canonical parameter paths."""
     from .optimize_bounds import SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY, _shared_bound_local_path
 
+    from .shared_bot import shared_bot_group_path
+
     paths = get_special_optimizer_bindings()
     for side in ("long", "short"):
         for group, keys in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.items():
             for local, flat in keys.items():
-                paths[f"{side}_{flat}"] = ("bot", side, group, *_shared_bound_local_path(group, local))
+                paths[f"{side}_{flat}"] = ("bot", side, *shared_bot_group_path(group), *_shared_bound_local_path(group, local))
     for local, native in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"].items():
-        paths[native] = ("bot", "portfolio", "hsl", local)
+        paths[native] = ("bot", "portfolio", "risk", "hsl", local)
     return paths
 
 
@@ -171,8 +173,8 @@ _FIELDS_BY_TYPE = {
         "optimize.gpu": "checkpoint_interval_seconds",
         "optimize.gpu.screening": "survival_fraction",
         "optimize.pymoo.shared": "crossover_distribution_index crossover_probability_per_variable mutation_distribution_index",
-        "bot.portfolio.loss_gate": "max_drawdown_fraction memory_ema_span_minutes",
-        "bot.portfolio.unstuck": "memory_ema_span_minutes",
+        "bot.portfolio.risk.loss_realization": "memory_ema_span_minutes",
+        "bot.portfolio.risk.loss_realization.loss_gate": "max_realized_drawdown_fraction",
         "bot.portfolio.execution": "market_order_near_touch_fraction",
         "bot.global.forager": "score_hysteresis_margin",
         "bot.portfolio.warmup": "activation_span_fraction",
@@ -208,7 +210,7 @@ _FIELDS_BY_TYPE = {
         "optimize": "backend",
         "optimize.pymoo": "algorithm",
         "optimize.pymoo.algorithms.nsga3.ref_dirs": "method",
-        "bot.portfolio.hsl": "scope",
+        "bot.portfolio.risk.hsl": "scope",
         "bot.portfolio": "strategy_kind",
     },
     FieldType.ARRAY: {
@@ -252,23 +254,23 @@ _SHARED_SIDE_FIELDS = {
         forager.score_weights.rms_directionality forager.score_weights.ema_readiness
         forager.score_weights.log_range forager.score_weights.volume
         forager.rms_directionality_ema_span_minutes forager.log_range_ema_span_minutes
-        forager.volume_ema_span_minutes forager.score_hysteresis_margin hsl.memory_ema_span_minutes
-        hsl.cooldown_after_red_minutes hsl.drawdown_fraction_ema_span_minutes hsl.drawdown_threshold_fraction
+        forager.volume_ema_span_minutes forager.score_hysteresis_margin risk.hsl.memory_ema_span_minutes
+        risk.hsl.cooldown_after_red_minutes risk.hsl.drawdown_fraction_ema_span_minutes risk.hsl.drawdown_threshold_fraction
         entry_cooldown.base_duration_minutes entry_cooldown.min_duration_minutes
         entry_cooldown.weights_minutes.exposure_ratio
         entry_cooldown.weights_minutes.adverse_directionality
         risk.position_exposure_enforcer.threshold_ratio risk.total_exposure_enforcer.threshold_ratio
         risk.total_wallet_exposure_limit_ratio risk.we_excess_allowance_fraction
-        unstuck.close_fraction unstuck.ema_distance_fraction unstuck.ema_span_0_minutes unstuck.ema_span_1_minutes
-        unstuck.loss_allowance_fraction unstuck.exposure_trigger_ratio
+        risk.unstuck.ema_distance_fraction risk.unstuck.ema_span_0_minutes risk.unstuck.ema_span_1_minutes
+        risk.unstuck.loss_allowance_fraction risk.unstuck.exposure_trigger_ratio
     """,
     FieldType.BOOLEAN: """
-        enabled hsl.enabled hsl.scale_budget_with_excess_allowance
+        enabled risk.hsl.enabled risk.hsl.scale_budget_with_excess_allowance
         risk.position_exposure_enforcer.enabled risk.total_exposure_enforcer.enabled
         universe.filter_by_min_effective_cost
-        unstuck.ema_gating_enabled unstuck.enabled
+        risk.unstuck.ema_gating_enabled risk.unstuck.enabled
     """,
-    FieldType.STRING: "hsl.panic_close_order_type risk.total_exposure_enforcer.policy",
+    FieldType.STRING: "risk.hsl.panic_close_order_type risk.total_exposure_enforcer.policy",
 }
 
 
@@ -349,13 +351,15 @@ def get_field_registry() -> FieldRegistry:
             description="Persistent selection identifier; order is retained and duplicates are removed.")
     add("coin_overrides.*.override_config_path", FieldType.STRING)
 
+    add("bot.portfolio.risk.loss_realization.loss_gate.enabled", FieldType.BOOLEAN)
+
     # Portfolio HSL authority is explicitly optional; no default is synthesized.
     for name in ("enabled", "scale_budget_with_excess_allowance"):
-        add(f"bot.portfolio.hsl.{name}", FieldType.BOOLEAN)
-    add("bot.portfolio.hsl.panic_close_order_type", FieldType.STRING)
+        add(f"bot.portfolio.risk.hsl.{name}", FieldType.BOOLEAN)
+    add("bot.portfolio.risk.hsl.panic_close_order_type", FieldType.STRING)
     for name in ("drawdown_threshold_fraction", "drawdown_fraction_ema_span_minutes",
                  "memory_ema_span_minutes", "cooldown_after_red_minutes"):
-        add(f"bot.portfolio.hsl.{name}", FieldType.FLOAT)
+        add(f"bot.portfolio.risk.hsl.{name}", FieldType.FLOAT)
 
     for kind in get_supported_strategy_kinds():
         spec = get_strategy_spec(kind)

@@ -88,16 +88,16 @@ def enabled(bot):
     Check overrides even for currently unselected or flat coins: their history
     may still contribute a cooldown when they next become eligible.
     """
-    mode = native_hsl_mode(bot.config["bot"]["portfolio"]["hsl"]["scope"])
+    mode = native_hsl_mode(bot.config["bot"]["portfolio"]["risk"]["hsl"]["scope"])
     if mode == "portfolio":
-        return bot.config["bot"]["portfolio"]["hsl"]["enabled"]
+        return bot.config["bot"]["portfolio"]["risk"]["hsl"]["enabled"]
     if mode not in {"coin", "pside"}:
         raise ValueError("invalid HSL signal mode")
     for side in ("long", "short"):
-        if bot.config["bot"][side]["hsl"]["enabled"]:
+        if bot.config["bot"][side]["risk"]["hsl"]["enabled"]:
             return True
         if mode == "coin" and any(
-            value.get("bot", {}).get(side, {}).get("hsl", {}).get("enabled", False)
+            value.get("bot", {}).get(side, {}).get("risk", {}).get("hsl", {}).get("enabled", False)
             for value in bot.coin_overrides.values()
         ):
             return True
@@ -255,9 +255,9 @@ def _source_reasons(source):
 
 
 def _policies(bot, pairs):
-    mode = native_hsl_mode(bot.config["bot"]["portfolio"]["hsl"]["scope"])
+    mode = native_hsl_mode(bot.config["bot"]["portfolio"]["risk"]["hsl"]["scope"])
     if mode == "portfolio":
-        policy = dict(bot.config["bot"]["portfolio"]["hsl"])
+        policy = dict(bot.config["bot"]["portfolio"]["risk"]["hsl"])
         if policy["enabled"]:
             yield Scope(mode), policy, 1
     elif mode in {"coin", "pside"}:
@@ -267,7 +267,7 @@ def _policies(bot, pairs):
                 if mode == "coin"
                 else (None,)
             ):
-                policy = {key: bot.config["bot"][side]["hsl"][key] for key in FIELDS}
+                policy = {key: bot.config["bot"][side]["risk"]["hsl"][key] for key in FIELDS}
                 if symbol is not None:
                     # init_coin_overrides resolves authored identifiers to
                     # exchange symbols. Merge its canonical partial HSL block;
@@ -276,7 +276,7 @@ def _policies(bot, pairs):
                         bot.coin_overrides.get(symbol, {})
                         .get("bot", {})
                         .get(side, {})
-                        .get("hsl", {})
+                        .get("risk", {}).get("hsl", {})
                     )
                 if policy["enabled"]:
                     # Coin budgets use configured slots, not current open bags or
@@ -441,7 +441,7 @@ def capture(
         global_reasons.add("fill_capture_unknown")
     if any(f.timestamp > now_ms for p in tape.pairs for f in p.fills):
         global_reasons.add("future_fill_outside_evaluation")
-    if bot.config["bot"]["portfolio"]["hsl"]["scope"] == "coin":
+    if bot.config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "coin":
         relevant.update(
             (symbol, side) for side, selected in symbols.items() for symbol in selected
         )

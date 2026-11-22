@@ -51,6 +51,8 @@ def _bitget_error_code_from_exception(exc: Exception) -> str:
 
 
 class BitgetBot(CCXTBot):
+    supports_close_lookup_by_client_id = True
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.custom_id_max_length = 64

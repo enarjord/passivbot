@@ -442,7 +442,9 @@ def test_physical_attempt_checks_scratch_before_first_device_allocation(monkeypa
     # This unit test isolates scratch lifetime at the allocation boundary;
     # strategy/hourly admission has its own complete-layout regression tests.
     monkeypatch.setattr(kernel, "validate_hourly_bootstrap_inputs", lambda *_, **__: None)
-    value.parameter_keys = ("unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes")
+    monkeypatch.setattr(kernel, "unstuck_required", lambda *_, **__: False)
+    value._unstuck_ema_overrides = ()
+    value.parameter_keys = ("realized_loss_memory_ema_span_minutes", "reserved_realized_memory_slot")
     value.replay_sides = 1
     value.replay_kernel_name = "actual_fused_kernel"
     value._use_disabled_hsl_specialization = lambda _: False
@@ -453,7 +455,7 @@ def test_physical_attempt_checks_scratch_before_first_device_allocation(monkeypa
     value._history_bytes_per_candidate = lambda: 0
     value.hsl_capacity = 0
     value.settings = [0.0] * 16
-    value.settings[14] = 1.0  # Original gate activation survives factual control writes.
+    value.settings[14] = 1.0  # Gate flag survives factual control writes.
     value.cuda_max_scratch_policy = policy == "cold_max"
     value.bars = SimpleNamespace(device=SimpleNamespace(index=1))
     value._core_buffers = {}

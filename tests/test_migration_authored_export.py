@@ -59,12 +59,12 @@ def test_released_migration_exports_policy_without_internal_source_context(
     assert coin_path.read_bytes() == coin_bytes
     assert "base_config_path" not in output["live"]
     assert output["coin_overrides"]["BTC"] == {
-        "bot": {"long": {"unstuck": {"ema_span_0_minutes": 17.5}}}
+        "bot": {"long": {"risk": {"unstuck": {"ema_span_0_minutes": 17.5}}}}
     }
     jsonschema.Draft202012Validator(generate_schema()).validate(output)
     reloaded = prepare_config(output, verbose=False)
     assert reloaded["bot"]["portfolio"]["strategy_kind"] == strategy_kind
     assert (
-        reloaded["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"]
+        reloaded["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"]
         == 17.5
     )

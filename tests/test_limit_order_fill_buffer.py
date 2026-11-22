@@ -58,6 +58,7 @@ def test_gpu_accepts_valid_buffer_before_preparing_data(buffer):
     from config.gpu import validate_gpu_backtest_config
     cfg = get_template_config()
     cfg['backtest']["limit_order_fill_buffer_fraction"] = buffer
+    cfg["bot"]["global"]["risk"]["unstuck"]["enabled"] = False
     validate_gpu_backtest_config(cfg)
 
 
@@ -84,8 +85,8 @@ def _native_args():
         cfg['bot'][side]['enabled'] = side == 'long'
         # This synthetic replay isolates fill rules, without inception metadata.
         cfg['bot'][side]['universe']['minimum_coin_age_days'] = 0.0
-        cfg['bot'][side]['hsl']['enabled'] = False
-        cfg['bot'][side]['unstuck']['enabled'] = False
+        cfg['bot'][side]['risk']['hsl']['enabled'] = False
+        cfg['bot'][side]['risk']['unstuck']['enabled'] = False
         cfg['bot'][side]['entry_cooldown']['weights_minutes']['adverse_directionality'] = 0.0
         cfg['bot'][side]['risk']['max_positions'] = 1
         cfg['bot'][side]['risk']['total_wallet_exposure_limit_ratio'] = 1.0 if side == 'long' else 0.0

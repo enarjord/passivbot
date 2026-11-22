@@ -25,8 +25,8 @@ def source(kind="trailing_martingale"):
 @pytest.mark.parametrize("side,value", [("long", -1.0), ("short", 1.0)])
 def test_invalid_authored_bot_value_reports_its_path_before_synthesized_fixed_bounds(side, value):
     raw = source()
-    raw["bot"].setdefault(side, {})["unstuck"] = {"ema_distance_fraction": value}
-    with pytest.raises(ValueError, match=rf"bot\.{side}\.unstuck\.ema_distance_fraction"):
+    raw["bot"].setdefault(side, {}).setdefault("risk", {})["unstuck"] = {"ema_distance_fraction": value}
+    with pytest.raises(ValueError, match=rf"bot\.{side}\.risk\.unstuck\.ema_distance_fraction"):
         prepare_config(raw, verbose=False)
 
 

@@ -30,7 +30,7 @@ def test_public_position_side_scope_is_not_truncated_in_console_diagnostics():
 ])
 def test_public_scope_and_policy_are_adapted_only_at_the_native_boundary(scope, native):
     config = prepare_config(generated_template(get_template_config(), scope), verbose=False)
-    policies = {"TEST": [deepcopy(config["bot"][side]["hsl"]) for side in ("long", "short")]}
+    policies = {"TEST": [deepcopy(config["bot"][side]["risk"]["hsl"]) for side in ("long", "short")]}
     original = deepcopy((config, policies))
     payload = _resolve_backtest_hsl(config, policies)
     assert native_hsl_mode(scope) == native == payload["mode"]
@@ -42,7 +42,7 @@ def test_public_scope_and_policy_are_adapted_only_at_the_native_boundary(scope, 
     for policy in transported:
         assert "drawdown_threshold_fraction" in policy
         assert "red_threshold" not in policy
-    public = config["bot"]["long"]["hsl"]
+    public = config["bot"]["long"]["risk"]["hsl"]
     assert native_hsl_policy(public)["drawdown_threshold_fraction"] == public["drawdown_threshold_fraction"]
     if scope == "coin":
         from optimization.gpu.hsl import project_bot
@@ -64,13 +64,13 @@ def test_public_bounds_use_canonical_hsl_optimizer_ids_and_roundtrip_through_the
     key = "hsl_drawdown_threshold_fraction" if scope == "portfolio" else "long_hsl_drawdown_threshold_fraction"
     owner = "portfolio" if scope == "portfolio" else "long"
     assert key in flat
-    assert resolve_optimizer_key_path(config, key) == ("bot", owner, "hsl", "drawdown_threshold_fraction")
+    assert resolve_optimizer_key_path(config, key) == ("bot", owner, "risk", "hsl", "drawdown_threshold_fraction")
     assert resolve_optimizer_key_path(config, "long_unstuck_ema_distance_fraction") == (
-        "bot", "long", "unstuck", "ema_distance_fraction",
+        "bot", "long", "risk", "unstuck", "ema_distance_fraction",
     )
     result = {}
     set_flat_optimize_bound(result, "trailing_martingale", key, [0.05, 0.1])
-    assert result[owner]["hsl"] == {"drawdown_threshold_fraction": [0.05, 0.1]}
+    assert result[owner]["risk"]["hsl"] == {"drawdown_threshold_fraction": [0.05, 0.1]}
     assert flatten_optimize_bounds(result, strategy_kind="trailing_martingale") == {key: [0.05, 0.1]}
 
 
@@ -102,12 +102,12 @@ def test_released_scope_conversion_reports_the_authored_value_without_rescaling(
     source = released_v8_policy()
     source["live"]["hsl_signal_mode"] = old
     migration = migrate(source, memory_span_minutes=123.5)
-    assert migration.config["bot"]["portfolio"]["hsl"]["scope"] == new
+    assert migration.config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == new
     assert any(change["path"] == "live.hsl_signal_mode" and change["old"] == old
-               and change["new"] == {"bot.portfolio.hsl.scope": new} for change in migration.changes)
+               and change["new"] == {"bot.portfolio.risk.hsl.scope": new} for change in migration.changes)
     for side in ("long", "short"):
-        assert migration.config["bot"][side]["hsl"]["drawdown_threshold_fraction"] == source["bot"][side]["hsl"]["red_threshold"]
-        assert migration.config["bot"][side]["unstuck"]["ema_distance_fraction"] == source["bot"][side]["unstuck"]["ema_dist"]
+        assert migration.config["bot"][side]["risk"]["hsl"]["drawdown_threshold_fraction"] == source["bot"][side]["hsl"]["red_threshold"]
+        assert migration.config["bot"][side]["risk"]["unstuck"]["ema_distance_fraction"] == source["bot"][side]["unstuck"]["ema_dist"]
 
 
 @pytest.mark.parametrize("alias", ["unstuck_ema_dist", "unstuck.ema_dist", "unstuck.ema_distance_fraction"])
@@ -116,7 +116,7 @@ def test_released_override_conversion_never_rewrites_a_new_quantity_name_twice(a
     source["optimize"]["fixed_runtime_overrides"] = {f"bot.long.{alias}": 0.125}
     config = migrate(source, memory_span_minutes=123.5).config
     assert config["optimize"]["fixed_runtime_overrides"] == {
-        "bot.long.unstuck.ema_distance_fraction": 0.125,
+        "bot.long.risk.unstuck.ema_distance_fraction": 0.125,
     }
 
 
@@ -125,20 +125,20 @@ def test_released_override_conversion_never_rewrites_a_new_quantity_name_twice(a
 def test_retired_quantity_names_are_converter_inputs_only(section, group, old):
     config = get_template_config()
     if section == "bot":
-        config["bot"]["long"][group] = {old: 0.1}
+        config["bot"]["long"].setdefault("risk", {})[group] = {old: 0.1}
     elif section == "bounds":
-        config["optimize"]["bounds"] = {"long": {group: {old: [0.1, 0.2]}}}
+        config["optimize"]["bounds"] = {"long": {"risk": {group: {old: [0.1, 0.2]}}}}
     elif section == "coin":
-        config["coin_overrides"] = {"TEST": {"bot": {"long": {group: {old: 0.1}}}}}
+        config["coin_overrides"] = {"TEST": {"bot": {"long": {"risk": {group: {old: 0.1}}}}}}
     else:
-        config["backtest"]["scenarios"] = [{"label": "old", "overrides": {f"bot.long.{group}.{old}": 0.1}}]
+        config["backtest"]["scenarios"] = [{"label": "old", "overrides": {f"bot.long.risk.{group}.{old}": 0.1}}]
     with pytest.raises((ValueError, KeyError), match="unknown|Unknown|invalid|unsupported|inactive|not overridable"):
         prepare_config(config, verbose=False)
 
 
 def test_retired_pside_scope_is_not_a_current_loading_alias():
     config = get_template_config()
-    config["bot"]["portfolio"]["hsl"]["scope"] = "pside"
+    config["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "pside"
     with pytest.raises(ValueError, match="position_side"):
         prepare_config(config, verbose=False)
 
@@ -170,7 +170,7 @@ def test_released_scope_override_reports_exact_old_value(owner):
     migration = migrate(source, memory_span_minutes=123.5)
     target = (migration.config["optimize"]["fixed_runtime_overrides"] if owner == "fixed" else
               migration.config["backtest"]["scenarios"][0]["overrides"])
-    assert target == {"bot.portfolio.hsl.scope": "position_side"}
+    assert target == {"bot.portfolio.risk.hsl.scope": "position_side"}
     assert any(change["path"] == prefix + ".live.hsl_signal_mode" and change["old"] == "pside"
                and change["new"] == target for change in migration.changes)
 
@@ -200,8 +200,8 @@ def test_equal_released_quantity_aliases_are_reported_once_without_mutating_inpu
     original = deepcopy(source)
     migration = migrate(source, memory_span_minutes=123.5)
     assert source == original
-    assert old not in migration.config["bot"]["long"][group]
-    assert migration.config["bot"]["long"][group][new] == original["bot"]["long"][group][old]
+    assert old not in migration.config["bot"]["long"]["risk"][group]
+    assert migration.config["bot"]["long"]["risk"][group][new] == original["bot"]["long"][group][old]
     assert any(change["path"] == f"bot.long.{group}.{old}" for change in migration.changes)
 
 
@@ -222,7 +222,7 @@ def test_released_inline_quantities_replace_file_values_after_independent_conver
                         base_config_path=str(tmp_path / "input.json"))
     assert source == original
     assert file.read_bytes() == before_file
-    block = migration.config["coin_overrides"]["TEST"]["bot"]["long"][group]
+    block = migration.config["coin_overrides"]["TEST"]["bot"]["long"]["risk"][group]
     assert block[new] == 0.2
     assert old not in block
     assert any(change["path"] == f"coin_overrides.TEST.bot.long.{group}.{old}"
@@ -237,15 +237,15 @@ def test_released_position_side_scope_validates_materialized_non_hsl_coin_policy
     source["coin_overrides"] = {"TEST": {"override_config_path": file.name}}
     config = migrate(source, memory_span_minutes=123.5,
                      base_config_path=str(tmp_path / "input.json")).config
-    assert config["bot"]["portfolio"]["hsl"]["scope"] == "position_side"
-    assert config["coin_overrides"]["TEST"]["bot"]["long"]["unstuck"]["ema_distance_fraction"] == 0.125
+    assert config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "position_side"
+    assert config["coin_overrides"]["TEST"]["bot"]["long"]["risk"]["unstuck"]["ema_distance_fraction"] == 0.125
 
 
 def test_smoke_config_checks_recognize_the_public_position_side_scope(tmp_path):
     from live.smoke_report import _smoke_config_check_records
 
     config = generated_template(get_template_config(), "position_side")
-    config["bot"]["long"]["hsl"] = {"enabled": True}
+    config["bot"]["long"]["risk"] = {"hsl": {"enabled": True}}
     config["live"]["account"]["balance_override"] = 1000.0
     file = tmp_path / "policy.json"
     file.write_text(json.dumps(config))

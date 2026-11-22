@@ -397,7 +397,7 @@ def test_two_coin_long_short_native_reports_keep_controller_scopes(
         cfg["bot"][side]["strategy"]["trailing_martingale"]["close"][
             "retracement_base_fraction"
         ] = 0.0005
-    cfg["bot"]["short"]["hsl"] = deepcopy(cfg["bot"]["long"]["hsl"])
+    cfg["bot"]["short"]["risk"]["hsl"] = deepcopy(cfg["bot"]["long"]["risk"]["hsl"])
     markets["BBB"] = deepcopy(markets["AAA"])
     bot, strategy, exchange, params = prep_backtest_args(cfg, markets, "binance")
     for key in (

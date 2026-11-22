@@ -210,8 +210,9 @@ def select_ordinary_close_wave(
     """Select the leading two admitted closes when all joint checks pass."""
     if len(orders) < 2 or bot.live_value("time_in_force") != "post_only":
         return ()
-    loss_limit = bot._loss_gate_max_drawdown_fraction()
-    if not isfinite(loss_limit) or loss_limit < 1.0:
+    from live.realized_close_admission import wave_allowed
+
+    if not wave_allowed(bot):
         # Existing venue closes may differ from the current Rust ideal within
         # tolerance. The live cohort has no certificate of their loss budget.
         return ()

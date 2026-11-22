@@ -8,7 +8,7 @@ import config.hsl as hsl
 
 
 def config(mode="coin"):
-    return {"bot": {"portfolio": {"hsl": {"scope": mode}}}, "live": {}}
+    return {"bot": {"portfolio": {"risk": {"hsl": {"scope": mode}}}}, "live": {}}
 
 
 def patch(path, value, nested):
@@ -31,8 +31,8 @@ def legacy_validation(config, overrides, *, allow_engine=False):
             "live.hsl_engine is a startup selector, not a scenario or optimizer override"
         )
     selected = deepcopy(config)
-    if "bot.portfolio.hsl.scope" in leaves:
-        selected.setdefault("bot", {}).setdefault("portfolio", {}).setdefault("hsl", {})["scope"] = leaves["bot.portfolio.hsl.scope"]
+    if "bot.portfolio.risk.hsl.scope" in leaves:
+        selected.setdefault("bot", {}).setdefault("portfolio", {}).setdefault("risk", {}).setdefault("hsl", {})["scope"] = leaves["bot.portfolio.risk.hsl.scope"]
     if "live.hsl_engine" in leaves:
         selected["live"]["hsl_engine"] = leaves["live.hsl_engine"]
     if not allow_engine:
@@ -59,7 +59,7 @@ def test_ordinary_validation_preserves_results_without_copying(mode, nested, kin
         overrides = {}
     else:
         owner = "portfolio" if mode == "portfolio" else "long"
-        path = f"bot.{owner}.hsl.drawdown_threshold_fraction" if kind == "hsl" else "bot.long.entry_cooldown.min_duration_minutes"
+        path = f"bot.{owner}.risk.hsl.drawdown_threshold_fraction" if kind == "hsl" else "bot.long.entry_cooldown.min_duration_minutes"
         overrides = patch(path, 0.25, nested)
     before = deepcopy(value)
     expected = outcome(legacy_validation, value, overrides)
@@ -74,8 +74,8 @@ def test_ordinary_validation_preserves_results_without_copying(mode, nested, kin
 @pytest.mark.parametrize("nested", [False, True])
 def test_scope_selectors_still_copy_and_validate_final_scope(original, selected, nested, monkeypatch):
     value = config(original)
-    overrides = patch("bot.portfolio.hsl.scope", selected, nested)
-    overrides["bot.long.hsl.enabled"] = False
+    overrides = patch("bot.portfolio.risk.hsl.scope", selected, nested)
+    overrides["bot.long.risk.hsl.enabled"] = False
     expected = outcome(legacy_validation, value, overrides)
     copied = []
 
@@ -86,7 +86,7 @@ def test_scope_selectors_still_copy_and_validate_final_scope(original, selected,
     monkeypatch.setattr(hsl, "deepcopy", copy_selected)
     assert outcome(hsl.validate_override_paths, value, overrides) == expected
     assert copied == [value]
-    assert value["bot"]["portfolio"]["hsl"]["scope"] == original
+    assert value["bot"]["portfolio"]["risk"]["hsl"]["scope"] == original
 
 
 @pytest.mark.parametrize("allow_engine", [False, True])
@@ -108,17 +108,17 @@ def test_engine_selector_preserves_pre_copy_rejection_and_detached_mutation(allo
 
 
 @pytest.mark.parametrize("malformed", [
-    "scope", "scope_type", "bot", "portfolio", "hsl", "live", "engine",
+    "scope", "scope_type", "bot", "portfolio", "risk", "hsl", "live", "engine",
     "removed_path", "removed_metric", "inactive_path", "competing_errors",
 ])
 def test_required_failures_and_error_order_match_copying_validation(malformed):
     value = config()
-    overrides = {"bot.long.hsl.enabled": True}
+    overrides = {"bot.long.risk.hsl.enabled": True}
     if malformed == "scope":
-        value["bot"]["portfolio"]["hsl"]["scope"] = "invalid"
+        value["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "invalid"
     elif malformed == "scope_type":
-        value["bot"]["portfolio"]["hsl"]["scope"] = None
-    elif malformed in {"bot", "portfolio", "hsl", "live"}:
+        value["bot"]["portfolio"]["risk"]["hsl"]["scope"] = None
+    elif malformed in {"bot", "portfolio", "risk", "hsl", "live"}:
         if malformed == "live":
             value["live"] = None
         elif malformed == "bot":
@@ -126,25 +126,25 @@ def test_required_failures_and_error_order_match_copying_validation(malformed):
         elif malformed == "portfolio":
             value["bot"]["portfolio"] = None
         else:
-            value["bot"]["portfolio"]["hsl"] = None
+            value["bot"]["portfolio"]["risk"]["hsl"] = None
     elif malformed == "engine":
         value["live"]["hsl_engine"] = "legacy"
     elif malformed == "removed_path":
-        overrides = {"bot.long.hsl.restart_after_red_policy": "never"}
+        overrides = {"bot.long.risk.hsl.restart_after_red_policy": "never"}
     elif malformed == "removed_metric":
         overrides = {"arbitrary_metric": "hard_stop_time_in_yellow"}
     elif malformed == "inactive_path":
-        value["bot"]["portfolio"]["hsl"]["scope"] = "portfolio"
+        value["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "portfolio"
     else:
-        value["bot"]["portfolio"]["hsl"]["scope"] = "invalid"
-        overrides = {"bot.long.hsl.restart_after_red_policy": "never"}
+        value["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "invalid"
+        overrides = {"bot.long.risk.hsl.restart_after_red_policy": "never"}
     expected = outcome(legacy_validation, value, overrides)
     assert expected is not None
     assert outcome(hsl.validate_override_paths, value, overrides) == expected
 
 
 @pytest.mark.parametrize("where", [
-    "root", "live", "bot", "portfolio", "hsl", "scope", "key",
+    "root", "live", "bot", "portfolio", "risk", "hsl", "scope", "key",
     "live_key", "bot_key", "portfolio_key", "hsl_key",
 ])
 def test_foreign_consumed_paths_retain_copy_protocol(where):
@@ -170,10 +170,10 @@ def test_foreign_consumed_paths_retain_copy_protocol(where):
         if where in {"portfolio_key", "hsl_key"}:
             target = target["portfolio"]
         if where == "hsl_key":
-            target = target["hsl"]
+            target = target["risk"]["hsl"]
         target[ForeignString("extra")] = 1
     elif where == "scope":
-        value["bot"]["portfolio"]["hsl"]["scope"] = ForeignString("coin")
+        value["bot"]["portfolio"]["risk"]["hsl"]["scope"] = ForeignString("coin")
     elif where == "live":
         value["live"] = Foreign()
     elif where == "bot":
@@ -181,7 +181,7 @@ def test_foreign_consumed_paths_retain_copy_protocol(where):
     elif where == "portfolio":
         value["bot"]["portfolio"] = Foreign(value["bot"]["portfolio"])
     else:
-        value["bot"]["portfolio"]["hsl"] = Foreign(value["bot"]["portfolio"]["hsl"])
+        value["bot"]["portfolio"]["risk"]["hsl"] = Foreign(value["bot"]["portfolio"]["risk"]["hsl"])
     expected = outcome(legacy_validation, value, {})
     assert expected == (RuntimeError, "foreign selector copy")
     calls.clear()
@@ -222,7 +222,7 @@ def test_known_prepared_bot_values_and_source_owners_remain_read_only(kind, monk
     owners = {key: item for key, item in getattr(bot, "__dict__", {}).items()}
     activation = getattr(bot, "_activation_source", None)
     monkeypatch.setattr(hsl, "deepcopy", lambda *_args: pytest.fail("prepared selector view was copied"))
-    assert hsl.validate_override_paths(value, {"bot.long.hsl.enabled": False}) is None
+    assert hsl.validate_override_paths(value, {"bot.long.risk.hsl.enabled": False}) is None
     assert bot == before and value["bot"] is bot
     assert all(getattr(bot, key) is item for key, item in owners.items())
     assert getattr(bot, "_activation_source", None) is activation
@@ -240,7 +240,7 @@ def test_known_wrappers_with_custom_copy_protocol_retain_fallback(kind, protocol
     value = {"bot": bot, "live": {}}
 
     def changed(*_args):
-        return {"portfolio": {"hsl": {"scope": "portfolio"}}}
+        return {"portfolio": {"risk": {"hsl": {"scope": "portfolio"}}}}
 
     if protocol == "class_deepcopy":
         monkeypatch.setattr(type(bot), "__deepcopy__", changed, raising=False)
@@ -250,7 +250,7 @@ def test_known_wrappers_with_custom_copy_protocol_retain_fallback(kind, protocol
         monkeypatch.setattr(bot, "__deepcopy__", changed, raising=False)
     else:
         monkeypatch.setitem(dispatch_table, type(bot), lambda *_args: (dict, (changed(),)))
-    overrides = {"bot.long.hsl.enabled": False}
+    overrides = {"bot.long.risk.hsl.enabled": False}
     expected = outcome(legacy_validation, value, overrides)
     assert expected and "inactive in portfolio mode" in expected[1]
     assert outcome(hsl.validate_override_paths, value, overrides) == expected

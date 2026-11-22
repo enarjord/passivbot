@@ -51,15 +51,16 @@ def test_flat_forager_bound_spelling_is_not_public_authoring_authority():
         prepare_config(source, verbose=False)
 
 
-def test_global_loss_memories_remain_independent():
+def test_realized_memory_is_shared_and_hsl_memory_remains_separate():
+    from config.risk_memory import risk_memory_spans
+
     source = get_template_config()
-    source["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 37.5
-    source["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 93.5
-    source["bot"]["long"]["hsl"] = {"memory_ema_span_minutes": 17.5}
+    risk = source["bot"]["portfolio"]["risk"]
+    risk["loss_realization"]["memory_ema_span_minutes"] = 37.5
+    risk["loss_realization"]["loss_gate"] = {"enabled": True, "max_realized_drawdown_fraction": 0}
+    source["bot"]["long"]["risk"] = {"hsl": {"enabled": True, "memory_ema_span_minutes": 17.5}}
     config = prepare_config(source, verbose=False)
-    assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 37.5
-    assert config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 93.5
-    assert config["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == 17.5
+    assert risk_memory_spans(config) == (17.5, 37.5)
 
 
 @pytest.mark.parametrize("nested_first", [False, True])

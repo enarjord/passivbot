@@ -17,8 +17,8 @@ def fixed_side_bounds(cfg):
         side: {"risk": {"max_positions": [1, 1], "total_wallet_exposure_limit_ratio": [1, 1]}}
         for side in ("long", "short")
     }
-    if cfg["bot"]["portfolio"]["hsl"]["scope"] == "portfolio":
-        cfg["optimize"]["bounds"]["portfolio"] = {"hsl": {}}
+    if cfg["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "portfolio":
+        cfg["optimize"]["bounds"]["portfolio"] = {"risk": {"hsl": {}}}
 
 
 def threshold_vector(shape, threshold):
@@ -37,7 +37,7 @@ def test_candidate_threshold_reaches_native_hsl_signal(mode):
         if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
-    target["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.9]}
+    target["risk"]["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.9]}
     cfg["optimize"]["scoring"] = ["hsl_triggers_per_year"]
     cfg["optimize"]["limits"] = []
     shape = build_optimization_shape(cfg)
@@ -102,8 +102,8 @@ def test_hsl_runtime_boundary_rejects_removed_metrics(tier):
 def test_cpu_candidate_rejects_inactive_objective_before_dataset_attachment():
     cfg, _, _ = inputs("portfolio")
     fixed_side_bounds(cfg)
-    cfg["optimize"]["bounds"].setdefault("portfolio", {})["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.9]}
-    cfg["bot"]["portfolio"]["hsl"]["enabled"] = False
+    cfg["optimize"]["bounds"]["portfolio"]["risk"]["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.9]}
+    cfg["bot"]["portfolio"]["risk"]["hsl"]["enabled"] = False
     cfg["optimize"]["scoring"] = ["hsl_triggers_per_year"]
     cfg["optimize"]["limits"] = []
     evaluator = Evaluator({"binance": None}, {}, {}, cfg)
@@ -130,7 +130,7 @@ def test_suite_metric_validation_uses_only_its_selected_scenarios(section, scena
         )
     ]
     portfolio, _, _ = inputs("portfolio")
-    portfolio["bot"]["portfolio"]["hsl"]["enabled"] = False
+    portfolio["bot"]["portfolio"]["risk"]["hsl"]["enabled"] = False
     fixed_side_bounds(cfg)
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     contexts = [
@@ -140,7 +140,7 @@ def test_suite_metric_validation_uses_only_its_selected_scenarios(section, scena
             config=portfolio,
             msss={},
             overrides={
-                "bot.portfolio.hsl": portfolio["bot"]["portfolio"]["hsl"],
+                "bot.portfolio.risk.hsl": portfolio["bot"]["portfolio"]["risk"]["hsl"],
             },
         ),
     ]
@@ -150,7 +150,7 @@ def test_suite_metric_validation_uses_only_its_selected_scenarios(section, scena
     evaluator.build_scenario_candidate_config(cfg, contexts[0])
     if scenario == "side":
         result = evaluator.build_scenario_candidate_config(cfg, contexts[1])
-        assert result["bot"]["portfolio"]["hsl"]["scope"] == "portfolio"
+        assert result["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "portfolio"
     else:
         with pytest.raises(ValueError, match="no enabled controller"):
             evaluator.build_scenario_candidate_config(cfg, contexts[1])
@@ -196,7 +196,7 @@ def test_retired_side_signal_metrics_are_rejected(mode, metric):
 
     cfg, _, _ = inputs(mode)
     for enabled in (False, True):
-        cfg["bot"]["short"]["hsl"]["enabled"] = enabled
+        cfg["bot"]["short"]["risk"]["hsl"]["enabled"] = enabled
         with pytest.raises(ValueError, match="unknown or retired core metric"):
             reject_retired_metric(metric, path="optimize.scoring")
 
@@ -212,11 +212,11 @@ def test_retired_side_signal_metrics_are_rejected(mode, metric):
 )
 def test_coin_metrics_follow_effective_dataset_policy(base, override, accepted):
     cfg, markets, _ = inputs("coin")
-    cfg["bot"]["long"]["hsl"]["enabled"] = False
-    cfg["bot"]["short"]["hsl"]["enabled"] = base
+    cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = False
+    cfg["bot"]["short"]["risk"]["hsl"]["enabled"] = base
     cfg["coin_overrides"] = {
-        "AAA": {"bot": {"short": {"hsl": {"enabled": override}}}},
-        "OUTSIDE": {"bot": {"short": {"hsl": {"enabled": True}}}},
+        "AAA": {"bot": {"short": {"risk": {"hsl": {"enabled": override}}}}},
+        "OUTSIDE": {"bot": {"short": {"risk": {"hsl": {"enabled": True}}}}},
     }
     if accepted:
         validate_optimizer_metrics(
@@ -235,9 +235,9 @@ def test_coin_policy_metric_check_uses_same_alias_resolution_as_payload(monkeypa
     import backtest
 
     cfg, markets, _ = inputs("coin")
-    cfg["bot"]["long"]["hsl"]["enabled"] = False
+    cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = False
     cfg["coin_overrides"] = {
-        "AAA/USDT:USDT": {"bot": {"short": {"hsl": {"enabled": True}}}}
+        "AAA/USDT:USDT": {"bot": {"short": {"risk": {"hsl": {"enabled": True}}}}}
     }
     markets["AAA"]["symbol"] = "AAA/USDT:USDT"
     monkeypatch.setattr(
@@ -274,15 +274,15 @@ def test_retired_side_objective_rejected_before_cpu_dataset_attachment():
 def test_disabled_portfolio_signal_metrics_are_rejected(mode, metric):
     cfg, markets, _ = inputs(mode)
     for side in ("long", "short"):
-        cfg["bot"][side]["hsl"]["enabled"] = False
+        cfg["bot"][side]["risk"]["hsl"]["enabled"] = False
     if mode == "portfolio":
-        cfg["bot"]["portfolio"]["hsl"]["enabled"] = False
+        cfg["bot"]["portfolio"]["risk"]["hsl"]["enabled"] = False
     with pytest.raises(ValueError, match="no enabled controller"):
         validate_optimizer_metrics(
             cfg, [metric], markets_by_exchange={"binance": markets}
         )
     validate_optimizer_metrics(cfg, ["drawdown_max_fraction_strategy_equity", "cagr_fraction_strategy_equity"])
-    policy = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    policy = cfg["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["risk"]["hsl"]
     policy["enabled"] = True
     validate_optimizer_metrics(cfg, [metric], markets_by_exchange={"binance": markets})
 
@@ -290,12 +290,12 @@ def test_disabled_portfolio_signal_metrics_are_rejected(mode, metric):
 @pytest.mark.parametrize("override_enabled", [False, True])
 def test_portfolio_metric_uses_effective_combined_coin_policies(override_enabled):
     cfg, markets, _ = inputs("coin")
-    cfg["bot"]["long"]["hsl"]["enabled"] = False
-    cfg["bot"]["long"]["hsl"]["enabled"] = not override_enabled
+    cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = False
+    cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = not override_enabled
     cfg["backtest"]["coins"] = {"combined": ["AAA"]}
     cfg["coin_overrides"] = {
-        "AAA": {"bot": {"long": {"hsl": {"enabled": override_enabled}}}},
-        "OUTSIDE": {"bot": {"short": {"hsl": {"enabled": True}}}},
+        "AAA": {"bot": {"long": {"risk": {"hsl": {"enabled": override_enabled}}}}},
+        "OUTSIDE": {"bot": {"short": {"risk": {"hsl": {"enabled": True}}}}},
     }
     if override_enabled:
         validate_optimizer_metrics(
@@ -329,7 +329,7 @@ def test_suite_portfolio_metrics_only_require_the_consumed_scenarios(section, sc
     ]
     active = SimpleNamespace(label="active", config=cfg, overrides={}, msss={})
     inactive = SimpleNamespace(
-        label="inactive", config=cfg, overrides={"bot.portfolio.hsl.enabled": False}, msss={}
+        label="inactive", config=cfg, overrides={"bot.portfolio.risk.hsl.enabled": False}, msss={}
     )
     suite = SuiteEvaluator(
         Evaluator({}, {}, {}, cfg), [active, inactive], {"default": "mean"}
@@ -349,18 +349,14 @@ def test_combined_suite_validates_actual_source_market_policy(
     base_enabled, override_enabled
 ):
     cfg, markets, _ = inputs("coin")
-    cfg["bot"]["long"]["hsl"]["enabled"] = False
+    cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = False
     fixed_side_bounds(cfg)
-    cfg["bot"]["short"]["hsl"].update(enabled=base_enabled)
+    cfg["bot"]["short"]["risk"]["hsl"].update(enabled=base_enabled)
     cfg["backtest"]["coins"] = {"combined": ["AAA"]}
     cfg["coin_overrides"] = {
         "AAA": {
             "bot": {
-                "short": {
-                    "hsl": {
-                        "enabled": override_enabled,
-                    }
-                }
+                "short": {"risk": {"hsl": {"enabled": override_enabled}}}
             }
         }
     }

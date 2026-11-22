@@ -111,10 +111,12 @@ def validate_authored_config(config, template, *, policy_context=None):
     schema["live"]["base_config_path"] = ""
     from .hsl import FIELDS
 
-    schema["bot"]["portfolio"]["hsl"].update({key: None for key in FIELDS})
+    portfolio_risk = schema["bot"]["portfolio"]["risk"]
+    portfolio_risk["hsl"].update({key: None for key in FIELDS})
+    portfolio_risk["loss_realization"]["loss_gate"]["max_realized_drawdown_fraction"] = 0.0
     bounds = schema["optimize"]["bounds"]
     for side in ("long", "short"):
-        bounds[side]["hsl"]["memory_ema_span_minutes"] = []
+        bounds[side]["risk"]["hsl"]["memory_ema_span_minutes"] = []
         cooldown = bounds[side]["entry_cooldown"]
         for key in ("min_duration_minutes", "max_duration_minutes"):
             cooldown[key] = []
@@ -123,9 +125,10 @@ def validate_authored_config(config, template, *, policy_context=None):
         bounds[side]["forager"]["rms_directionality_ema_span_minutes"] = []
     bounds["global"] = deepcopy(bounds["long"])
     # Optional dimensions must remain absent from default searches.
-    bounds.setdefault("portfolio", {}).setdefault("unstuck", {})["memory_ema_span_minutes"] = []
-    bounds.setdefault("portfolio", {}).setdefault("loss_gate", {})["memory_ema_span_minutes"] = []
-    bounds["portfolio"].setdefault("hsl", {}).update({
+    risk_bounds = bounds.setdefault("portfolio", {}).setdefault("risk", {})
+    risk_bounds["loss_realization"] = {"memory_ema_span_minutes": [],
+                                      "loss_gate": {"max_realized_drawdown_fraction": []}}
+    risk_bounds.setdefault("hsl", {}).update({
         "drawdown_threshold_fraction": [], "drawdown_fraction_ema_span_minutes": [],
         "memory_ema_span_minutes": [], "cooldown_after_red_minutes": [],
     })
@@ -155,7 +158,7 @@ def validate_authored_config(config, template, *, policy_context=None):
             _mapping(value, path)
             from .overrides import _extract_allowed_patch
 
-            mode = policy_context.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", "coin")
+            mode = policy_context.get("bot", {}).get("portfolio", {}).get("risk", {}).get("hsl", {}).get("scope", "coin")
             strategy = get_optional_config_value(policy_context, 'bot.portfolio.strategy_kind', "trailing_martingale")
             for coin, patch in value.items():
                 _extract_allowed_patch(
@@ -216,6 +219,8 @@ def validate_authored_config(config, template, *, policy_context=None):
                 visit(child, expected[key], (*parts, key), f"{path}.{key}")
 
     def validate_patch(patch, path):
+        from .risk_memory import validate_loss_gate_replacement
+
         _mapping(patch, path)
 
         def validate_group(parts, value):
@@ -242,7 +247,7 @@ def validate_authored_config(config, template, *, policy_context=None):
                 from .overrides import _extract_allowed_patch, get_allowed_modifications
 
                 coin, *local_parts = parts[1:]
-                mode = policy_context.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", "coin")
+                mode = policy_context.get("bot", {}).get("portfolio", {}).get("risk", {}).get("hsl", {}).get("scope", "coin")
                 policy = get_allowed_modifications(hsl_signal_mode=mode)
                 for part in local_parts:
                     if not isinstance(policy, dict) or part not in policy:
@@ -269,5 +274,6 @@ def validate_authored_config(config, template, *, policy_context=None):
                     raise ValueError(f"{path}.{selector} targets an unknown configuration field")
                 expected = expected[part]
             visit(value, expected, parts, f"{path}.{selector}")
+            validate_loss_gate_replacement(parts, value)
 
     visit(config, schema, ())

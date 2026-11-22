@@ -46,9 +46,7 @@ def test_incremental_cuda_admission_preserves_inputs_results_and_memory(
 
     config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy, "--sides", "both", "--coins", "3", "--bars", "512",
-        "--unstuck",
     ]))
-    config["bot"]["portfolio"]["loss_gate"].update(max_drawdown_fraction=.1, memory_ema_span_minutes=8.)
     key = "long_base_qty_fraction" if strategy == "ema_anchor" else "long_entry_initial_qty_fraction"
     candidates = [{key: value} for value in (0.005, 0.015, 0.03, 0.045, 0.005)]
     reference = replay_module.SharedAccountReplay(

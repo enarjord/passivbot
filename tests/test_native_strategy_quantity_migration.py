@@ -220,9 +220,9 @@ def test_all_released_flat_strategy_bounds_precede_missing_unstuck_inference(kin
     for side in ("long", "short"):
         for span, inherited in (("ema_span_0", 101.25), ("ema_span_1", 902.75)):
             value = inherited if span in missing_spans else 237.5
-            assert converted.config["bot"][side]["unstuck"][f"{span}_minutes"] == value
+            assert converted.config["bot"][side]["risk"]["unstuck"][f"{span}_minutes"] == value
             expected_bound = [value, value] if span in missing_spans else [211.25, 277.75, 0.25]
-            assert bounds[side]["unstuck"][f"{span}_minutes"] == expected_bound
+            assert bounds[side]["risk"]["unstuck"][f"{span}_minutes"] == expected_bound
 
 
 @pytest.mark.parametrize("kind,old,local", [
@@ -283,6 +283,6 @@ def test_released_flat_zero_span_preserves_disabled_strategy_and_unstuck_fallbac
     public_span = ("entry", "ema_span_0_minutes") if kind == "trailing_martingale" else ("ema_span_0_minutes",)
     assert _at(converted.config, ("bot", "short", "strategy", kind, *public_span)) == 0.0
     assert _at(converted.config["optimize"]["bounds"], ("short", "strategy", kind, *public_span)) == bound
-    assert converted.config["bot"]["short"]["unstuck"]["ema_span_0_minutes"] == fallback
-    assert converted.config["optimize"]["bounds"]["short"]["unstuck"]["ema_span_0_minutes"] == [fallback, fallback]
+    assert converted.config["bot"]["short"]["risk"]["unstuck"]["ema_span_0_minutes"] == fallback
+    assert converted.config["optimize"]["bounds"]["short"]["risk"]["unstuck"]["ema_span_0_minutes"] == [fallback, fallback]
     assert config == original

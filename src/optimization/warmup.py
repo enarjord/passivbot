@@ -31,6 +31,10 @@ def _apply_config_overrides(
     preserve_derived_outputs=True,
 ) -> None:
     from config.bot_inheritance import get_bot_policy
+    from config.risk_memory import validate_loss_gate_replacements
+
+    if overrides:
+        validate_loss_gate_replacements(overrides)
     if get_bot_policy(config) is not None:
         _apply_inherited_config_overrides(
             config, overrides, preserve_prepared_universe=preserve_prepared_universe,
@@ -398,6 +402,18 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None, *, fixe
         canonicalize_shared_bot_side(side_cfg, path_prefix=("bot", pside))
     config.pop(ANCHOR_PLAN_KEY, None)
     runtime_overrides = config.get("optimize", {}).get("fixed_runtime_overrides", {})
+    from config.inherited_bounds import get_bound_plan
+    from config.risk_memory import LOSS_GATE_CAP_PATH, require_loss_realization_policy
+
+    gate_cap_selector = ".".join(LOSS_GATE_CAP_PATH)
+    plan = get_bound_plan(config)
+    if gate_cap_selector in runtime_overrides and plan is not None and any(
+        binding.authoring_path == LOSS_GATE_CAP_PATH for binding in plan.bindings
+    ):
+        # The fixed cap established authored authority before candidate building.
+        # Where the cap is explicitly searched, the selected gene supplies it.
+        _, _, candidate_cap = require_loss_realization_policy(config)
+        runtime_overrides = {**runtime_overrides, gate_cap_selector: candidate_cap}
     _apply_config_overrides(
         config, runtime_overrides, preserve_prepared_universe=True,
         preserve_derived_outputs=False,

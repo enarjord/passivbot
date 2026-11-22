@@ -1396,7 +1396,7 @@ def test_mps_coin_capacity_is_explicit_and_preserves_other_source(monkeypatch):
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("fused", [False, True])
-def test_replay_policy_and_unstuck_layout_ignore_diagnostic_labels(source_kernel, strategy, fused):
+def test_hsl_replay_policy_ignores_diagnostic_labels(source_kernel, strategy, fused):
     if strategy == "ema_anchor":
         cls = (source_kernel.MpsEmaAnchorMulticoinFusedRunner if fused
                else source_kernel.MpsEmaAnchorMulticoinRunner)
@@ -1415,7 +1415,6 @@ def test_replay_policy_and_unstuck_layout_ignore_diagnostic_labels(source_kernel
     runner.hsl_fact_capacity = 64
     scratch = runner._hsl_scratch_buffers = {"forward": object()}
     runner._coin_hsl_enabled_overrides = tuple(np.array([np.nan, 0.]) for _ in range(sides))
-    runner._unstuck_ema_overrides = tuple(np.full((2, 2), np.nan) for _ in range(sides))
     matrix = np.zeros((2, len(keys) * sides), dtype=np.float32)
     for side in range(sides):
         matrix[:, side * len(keys) + keys.index("hsl_signal_mode")] = 2
@@ -1423,10 +1422,6 @@ def test_replay_policy_and_unstuck_layout_ignore_diagnostic_labels(source_kernel
     runner._prepare_native_factual_hsl(matrix)
     assert runner.hsl_fact_capacity == 0 and not runner.hsl_factual_replay
     assert runner._hsl_scratch_buffers is scratch
-    assert not runner._unstuck_ema_required(matrix)
-    for name in ("unstuck_enabled", "unstuck_ema_gating_enabled"):
-        matrix[1, (sides - 1) * len(keys) + keys.index(name)] = 1
-    assert runner._unstuck_ema_required(matrix)
     for side in range(sides):
         matrix[:, side * len(keys) + keys.index("hsl_enabled")] = 0
     runner._prepare_native_factual_hsl(matrix)

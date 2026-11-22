@@ -32,6 +32,7 @@ def row(reason="waiting_ema", *, idx=0, side="long", allowance=20.0, **values):
         "reason": reason,
         "proposed": reason
         in {"selected", "superseded", "loss_gate_blocked", "finalization_filtered"},
+        "selected": reason == "selected",
         "allowance": allowance,
         "exposure_ratio": 1.0,
         "exposure_trigger_ratio": 0.9,
@@ -330,7 +331,6 @@ def test_native_json_decision_reaches_operator_snapshot(
     )
 
     params = {
-        "unstuck_close_fraction": 0.5,
         "unstuck_exposure_trigger_ratio": 0.001,
         "unstuck_ema_gating_enabled": False,
         "unstuck_loss_allowance_fraction": 0.01,
@@ -351,7 +351,7 @@ def test_native_json_decision_reaches_operator_snapshot(
             )
         ],
     )
-    value["global"]["unstuck_realized_pnl_drawdown"] = 1000.0 if spent else 0.0
+    value["global"]["realized_pnl_drawdown"] = 1000.0 if spent else 0.0
     output = compute(require_real_passivbot_rust_module, value)
     bot, clock, events = presentation
     ud.observe(bot, output["diagnostics"], {0: "AAA/USDT:USDT"})
@@ -365,6 +365,8 @@ def test_native_json_decision_reaches_operator_snapshot(
         )
         assert info["samples"][0]["qty"] == order["qty"]
         assert info["samples"][0]["price"] == order["price"]
+        assert info["samples"][0]["selected"] is True
+        assert info["samples"][0]["projected_exposure_ratio"] >= 0.001
 
 
 def test_real_full_queue_does_not_duplicate_console_before_retry(presentation):

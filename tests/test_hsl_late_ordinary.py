@@ -1005,11 +1005,11 @@ async def test_late_handoff_sends_refreshed_raw_balance_to_native_and_executes(t
     legacy = prepare_config(load_fake_hsl_config(), target="canonical", runtime=None, verbose=False)
     config = generated_template(mutable_runtime_fixture(legacy), "coin")
     for side in ("long", "short"):
-        config["bot"][side]["unstuck"]["enabled"] = False
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
         config["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
-    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
+    config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]["enabled"] = False
     config["bot"]["long"]["universe"]["approved_coins"] = ["BTC"]
-    config["bot"]["long"]["hsl"].update(
+    config["bot"]["long"]["risk"]["hsl"].update(
         enabled=True, drawdown_fraction_ema_span_minutes=1.0, drawdown_threshold_fraction=0.5
     )
     set_risk_memory_spans(config, 288.0)

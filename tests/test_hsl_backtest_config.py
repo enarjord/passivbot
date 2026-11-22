@@ -33,7 +33,7 @@ def inputs(mode="coin"):
     for side in ("long", "short"):
         cfg["bot"][side]["enabled"] = True
         cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0.0
-        cfg["bot"][side]["hsl"].update(enabled=False)
+        cfg["bot"][side]["risk"]["hsl"].update(enabled=False)
         cfg["bot"][side]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1)
         # The fixture isolates HSL on a short history with a fixed entry cooldown.
         cfg["bot"][side]["entry_cooldown"].update(
@@ -49,7 +49,7 @@ def inputs(mode="coin"):
         for branch in ("entry", "close"):
             strategy[branch]["threshold_log_range_1h_coefficient"] = 0.0
             strategy[branch]["retracement_log_range_1h_coefficient"] = 0.0
-    active = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    active = cfg["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["risk"]["hsl"]
     active.update(
         enabled=True,
         drawdown_threshold_fraction=0.01,
@@ -109,8 +109,7 @@ def test_native_hsl_transport_and_report(mode):
     assert selected["drawdown_fraction_ema_span_minutes"] == 1.5
     assert all("restart_after_red_policy" not in policy for policy in hsl["sides"])
     assert selected["memory_ema_span_minutes"] == 1440.0
-    assert args[-1]["unstuck_memory_ema_span_minutes"] == 1440.0
-    assert args[-1]["loss_gate_memory_ema_span_minutes"] == 1440.0
+    assert args[-1]["realized_loss_memory_ema_span_minutes"] == 1440.0
     assert "lookback_ema_span_minutes" not in args[-1]
     assert "realized_loss_gate_lookback_minutes" not in args[-1]
     assert not any(
@@ -153,11 +152,13 @@ def test_effective_coin_override_has_single_authority():
         "AAA": {
             "bot": {
                 "long": {
-                    "hsl": {
-                        "drawdown_fraction_ema_span_minutes": 2.75,
-                        "drawdown_threshold_fraction": 0.4,
-                        "panic_close_order_type": "limit",
-                    }
+                    "risk": {
+                        "hsl": {
+                            "drawdown_fraction_ema_span_minutes": 2.75,
+                            "drawdown_threshold_fraction": 0.4,
+                            "panic_close_order_type": "limit",
+                        },
+                    },
                 }
             }
         }
@@ -253,6 +254,7 @@ def test_disabled_hsl_scopes_keep_shared_realized_loss_gate():
     args = payload("position_side")
     for policy in args[-1]["equity_hard_stop_loss"]["sides"]:
         policy.update(enabled=False)
+    args[-1]["loss_gate_enabled"] = True
     args[-1]["loss_gate_max_drawdown_fraction"] = 0.1
     result = run(args)
     assert result[3]["hsl"]["summary"]["triggers"] == 0
@@ -261,18 +263,17 @@ def test_disabled_hsl_scopes_keep_shared_realized_loss_gate():
 
 def test_slow_decay_changes_hsl_memory_with_policy_local_span_transport():
     cfg, markets, _ = inputs()
-    cfg["bot"]["long"]["unstuck"]["enabled"] = False
-    cfg["bot"]["long"]["hsl"].update(drawdown_threshold_fraction=.03, drawdown_fraction_ema_span_minutes=1.0)
+    cfg["bot"]["long"]["risk"]["unstuck"]["enabled"] = False
+    cfg["bot"]["long"]["risk"]["hsl"].update(drawdown_threshold_fraction=.03, drawdown_fraction_ema_span_minutes=1.0)
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
         initial_qty_fraction=1.0, initial_ema_distance_fraction=0.0,
         ema_span_0_minutes=2.0, ema_span_1_minutes=3.0)
     counts = []
     for span in (1.0, 1440.0):
-        cfg["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = span
+        cfg["bot"]["long"]["risk"]["hsl"]["memory_ema_span_minutes"] = span
         args = payload(cfg=cfg, mss=markets)
         assert args[-1]["equity_hard_stop_loss"]["coins"]["AAA"][0]["memory_ema_span_minutes"] == span
-        assert args[-1]["unstuck_memory_ema_span_minutes"] == 1440.0
-        assert args[-1]["loss_gate_memory_ema_span_minutes"] == 1440.0
+        assert args[-1]["realized_loss_memory_ema_span_minutes"] == 1440.0
         assert "realized_loss_gate_lookback_minutes" not in args[-1]
         counts.append(run(args)[2]["metric_metadata"]["hsl_trigger_count"])
     # At span1 each new minute forgets earlier currency loss. The same gradual
@@ -284,7 +285,7 @@ def test_slow_decay_changes_hsl_memory_with_policy_local_span_transport():
 def test_fractional_finite_cooldown_deadline_survives_flat_green_observations():
     cfg, markets, _ = inputs()
     cooldown_minutes = 2.5
-    cfg["bot"]["long"]["hsl"]["cooldown_after_red_minutes"] = cooldown_minutes
+    cfg["bot"]["long"]["risk"]["hsl"]["cooldown_after_red_minutes"] = cooldown_minutes
     args = payload(cfg=cfg, mss=markets)
     args[-1]["hsl_detailed_report"] = True
     report = run(args)[3]["hsl"]
@@ -529,7 +530,7 @@ def test_native_scaled_budget_preserves_one_slot_and_delays_multislot_panic(slot
         total_wallet_exposure_limit_ratio=2.5,
         we_excess_allowance_fraction=0.44,
     )
-    cfg["bot"]["long"]["hsl"].update(drawdown_threshold_fraction=0.2, drawdown_fraction_ema_span_minutes=1)
+    cfg["bot"]["long"]["risk"]["hsl"].update(drawdown_threshold_fraction=0.2, drawdown_fraction_ema_span_minutes=1)
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
         initial_qty_fraction=1,
         initial_ema_distance_fraction=0,
@@ -541,7 +542,7 @@ def test_native_scaled_budget_preserves_one_slot_and_delays_multislot_panic(slot
             "AAA": {"bot": {"long": {"wallet_exposure_limit_ratio": 0.2}}}
         }
     ordinary = run(payload(cfg=cfg, mss=markets))
-    cfg["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = True
+    cfg["bot"]["long"]["risk"]["hsl"]["scale_budget_with_excess_allowance"] = True
     scaled = run(payload(cfg=cfg, mss=markets))
     if slots == 1:
         np.testing.assert_array_equal(scaled[0], ordinary[0])

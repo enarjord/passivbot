@@ -79,10 +79,10 @@ procedure for inline overrides where those values should continue to inherit.
 
 | Released field | Final v9 field or action |
 |---|---|
-| `live.hsl_signal_mode` | `bot.portfolio.hsl.scope` selects `coin`, `position_side`, or `portfolio`. `pside` becomes `position_side`. Earlier `unified` configs shared a signal across side policies. Review those policies and choose a single portfolio policy and bounds for v9. |
-| `bot.<side>.hsl.red_threshold` | `bot.<side>.hsl.drawdown_threshold_fraction`, with the same fractional value |
-| `bot.<side>.unstuck.ema_dist` | `bot.<side>.unstuck.ema_distance_fraction`, with the same signed fractional value |
-| `bot.hsl` portfolio policy | `bot.portfolio.hsl` alongside its scope |
+| `live.hsl_signal_mode` | `bot.portfolio.risk.hsl.scope` selects `coin`, `position_side`, or `portfolio`. `pside` becomes `position_side`. Earlier `unified` configs shared a signal across side policies. Review those policies and choose a single portfolio policy and bounds for v9. |
+| `bot.<side>.hsl.red_threshold` | `bot.<side>.risk.hsl.drawdown_threshold_fraction`, with the same fractional value |
+| `bot.<side>.unstuck.ema_dist` | `bot.<side>.risk.unstuck.ema_distance_fraction`, with the same signed fractional value |
+| `bot.hsl` portfolio policy | `bot.portfolio.risk.hsl` alongside its scope |
 | HSL `ema_span_minutes` | `drawdown_fraction_ema_span_minutes` in the same policy |
 | HSL `cooldown_minutes_after_red` | `cooldown_after_red_minutes` in the same policy |
 | Strategy and unstuck `ema_span_0`, `ema_span_1` | `ema_span_0_minutes`, `ema_span_1_minutes`; trailing-martingale spans live under `entry` |
@@ -99,10 +99,10 @@ procedure for inline overrides where those values should continue to inherit.
 | Strategy `*_ema_span_1h` | `*_ema_span_1h_candles`, with the same floating hourly-candle count |
 | Authored `recv_window_ms`, `fee_conversion_max_age_ms`, `price_tick_min_interval_ms`, startup-budget `elapsed_ms`/`since_previous_ms` | `_milliseconds` suffixes in their final operational groups |
 | `logging.max_bytes_mb`, `monitor.event_rotation_mb` | `logging.max_bytes_mib`, `monitor.event_rotation_mib`. The size was already measured in mebibytes, so values are unchanged |
-| `live.max_realized_loss_pct` | `bot.portfolio.loss_gate.max_drawdown_fraction` |
+| `live.max_realized_loss_pct` | `bot.portfolio.risk.loss_realization.loss_gate` with explicit `enabled` and a cap for active values, including zero. |
 | `bot.<side>.risk.total_wallet_exposure_limit` | `bot.<side>.risk.total_wallet_exposure_limit_ratio`, with the same notional-to-balance value |
 | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit` | `coin_overrides.<coin>.bot.<side>.wallet_exposure_limit_ratio`, with the same per-coin value |
-| Unstuck `threshold` | `bot.<side>.unstuck.exposure_trigger_ratio` |
+| Unstuck `threshold` | `bot.<side>.risk.unstuck.exposure_trigger_ratio` |
 | Risk `n_positions` | `bot.<side>.risk.max_positions` |
 | `backtest.btc_collateral_cap`, `backtest.btc_collateral_ltv_cap` | `backtest.btc_collateral_target_ratio`, `backtest.max_usd_debt_to_wallet_value_ratio`; the same target and USD-debt/total-wallet-value limit, excluding unrealized trading PnL |
 | `backtest.maker_fee_override`, `backtest.taker_fee_override` | `backtest.maker_fee_override_fraction`, `backtest.taker_fee_override_fraction`; signed values and `null` are unchanged |
@@ -161,17 +161,21 @@ Review the reported removals and warnings before adopting a refactored config, i
 effect on held positions and future inheritance. These flags do not grant equivalence between
 v8 and v9 trading behavior or replace the migration acknowledgments below.
 
-V9 uses separate slow EMA spans for each HSL policy, account-wide unstuck realized memory and
-account-wide loss-gate realized memory. Local unstuck settings remain under `bot.<side>.unstuck`.
+V9 uses separate HSL equity memory and shared account-wide realized-loss
+memory. The latter has one span at
+`bot.portfolio.risk.loss_realization.memory_ema_span_minutes`. Local HSL and
+unstuck settings live under each direction's `risk` group. Portfolio HSL uses
+`bot.portfolio.risk.hsl`.
 
-Released flat unstuck fields and optimizer IDs are translated by a frozen versioned map,
-including root optimizer bounds, fixed selectors, referenced coin files and inline overrides.
-Current native identifiers use `_fraction`, `_ratio` and `_minutes`. Conflicting released
-spellings are rejected before defaults are applied, and conversions report final public paths.
-
-The shared span is `bot.portfolio.unstuck.memory_ema_span_minutes`; the gate span is
-`bot.portfolio.loss_gate.memory_ema_span_minutes`; HSL uses its own policy's
-`memory_ema_span_minutes`. HSL ratio smoothing is a separate faster span.
+Released flat unstuck fields and optimizer IDs are translated in explicitly
+versioned conversion, including bound selectors, referenced coin files and
+inline overrides. The converter reports discarded `close_pct` sizing and search
+dimensions. A zero size can become `risk.unstuck.enabled: false`. If a size
+range searched both disabled and enabled policy or conflicts with the
+runtime size, choose the intended flag explicitly and remove the old range
+before converting. An explicitly disabled unstuck policy stays disabled with
+positive-only size bounds. The exposure trigger
+now also bounds the proposed partial close's remaining exposure.
 
 These unit spelling changes do not rescale values. Price and minute-log-range horizons remain
 floating-point minutes, including backtests with aggregated candle intervals; hourly horizons
@@ -197,7 +201,7 @@ context-specific selections. These are deterministic conversions, not best-effor
 
 A rolling duration is not an equivalent EMA span. Zero/minimum-resolution and all-history
 windows have no equivalent span. Choose a slow span with `--lookback-ema-span-minutes`;
-the converter initializes the independent slow spans from that explicit choice. To choose
+the converter supplies that explicit choice to realized memory and to each HSL policy. To choose
 a different canonical policy span, use `--memory-span PATH=MINUTES`. Each authored
 scenario/fixed override of an old rolling window needs its own choice at the exact path
 reported by the converter. Old rolling-window search bounds require explicit replacement
@@ -209,14 +213,16 @@ passivbot tool migrate-config-v9 input.v8.json \
 
 passivbot tool migrate-config-v9 input.v8.json output.v9.json \
   --lookback-ema-span-minutes 43200.0 \
-  --memory-span bot.portfolio.unstuck.memory_ema_span_minutes=21600.0 \
+  --memory-span bot.portfolio.risk.loss_realization.memory_ema_span_minutes=21600.0 \
   --report migration-report.json
 ```
 
 For each effective active old realized-loss gate, including authored stored scenarios and
 fixed optimizer overrides, add `--acknowledge-realized-loss-gate-memory-change` after
-reviewing the new memory policy. The gate allowance is
-`max(0, r * (raw_balance + D_gate) - D_gate)`; TWEL does not multiply `r`.
+reviewing the new memory policy. This acknowledgment and an explicit EMA
+choice also apply in best-effort mode. The old off sentinel becomes
+`{"enabled": false}` with no cap. The gate allowance is
+`max(0, r * (raw_balance + D) - D)`; TWEL does not multiply `r`.
 
 HSL resumes after a qualified finite cooldown and the ordinary admission gates.
 Use `--acknowledge-permanent-stop-removal` to adopt that policy in place of
@@ -234,7 +240,7 @@ reviewed copy, put the chosen portfolio `enabled`, `red_threshold`,
 under `bot.hsl`. Review and remove any directional HSL optimizer bounds
 and pins that no longer apply. Put any new portfolio domains under
 `optimize.bounds.hsl` before converting. The converter carries those to
-`bot.portfolio.hsl` and `optimize.bounds.portfolio.hsl`.
+`bot.portfolio.risk.hsl` and `optimize.bounds.portfolio.risk.hsl`.
 
 For v8.1.0 and v8.6.0, the converter preserves sparse file inheritance and reports
 materialized referenced coin patches. Inline values take precedence over file values.
@@ -351,7 +357,7 @@ are emitted as choices are made, including before a later validation failure.
 | All-history scenario/fixed window | Use the same canonical 30-day span |
 | Authored `never` or potentially active tagged `threshold` restart policy | Require `--acknowledge-permanent-stop-removal` before adopting finite cooldown |
 | Retired `we_excess_allowance_mode="bounded"` | Remove selector; retain the bounded allowance contract (`legacy_raw` still fails) |
-| Active realized-loss gate | Adopt independent decaying realized memory and report each effective context |
+| Active realized-loss gate | Require an explicit EMA choice and `--acknowledge-realized-loss-gate-memory-change` and report each active context |
 | Saved-result `analysis`, `metrics`, `suite_metrics`, `optimizer_anchor`, `optimizer_evaluation_contract`, and recognized hydration metadata | Remove obsolete result/cache snapshots before inference; discard known runtime fields from recognized result records |
 | Plain v8 config with a `backtest.coins` snapshot | Remove an empty snapshot or one where every exchange list matches the explicit common `live.approved_coins` list or both explicit side lists, ignoring order, when there are no authored coin ignores. Keep scenario coin selections. If the match cannot be verified, check the intended selection and remove the snapshot explicitly |
 | Plain v8 config with `backtest.cache_dir` | Remove an empty map or a cache path map keyed to the verified redundant snapshot |
@@ -367,8 +373,7 @@ initializes `mutation_probability_per_variable`; the old zero `mutation_indpb` s
 uses `auto`. Validation-only passes do not emit duplicate guessed decisions.
 Explicit acknowledgment flags retain their explicit-consent provenance when combined
 with best-effort mode. Best-effort mode supplies missing acknowledgment for retained
-metric definitions and explicit formula replacements, gate-memory and search-algorithm
-changes. Inferred metric choices remain identified as guesses in warnings and the report,
+metric definitions, explicit formula replacements and search-algorithm changes. Active loss gates require the explicit memory acknowledgment. Inferred metric choices remain identified as guesses in warnings and the report,
 even with `--acknowledge-metric-formula-change`. The old recovery maximum measures waiting
 for a strictly higher equity observation; the current metric measures running-peak recovery
 episodes, ending when equity regains the peak. Peak ties recover and flat equity has zero

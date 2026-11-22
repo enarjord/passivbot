@@ -52,8 +52,8 @@ def trailing_bot(path, monkeypatch):
     monkeypatch.setattr(passivbot, "utc_ms", lambda: NOW)
     monkeypatch.setattr(utils, "utc_ms", lambda: NOW)
     cfg = _dummy_config()
-    cfg["bot"]["portfolio"]["hsl"]["scope"] = "coin"
-    cfg["bot"]["long"]["hsl"]["enabled"] = True
+    cfg["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "coin"
+    cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = True
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     bot.is_trailing = lambda sym, pside=None: pside == "long"

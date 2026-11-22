@@ -109,7 +109,7 @@ def _scenario() -> dict:
 class _StubBot:
     def __init__(self) -> None:
         self.loop_calls = 0
-        self.config = {"bot": {"portfolio": {'hsl': {'scope': 'coin'}}}}
+        self.config = {"bot": {"portfolio": {"risk": {"hsl": {"scope": "coin"}}}}}
         self._hsl_live = SimpleNamespace(
             cycle=self.cycle, _ordinary=None,
             _quote_tasks={}, _discard_quote_tasks=set(),
@@ -250,7 +250,7 @@ def test_apply_assertions_validates_positions():
 def test_apply_assertions_supports_path_assertions_and_logs():
     client = FakeCCXTClient(_scenario(), quote="USDT")
     bot = _StubBot()
-    bot.config = {"bot": {"portfolio": {'hsl': {'scope': 'coin'}}}}
+    bot.config = {"bot": {"portfolio": {"risk": {"hsl": {"scope": "coin"}}}}}
     bot.get_exchange_time = lambda: 0
     step_summaries = [{"step_index": 0, "fills": 0, "positions": []}]
     scenario = {
@@ -326,6 +326,7 @@ async def test_fake_client_request_log_counts_order_writes(monkeypatch):
     emitted = []
     bot = CCXTBot.__new__(CCXTBot)
     bot.exchange = "fake"
+    bot.config = get_expanded_config_prototype()
     bot.user = "fake_01"
     bot.bot_id = "fake_bot"
     bot.cca = client
@@ -400,12 +401,14 @@ def test_extract_hsl_trace_returns_serializable_state():
 def test_fake_history_coverage_uses_enabled_memory_bootstrap_origin(gate_fraction, horizon_ms, now_ms):
     config = get_expanded_config_prototype()
     config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 15.0
-    config["bot"]["portfolio"]["loss_gate"].update(
-        memory_ema_span_minutes=3.0, max_drawdown_fraction=gate_fraction
-    )
+    realization = config["bot"]["portfolio"]["risk"]["loss_realization"]
+    realization["memory_ema_span_minutes"] = 3.0
+    realization["loss_gate"] = {"enabled": gate_fraction < 1.0}
+    if gate_fraction < 1.0:
+        realization["loss_gate"]["max_realized_drawdown_fraction"] = gate_fraction
     for pside in ("long", "short"):
-        config["bot"][pside]["hsl"]["enabled"] = False
-        config["bot"][pside]["unstuck"]["enabled"] = False
+        config["bot"][pside]["risk"]["hsl"]["enabled"] = False
+        config["bot"][pside]["risk"]["unstuck"]["enabled"] = False
     assert "lookback_ema_span_minutes" not in config["live"]
     bot = SimpleNamespace(config=config)
     client = SimpleNamespace(now_ms=now_ms)
@@ -470,7 +473,10 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     class _Stub:
         def __init__(self):
             self.config = {
-                "bot": {"portfolio": {'hsl': {'scope': 'coin'}}, 'long': {'hsl': {'enabled': True, 'panic_close_order_type': 'market'}}},
+                "bot": {
+                    "portfolio": {"risk": {"hsl": {"scope": "coin"}}},
+                    "long": {"risk": {"hsl": {"enabled": True, "panic_close_order_type": "market"}}},
+                },
             }
             self.coin_overrides = {}
             self.values = {
@@ -516,7 +522,6 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "risk_twel_enforcer_policy": "REDUCE_PORTFOLIO",
                 "risk_twel_enforcer_threshold_ratio": 1.0,
                 "risk_we_excess_allowance_fraction": 0.0,
-                "unstuck_close_fraction": 0.01,
                 "unstuck_ema_distance_fraction": 0.0,
                 "unstuck_loss_allowance_fraction": 0.1,
                 "unstuck_exposure_trigger_ratio": 1.0,
@@ -601,7 +606,6 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "risk_twel_entry_gate_enabled": True,
                         "risk_twel_enforcer_threshold_ratio": 1.0,
                         "risk_we_excess_allowance_fraction": 0.0,
-                        "unstuck_close_fraction": 0.01,
                         "unstuck_ema_distance_fraction": 0.0,
                         "unstuck_ema_span_0_minutes": 2.0,
                         "unstuck_ema_span_1_minutes": 4.0,
@@ -613,10 +617,9 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                     "short": {},
                 }
             }
-            self.config["bot"]["portfolio"] = {"hsl": {"scope": "coin"}}
-            self.config["bot"]["long"]["hsl"] = {
-                "enabled": True,
-                "panic_close_order_type": "market",
+            self.config["bot"]["portfolio"] = {"risk": {"hsl": {"scope": "coin"}}}
+            self.config["bot"]["long"]["risk"] = {
+                "hsl": {"enabled": True, "panic_close_order_type": "market"},
             }
             self.coin_overrides = {
                 "BTC/USDT:USDT": {
@@ -869,9 +872,11 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
                 "bot": {
                     "long": {
                         "entry_cooldown": {"base_duration_minutes": 3.0},
-                        "unstuck": {
-                            "ema_gating_enabled": False,
-                            "loss_allowance_fraction": 0.1,
+                        "risk": {
+                            "unstuck": {
+                                "ema_gating_enabled": False,
+                                "loss_allowance_fraction": 0.1,
+                            }
                         },
                     }
                 }
@@ -925,9 +930,9 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
         override = bot.coin_overrides[symbol]
         assert override["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == 0.05
         assert bot.bp("long", "risk_entry_cooldown_minutes", symbol) == 0.05
-        assert override["bot"]["long"]["unstuck"]["ema_gating_enabled"] is False
+        assert override["bot"]["long"]["risk"]["unstuck"]["ema_gating_enabled"] is False
         assert bot.bp("long", "unstuck_ema_gating_enabled", symbol) is False
-        assert override["bot"]["long"]["unstuck"]["loss_allowance_fraction"] == 0.1
+        assert override["bot"]["long"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.1
         assert (
             override["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
                 "threshold_base_fraction"
@@ -961,13 +966,15 @@ async def test_fake_live_gate_only_shared_memory_backfills_narrow_fill_cache_onc
     cfg = load_config(
         str(FAKE_HSL_CONFIG_PATH), verbose=False
     )
-    cfg["bot"]["long"]["hsl"]["enabled"] = False
+    cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = False
     # The gate alone owns strict shared-memory bootstrap coverage, even with
     # both HSL and auto-unstuck disabled.
     for pside in ("long", "short"):
-        cfg["bot"][pside]["unstuck"]["enabled"] = False
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.5
-    cfg["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
+        cfg["bot"][pside]["risk"]["unstuck"]["enabled"] = False
+    cfg["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] = {
+        "enabled": True, "max_realized_drawdown_fraction": 0.5,
+    }
+    cfg["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "position_side"
     config_path = tmp_path / "fake_live_gate_only_memory.json"
     config_path.write_text(json.dumps(cfg), encoding="utf-8")
     scenario_copy_path = tmp_path / "hsl_long_red_restart_no_assertions.hjson"
@@ -1082,8 +1089,8 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
     cfg = load_config(
         str(FAKE_HSL_CONFIG_PATH), verbose=False
     )
-    cfg["bot"]["long"]["hsl"]["enabled"] = False
-    cfg["bot"]["short"]["hsl"]["enabled"] = False
+    cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = False
+    cfg["bot"]["short"]["risk"]["hsl"]["enabled"] = False
     cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "initial_qty_fraction"
     ] = 0.0276

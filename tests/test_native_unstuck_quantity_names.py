@@ -17,7 +17,6 @@ from tools.migrate_config_v9 import migrate
 
 
 FIELDS = (
-    ("unstuck_close_pct", "unstuck_close_fraction", "close_pct", "close_fraction", .175),
     ("unstuck_ema_dist", "unstuck_ema_distance_fraction", "ema_dist", "ema_distance_fraction", -.0125),
     ("unstuck_ema_span_0", "unstuck_ema_span_0_minutes", "ema_span_0", "ema_span_0_minutes", 13.75),
     ("unstuck_ema_span_1", "unstuck_ema_span_1_minutes", "ema_span_1", "ema_span_1_minutes", 47.125),
@@ -30,7 +29,7 @@ FIELDS = (
 def test_public_values_lower_to_only_current_native_ids_without_rescaling(side):
     source = get_expanded_config_prototype()
     for _, _, _, public, value in FIELDS:
-        source["bot"][side]["unstuck"][public] = value
+        source["bot"][side]["risk"]["unstuck"][public] = value
     config = prepare_config(source, verbose=False)
     flat = flatten_shared_bot_side(config["bot"][side])
     paths = dict(get_optimization_key_paths(source))
@@ -38,7 +37,7 @@ def test_public_values_lower_to_only_current_native_ids_without_rescaling(side):
         assert old not in flat
         assert flat[new] == value
         assert f"{side}_{old}" not in paths
-        assert paths[f"{side}_{new}"] == ("bot", side, "unstuck", public)
+        assert paths[f"{side}_{new}"] == ("bot", side, "risk", "unstuck", public)
 
 
 @pytest.mark.parametrize("old,new,legacy,public,value", FIELDS)
@@ -83,11 +82,11 @@ def test_released_v8_flat_values_bounds_fixed_and_scenario_keep_final_authority(
     selected = resolve_bound_selectors(converted, converted["optimize"]["fixed_params"], bounds)
     assert set(selected) == {f"long_{new}" for _, new, *_ in FIELDS}
     for old, new, _, public, value in FIELDS:
-        assert converted["bot"]["long"]["unstuck"][public] == value
+        assert converted["bot"]["long"]["risk"]["unstuck"][public] == value
         assert bounds[f"long_{new}"] == [value, value]
-        target = f"bot.long.unstuck.{public}"
+        target = f"bot.long.risk.unstuck.{public}"
         assert target in converted["optimize"]["fixed_params"]
-        assert converted["backtest"]["scenarios"][0]["overrides"][f"bot.short.unstuck.{public}"] == value
+        assert converted["backtest"]["scenarios"][0]["overrides"][f"bot.short.risk.unstuck.{public}"] == value
         assert any(change["path"] == f"bot.long.{old}" for change in result.changes)
 
 
@@ -114,7 +113,7 @@ def test_released_v8_file_then_inline_flat_span_preserves_precedence_and_source(
     original = deepcopy(source)
     result = migrate(source, memory_span_minutes=123.5, base_config_path=str(tmp_path / "base.json"))
     assert source == original and path.read_bytes() == original_bytes
-    assert result.config["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 23.75
+    assert result.config["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 23.75
     assert any("coin_overrides.BTC" in change["path"] and "unstuck_ema_span_0" in change["path"]
                for change in result.changes)
 

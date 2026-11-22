@@ -7,6 +7,7 @@ import ccxt
 import pytest
 
 from ccxt_contracts import build_contract_bot
+from config.schema import get_expanded_config_prototype
 from exchanges.bitunix import BitunixClient
 from exchanges.ccxt_bot import CCXTBot
 from live import executor
@@ -28,6 +29,7 @@ def _api_error(code=710003):
 
 def _bot(exchange="bitunix", *, cooldown_hours=6.0):
     bot = build_contract_bot(exchange)
+    bot.config["bot"]["portfolio"]["risk"] = get_expanded_config_prototype()["bot"]["portfolio"]["risk"]
     bot.config["live"]["recovery"] = {
         "exchange_symbol_unavailable_cooldown_hours": cooldown_hours
     }

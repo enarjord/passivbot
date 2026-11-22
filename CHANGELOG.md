@@ -5,8 +5,17 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Reduce CPU spent matching finalized live websocket candle candidates against
-  canonical history. Preserve strict disk verification and successor proof.
+- Finalize v9 risk configuration under `bot.*.risk`. Unstuck and the optional
+  portfolio loss gate share one realized-loss memory. Enable the gate explicitly
+  and supply a cap in `[0, 1)`. Atomic overrides of the gate or an enclosing object also
+  require explicit enablement. The v8 converter emits the final layout directly.
+- Size close orders in Rust against available loss allowance and venue limits.
+  Unstuck targets the exposure threshold. Live admission reserves outstanding
+  close losses across symbols and sides, and reconciles conflicting replacements
+  before creating them. Bounded exchange lookups can recover closes canceled
+  before the open-order refresh. A warning identifies ambiguous or contradictory close
+  reservation evidence when it defers a write. Zero-loss limit closes retain order-match
+  tolerance when both projections agree. Use CPU replay for gate or unstuck evaluations.
 
 - Update the Trailing Martingale starter universe and suite subsets. Add ETC and
   TRX and remove ATOM, BTW, CC, KAS, and RENDER. Resolve verified TRX asset age
@@ -49,6 +58,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Use each suite scenario’s start for trading and scoring when reusing a
   prepared OHLCV dataset.
+
+- Reduce CPU spent matching finalized live websocket candle candidates against
+  canonical history. Preserve strict disk verification and successor proof.
 
 - Keep live forager RMS ranking available from complete local candles or a
   recent valid score when remote candle work times out. Repair missing RMS

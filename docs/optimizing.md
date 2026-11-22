@@ -634,7 +634,7 @@ Useful examples:
 
 This fixes every optimizer bound under `bot.long.strategy.<active_strategy>`, such as all
 `trailing_martingale` entry/close thresholds, retracements, EMA spans, and volatility spans.
-It does not fix `bot.long.risk`, `bot.long.forager`, or `bot.long.unstuck`.
+Use separate selectors to fix `bot.long.risk` or `bot.long.forager`.
 
 ```json
 "optimize": {
@@ -680,7 +680,7 @@ passivbot optimize path/to/config.json \
 When `--fine_tune_params` is combined with `--start`, the base optimizer config remains the run
 policy. Anchor configs provide values only for optimizer-bound bot parameters that are fixed by the
 anchor plan; boolean toggles and other non-bound runtime policy fields such as
-`bot.long.hsl.enabled` continue to come from the base config or explicit runtime overrides. Seed and
+`bot.long.risk.hsl.enabled` continue to come from the base config or explicit runtime overrides. Seed and
 anchor values outside `optimize.bounds` are clamped into bounds during seed loading and logged in
 aggregate with counts, source examples, key/path, original value samples, bound, and clamped value.
 
@@ -691,14 +691,14 @@ operator-risk settings such as:
 ```json
 "optimize": {
   "fixed_runtime_overrides": {
-    "bot.long.hsl.cooldown_after_red_minutes": 60.0,
-    "bot.short.hsl.cooldown_after_red_minutes": 60.0
+    "bot.long.risk.hsl.cooldown_after_red_minutes": 60.0,
+    "bot.short.risk.hsl.cooldown_after_red_minutes": 60.0
   }
 }
 ```
 
 These overrides set the finite cooldown after a qualifying flatten during optimizer
-evaluations. Portfolio mode uses `bot.portfolio.hsl.cooldown_after_red_minutes` instead of side
+evaluations. Portfolio mode uses `bot.portfolio.risk.hsl.cooldown_after_red_minutes` instead of side
 paths. Inspect strategy drawdown and recovery with `drawdown_max_fraction_strategy_equity`,
 `ulcer_index_fraction_strategy_equity` and `peak_recovery_max_days_strategy_equity`. HSL loss
 limits use `hsl_panic_episode_loss_max_fraction` and `hsl_panic_episode_loss_mean_fraction`;

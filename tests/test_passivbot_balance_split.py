@@ -78,17 +78,18 @@ def _unit_config(patch):
 
 
 def _gate_history_config(patch, *, memory_span_minutes=None):
-    """Exercise explicit independent memories with auto-unstuck disabled."""
+    """Exercise the shared memory through the gate with auto-unstuck disabled."""
     patch = deepcopy(patch)
-    policy = patch.setdefault("bot", {}).setdefault("portfolio", {})
-    policy.setdefault("loss_gate", {}).setdefault("max_drawdown_fraction", 0.5)
+    bot = patch.setdefault("bot", {})
+    policy = bot.setdefault("portfolio", {}).setdefault("risk", {}).setdefault("loss_realization", {})
+    policy["loss_gate"] = {"enabled": True, "max_realized_drawdown_fraction": 0.5}
     if memory_span_minutes is not None:
-        policy["loss_gate"]["memory_ema_span_minutes"] = memory_span_minutes
-        policy.setdefault("unstuck", {})["memory_ema_span_minutes"] = memory_span_minutes
-        for side in ("long", "short"):
-            patch["bot"].setdefault(side, {}).setdefault("hsl", {})["memory_ema_span_minutes"] = memory_span_minutes
+        policy["memory_ema_span_minutes"] = memory_span_minutes
     for side in ("long", "short"):
-        patch.setdefault("bot", {}).setdefault(side, {}).setdefault("unstuck", {})["enabled"] = False
+        risk = bot.setdefault(side, {}).setdefault("risk", {})
+        risk.setdefault("unstuck", {})["enabled"] = False
+        if memory_span_minutes is not None:
+            risk.setdefault("hsl", {})["memory_ema_span_minutes"] = memory_span_minutes
     return _unit_config(patch)
 
 
@@ -227,6 +228,7 @@ def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -
     out_diagnostics.setdefault("warnings", [])
     out_diagnostics["symbol_states"] = symbol_states
     out_diagnostics.setdefault("loss_gate_blocks", [])
+    out_diagnostics.setdefault("close_allocations", [])
     out_diagnostics.setdefault("min_effective_cost_blocks", [])
     out_diagnostics.setdefault("forager_selections", [])
     return json.dumps({"orders": [], "diagnostics": out_diagnostics})
@@ -627,7 +629,7 @@ async def test_init_pnls_quarantines_and_rebuilds_unsupported_legacy_cache(monke
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "hyperliquid"
     bot.user = "vps_user"
-    bot.config = _gate_history_config({"live": { "risk_bootstrap_max_lookback_minutes": 1440.0}}, memory_span_minutes=288.0)
+    bot.config = _gate_history_config({"live": {"startup": {"risk_bootstrap_max_lookback_minutes": 1440.0}}}, memory_span_minutes=288.0)
     bot._pnls_initialized = False
     bot.get_exchange_time = lambda: 1_700_086_400_000
     sink = ListEventSink()
@@ -723,7 +725,7 @@ async def test_init_pnls_emits_quarantine_event_when_doctor_repairs_legacy_cache
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot.exchange = "hyperliquid"
     bot.user = "vps_user"
-    bot.config = _gate_history_config({"live": { "risk_bootstrap_max_lookback_minutes": 1440.0}}, memory_span_minutes=288.0)
+    bot.config = _gate_history_config({"live": {"startup": {"risk_bootstrap_max_lookback_minutes": 1440.0}}}, memory_span_minutes=288.0)
     bot._pnls_initialized = False
     bot.get_exchange_time = lambda: 1_700_086_400_000
     sink = ListEventSink()
@@ -4388,11 +4390,11 @@ def test_unstuck_status_reports_coin_override_loss_allowance_pct():
     bot = _unit_bot()
     bot._pnls_manager = object()
     bot.coin_overrides = {
-        "HYPE/USDT:USDT": {"bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.005}}}},
+        "HYPE/USDT:USDT": {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.005}}}}},
         "BTC/USDT:USDT": {"bot": {"long": {}}},
     }
     bot.get_raw_balance = lambda: 2_000.0
-    bot._get_realized_memories = lambda: {"unstuck": {"drawdown": 0.0}, "loss_gate": None}
+    bot._get_realized_loss_memory = lambda: {"drawdown": 0.0}
 
     def bot_value(pside, key):
         if key == "total_wallet_exposure_limit_ratio":
@@ -7694,7 +7696,6 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
                 "filter_by_min_effective_cost": {"long": False, "short": False},
                 "market_orders_allowed": True,
                 "market_order_near_touch_fraction": 0.0,
-                "loss_gate_max_drawdown_fraction": 1.0,
             }
             return values.get(key, False)
 
@@ -7805,14 +7806,20 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(
     }
 
 
-def test_live_loss_gate_reads_required_canonical_ratio_and_preserves_zero():
+def test_live_loss_gate_enablement_is_explicit_even_with_a_zero_cap():
+    from config.risk_memory import require_loss_realization_policy
+
     bot = _unit_bot()
-    assert bot._loss_gate_max_drawdown_fraction() == pytest.approx(1.0)
-    bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.0
-    assert bot._loss_gate_max_drawdown_fraction() == pytest.approx(0.0)
-    del bot.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"]
-    with pytest.raises(KeyError, match="max_drawdown_fraction"):
-        bot._loss_gate_max_drawdown_fraction()
+    gate = bot.config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]
+    assert bot._loss_gate_enabled() is False
+    gate["max_realized_drawdown_fraction"] = 0.0
+    assert bot._loss_gate_enabled() is False
+    gate["enabled"] = True
+    assert bot._loss_gate_enabled() is True
+    assert require_loss_realization_policy(bot.config)[1:] == (True, 0.0)
+    del gate["max_realized_drawdown_fraction"]
+    with pytest.raises(ValueError, match="max_realized_drawdown_fraction"):
+        bot._loss_gate_enabled()
 
 
 def test_orchestrator_exchange_params_require_live_fee_metadata():
@@ -7847,7 +7854,7 @@ def test_unstuck_logging_peak_stays_stable_when_profit_repays_realized_drawdown(
     bot.balance_raw = 100.0
     bot._pnls_manager = object()
     memory = {"drawdown": 100.0}
-    bot._get_realized_memories = lambda: {"unstuck": dict(memory), "loss_gate": None}
+    bot._get_realized_loss_memory = lambda: dict(memory)
     info_a = bot._calc_unstuck_allowance_for_logging("long")
 
     # State B: a +50 profit in the same minute repays half the remembered loss.
@@ -7862,7 +7869,7 @@ def test_unstuck_logging_peak_stays_stable_when_profit_repays_realized_drawdown(
     assert info_b["peak"] == pytest.approx(200.0)
 
 
-def test_unstuck_logging_uses_its_independent_realized_memory():
+def test_unstuck_logging_uses_shared_realized_memory():
     from v9_risk_reference import allowance, f32, mul
 
     bot = _unit_bot()
@@ -7878,7 +7885,7 @@ def test_unstuck_logging_uses_its_independent_realized_memory():
 
     bot.bot_value = bot_value
     bot._pnls_manager = object()
-    bot._get_realized_memories = lambda: {"unstuck": {"drawdown": 5.0}, "loss_gate": None}
+    bot._get_realized_loss_memory = lambda: {"drawdown": 5.0}
 
     info = bot._calc_unstuck_allowance_for_logging("long")
 
@@ -8083,7 +8090,7 @@ def test_hsl_estimation_does_not_add_a_strict_fill_history_requirement(
     enabled, cooldown_minutes, expected
 ):
     bot = _unit_bot()
-    bot.config["bot"]["long"]["hsl"].update(
+    bot.config["bot"]["long"]["risk"]["hsl"].update(
         enabled=enabled, restart_after_red_policy="always"
     )
     bot._orchestrator_uses_realized_pnl = lambda: False
@@ -11827,7 +11834,7 @@ def test_finite_nonpositive_balance_is_valid_direct_red_not_current_fact_outage(
 
     bot = make_bot()
     bot.get_raw_balance = lambda: balance
-    bot.config["bot"]["long"]["hsl"].update(ema_span_minutes=1_000_000.0, drawdown_threshold_fraction=0.99)
+    bot.config["bot"]["long"]["risk"]["hsl"].update(ema_span_minutes=1_000_000.0, drawdown_threshold_fraction=0.99)
     decisions, unavailable = run(bot)
     assert not unavailable
     assert decisions[0].action == "panic"
@@ -11912,7 +11919,7 @@ async def test_optional_fill_refresh_classifies_only_fetched_value_errors(
         {"live": {"fills": {"fills_recent_overlap_minutes": 10.0}}}
     )
     if failure == "config_value":
-        bot.config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = float("nan")
+        bot.config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] = float("nan")
     bot._pnls_manager = _with_fill_coverage_api(manager)
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
@@ -11979,7 +11986,7 @@ async def test_fill_capture_interval_records_io_even_when_pnl_readiness_is_pendi
         },
         memory_span_minutes=288.0,
     )
-    bot.config["bot"]["long"]["hsl"].update(
+    bot.config["bot"]["long"]["risk"]["hsl"].update(
         enabled=True, restart_after_red_policy="always"
     )
     bot.c_mults = {event.symbol: event.c_mult}

@@ -24,9 +24,9 @@ capability decision; an adapter must not guess their scope.
 
 Each HSL policy has independent `memory_ema_span_minutes` currency drawdown memory and
 `drawdown_fraction_ema_span_minutes` ratio smoothing. Local policies live under
-`bot.<side>.hsl`; the explicit portfolio policy and global scope live under `bot.portfolio.hsl`.
-The account-wide unstuck and loss-gate memories have separate spans under
-`bot.portfolio.unstuck.memory_ema_span_minutes` and `bot.portfolio.loss_gate.memory_ema_span_minutes`.
+`bot.<side>.risk.hsl`; the explicit portfolio policy and global scope live under `bot.portfolio.risk.hsl`.
+Unstuck and the loss gate share one account-wide span at
+`bot.portfolio.risk.loss_realization.memory_ema_span_minutes`.
 All are floating-point EMA spans in minutes, not half-lives. A half-life is `log(0.5) / log(1 - alpha)` minutes;
 span 1 has alpha 1 and half-life 0 as a limiting case.
 
@@ -97,37 +97,62 @@ requires reconstruction of the event, not a local permission journal. Zero durat
 immediate restart. New actual exposure clears the old terminal record. There is no permanent
 `never` policy; an external operator or supervisor owns permanent shutdown.
 
-## Continuous realized-loss memory
+## Shared realized-loss memory
 
-Auto-unstuck and the realized-loss gate each own an account-wide net-realized-PNL memory,
-with independent enablement and spans. Both consume the same canonical fill facts. Each
-excludes UPNL and never resets at an HSL episode boundary. Start from zero at a known origin.
-For each enabled memory, advance its own decay once per elapsed minute and process every
-fill in economic order:
+Auto-unstuck and the realized-loss gate use the same account-wide drawdown state
+`D_realized`. The configured span is
+`bot.portfolio.risk.loss_realization.memory_ema_span_minutes`. Replay from a known zero
+origin or a disclosed approximate initializer. Each canonical net-realized fill contributes
+once in economic order, including entry fees, close fees, rebates and panic fills. Unrealized
+PnL and external balance flows are excluded. HSL maintains separate equity memory.
 
 ```text
 D_realized = fma(beta_slow, D_realized, 0)        # each elapsed minute
 D_realized = max(0, D_realized - net_realized_PNL) # each ordered fill
-p = f32(loss_allowance_fraction) * f32(applicable_TWEL)
 allowance = max(0, fma(p, f32(raw_balance) + D_realized, -D_realized))
 ```
 
-For the global realized-loss gate use `p = f32(bot.portfolio.loss_gate.max_drawdown_fraction)` in the same
-allowance graph, without TWEL multiplication. Its original configured fraction determines
-enablement: finite values in [0, 1) activate the gate and values at least 1 disable it.
-Zero blocks lossy non-panic closes; negative or nonfinite fractions are invalid.
-The gate remains active when HSL and unstuck are
-disabled. The canonical producer feeds every actual net fill once to each enabled memory, including
-fees and rebates, before any HSL-only early return. The ordinary ledger accounts for the
-fill only once. A disabled memory owns no neutral substitute for an enabled consumer.
+The unstuck fraction `p` is the binary32 product of `loss_allowance_fraction` and
+the applicable TWEL. The gate uses its cap directly. The gate's strict `enabled` flag
+controls activation, and an enabled gate requires `max_realized_drawdown_fraction`
+in `[0, 1)`. Zero blocks every projected lossy non-panic close. A valid cap accompanying
+a disabled gate is dormant. A scenario that atomically replaces `loss_gate` or
+an enclosing object must supply `loss_gate.enabled` explicitly. A leaf override
+inherits the rest of the gate policy.
+Either enabled policy can consume the shared state independently.
 
-Retain the existing allowance, selection, exposure, price-EMA and close-sizing policies.
-The ordinary balance ledger accounts for each loss or fee exactly once. Profit repays
-remembered loss; excess profit creates no negative credit. This changes replenishment and
-requires fresh joint calibration of span and loss allowance. Config schema v9.0.0 explicitly
-retires the rolling gate window; migrating an active released-v8 gate requires semantic
-acknowledgment. Equal numeric windows, zero and all-history policies are not equivalent
-exponential spans.
+### Close allocation and venue limits
+
+Rust projects net PnL from finalized order quantity, route, price and fees, including signed
+rebates. A nonlosing order spends zero headroom and creates zero advance credit. Rust admits
+a valid lossy order in full if it fits. With positive headroom, an oversize order is trimmed
+to the first executable step at or above the allowance-sized quantity, or to the effective
+venue minimum if that is larger. Proposal size, position capacity and the unstuck exposure
+floor bound the admitted quantity. A legal lot may exhaust the budget and overrun it by up
+to one step, or by the excess cost of the smallest executable lot when the minimum binds.
+Zero remaining headroom blocks later lossy candidates in that batch.
+
+Panic bypasses the loss gate. For each other position, Rust compares protective alternatives
+at their admissible sizes and reserves one final reducer before ordinary closes. Competing
+lossy orders within each tier share a long/short account budget. Fillable routes come first,
+then the most favorable signed entry distance. Passive orders use distance to the resting
+touch, signed entry distance and stable order identity. Backtest priority uses its decision
+snapshot of completed bars. Later candle prices determine whether selected orders can fill.
+
+For unstuck, the observed exposure ratio must be strictly above the trigger. The quantity
+rounded down to the exposure floor must leave positive projected raw balance and lower
+the exposure ratio to at least the trigger. The projection freezes effective WEL and includes
+the close's estimated net PnL in the new balance. Loss headroom can reduce the executable
+quantity further. Unstuck keeps its positive allowance eligibility and one-order account limit.
+
+Live admission projects the outstanding reduce-only remainders and unresolved transport
+attempts against the budget. Matched resting ideals are reserved once. When an old close
+conflicts with its replacement, confirmation must account for cancels and fills before a new
+allocation can fund the replacement. Bitunix uses its standard create path with the gate enabled.
+
+CPU replay implements both policies. The Metal and CUDA optimization paths currently
+require both the loss gate and unstuck to be disabled. Active policies require the CPU backend.
+Use fresh evaluation for the changed optimizer search space and order behavior.
 
 ## Bootstrap, correction and restart
 

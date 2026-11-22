@@ -53,7 +53,7 @@ def test_native_requests_prepare_without_gpu_imports_or_cpu_simulation(strategy,
         strategy, hsl = sys.argv[1:]
         config, candles, markets, btc, timestamps = fixture_inputs(build_parser().parse_args([
             "--fixture", strategy, "--sides", "both", "--coins", "3",
-            "--bars", "128", "--seed", "43", "--hsl", hsl, "--unstuck",
+            "--bars", "128", "--seed", "43", "--hsl", hsl,
         ]))
         coins = config["backtest"]["coins"]["binance"]
         assert coins == ["COIN00", "COIN01", "COIN02"]

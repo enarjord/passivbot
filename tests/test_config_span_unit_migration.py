@@ -157,7 +157,7 @@ def test_released_flat_unstuck_span_retains_its_explicit_value_and_report(kind):
     source["bot"]["long"]["unstuck_ema_span_0"] = 123.75
     original = deepcopy(source)
     result = migrate(source, memory_span_minutes=123.5)
-    assert result.config["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 123.75
+    assert result.config["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 123.75
     assert any(item["path"] == "bot.long.unstuck_ema_span_0" for item in result.changes)
     assert source == original
 
@@ -183,7 +183,7 @@ def test_portfolio_bounds_move_before_unit_projection_and_keep_native_genes(kind
     result = migrate(source, memory_span_minutes=123.5)
     bounds = result.config["optimize"]["bounds"]
     assert "hsl" not in bounds
-    assert bounds["portfolio"]["hsl"]["cooldown_after_red_minutes"] == [1, 2880, 10]
+    assert bounds["portfolio"]["risk"]["hsl"]["cooldown_after_red_minutes"] == [1, 2880, 10]
     native = flatten_optimize_bounds(bounds, strategy_kind=kind)
     assert native["hsl_cooldown_minutes_after_red"] == [1, 2880, 10]
     assert native["hsl_drawdown_fraction_ema_span_minutes"] == [1, 2880, 10]

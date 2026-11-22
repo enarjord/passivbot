@@ -76,7 +76,7 @@ async def test_uta_entry_margin_rejection_uses_scope_local_pre_transport_retry(c
     assert reject["info"]["code"] == "25203"
     assert not c.bot.did_create_order(reject)
     assert c.calls[0]["params"]["posSide"] == "long"
-    assert c.confirmations == [{"balance", "positions", "open_orders"}]
+    assert c.confirmations == [{"balance", "positions", "open_orders", "fills"}]
     assert c.budget == []
 
     c.code[0] = None
@@ -266,4 +266,4 @@ async def test_other_failures_retain_existing_order_write_error_budget(
     assert c.bot._create_failure_guard.failures == 1
     assert not c.bot._create_failure_guard.in_flight
     assert c.bot._entry_margin_retry_after == {}
-    assert c.confirmations == [{"balance", "positions", "open_orders"}]
+    assert c.confirmations == [{"balance", "positions", "open_orders", "fills"}]

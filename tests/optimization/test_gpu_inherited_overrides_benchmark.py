@@ -15,6 +15,7 @@ def test_benchmark_inputs_pass_canonical_candidate_admission(coins, slots):
     # constructing a replay or compiling/dispatching a device kernel.
     candidate = prepare_candidate_parameters(config, markets, "binance")
     assert config["bot"]["long"]["risk"]["max_positions"] == slots
+    assert config["bot"]["long"]["risk"]["unstuck"]["enabled"] is False
     assert "n_positions" not in config["bot"]["long"]["risk"]
     assert candidate["long_n_positions"] == slots
     assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 1.5

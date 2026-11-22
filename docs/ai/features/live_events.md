@@ -734,8 +734,22 @@ unchanged observations remain structured every five minutes, and unchanged INFO 
 20 minutes. `operator_visible=false` suppresses only console and durable text projection.
 The `changed` field excludes unchanged reminders.
 
+Realized-close diagnostics report proposed and final quantities, execution route, estimated
+loss, binding cap and remaining headroom. The gate policy carries a boolean and a nullable
+cap, including an active zero cap. The Rust debug profile includes bounded
+`close_allocation_sample` rows in the orchestrator return event. Live transport reports
+`realized_close_admission_deferred` when the current plan lacks account-wide reservation
+authority. `risk.realized_close_recovery` reports the pending reservation count when an
+exact terminal lookup has no usable evidence, is temporarily unavailable, or is unsupported.
+The same event reports duplicate exchange order IDs, conflicting fill identities, fills
+aggregated across multiple order IDs, and fills exceeding the submitted quantity. It also
+reports resting orders with unknown reduce-only status or execution type, missing
+remaining quantity, contradictory side, or duplicate client IDs. Lookup diagnostics
+repeat at most once every five minutes. Reservation warnings repeat at most once per
+reason within the same interval.
+
 Rust classifies held positions at the actual unstuck gates and reports allowance, exposure/EMA
-thresholds, eligibility, and proposal details. Final native orders determine `selected`;
+thresholds, projected post-fill exposure, eligibility and proposal details. Final native orders determine `selected`;
 `loss_gate_blocked`, `superseded`, and `finalization_filtered` retain the proposal without
 implying submission. Python
 retains at most three samples per side, aggregate reason counts, allowance range (coin overrides

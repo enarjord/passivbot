@@ -313,18 +313,18 @@ def test_coin_projection_uses_existing_permissions_after_inheritance(kind):
     from config.bot_inheritance import resolve_coin_bot_policy
     declared = real_catalog()
     policy = resolve_bot_policy({
-        "global": {"unstuck": {"close_fraction": 0.5}},
-        "short": {"unstuck": {"close_fraction": 0.75}},
+        "global": {"risk": {"unstuck": {"loss_allowance_fraction": 0.5}}},
+        "short": {"risk": {"unstuck": {"loss_allowance_fraction": 0.75}}},
     }, declared)
-    patch = {"bot": {"short": {"unstuck": {"close_fraction": 0.125}}}}
+    patch = {"bot": {"short": {"risk": {"unstuck": {"loss_allowance_fraction": 0.125}}}}}
     original = deepcopy(patch)
     effective, origins = resolve_coin_bot_policy(
         policy, patch, coin="bybit::BTC/USD:BTC", strategy_kind=kind,
     )
-    assert effective["long"]["unstuck"]["close_fraction"] == 0.5
-    assert effective["short"]["unstuck"]["close_fraction"] == 0.125
+    assert effective["long"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.5
+    assert effective["short"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.125
     assert patch == original
-    origin = next(origin for origin in origins if origin.target == ("bot", "short", "unstuck", "close_fraction"))
+    origin = next(origin for origin in origins if origin.target == ("bot", "short", "risk", "unstuck", "loss_allowance_fraction"))
     assert origin.kind == "coin" and origin.source[:2] == ("coin_overrides", "bybit::BTC/USD:BTC")
     with pytest.raises(ValueError):
         resolve_coin_bot_policy(policy, {"bot": {"short": {"universe": {"minimum_coin_age_days": 0.0}}}},

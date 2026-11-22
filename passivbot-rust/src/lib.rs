@@ -1,5 +1,6 @@
 mod age_admission;
 mod backtest;
+mod close_risk;
 mod closes;
 mod coin_selection;
 mod config_prefilter;
@@ -162,7 +163,6 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hsl_v9_live::hsl_v9_evaluate_grids, m)?)?;
     m.add_class::<hsl_v9_live::HslV9Replay>()?;
     m.add_function(wrap_pyfunction!(hsl_v9_live::realized_memory_v9, m)?)?;
-    m.add_function(wrap_pyfunction!(hsl_v9_live::realized_memories_v9, m)?)?;
     m.add_function(wrap_pyfunction!(
         hsl_v9_live::calc_auto_unstuck_allowance_v9,
         m
@@ -237,6 +237,8 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(order_type_snake_to_id, m)?)?;
     m.add_function(wrap_pyfunction!(get_order_id_type_from_string_alias, m)?)?;
     m.add_function(wrap_pyfunction!(compute_ideal_orders_json, m)?)?;
+    m.add_function(wrap_pyfunction!(project_close_reservation_json, m)?)?;
+    m.add_function(wrap_pyfunction!(calc_loss_gate_headroom_v9, m)?)?;
     m.add("MissingEmaError", m.py().get_type_bound::<MissingEmaError>())?;
     m.add_function(wrap_pyfunction!(compute_protective_closes_json, m)?)?;
     m.add_function(wrap_pyfunction!(get_strategy_spec, m)?)?;

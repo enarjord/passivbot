@@ -12,7 +12,6 @@ from hsl_fixture import FAKE_HSL_CONFIG_PATH
 from released_v8_fixtures import released_v8_policy
 from config_utils import add_config_arguments, project_template_config_for_cli
 from passivbot_cli.main import main as cli_main
-from tools.migrate_config_v9 import migrate as migrate_config_v9
 
 
 def _v8_config():
@@ -26,6 +25,7 @@ def _v8_config():
 @pytest.mark.parametrize("command", ["live", "backtest", "optimize"])
 @pytest.mark.parametrize(
     "flag", ["--hsl-engine", "--live.hsl_engine", "--live_hsl_engine",
+             "--bot.long.risk.hsl.restart_after_red_policy",
              "--bot.long.hsl.restart_after_red_policy",
              "--bot_long_hsl_restart_after_red_policy"]
 )
@@ -55,7 +55,7 @@ def test_absent_engine_selector_uses_the_sole_engine():
 def test_explicit_engine_selectors_require_migration_when_enabled(selector):
     config = get_expanded_config_prototype()
     config["live"]["hsl_engine"] = selector
-    config["bot"]["long"]["hsl"]["enabled"] = True
+    config["bot"]["long"]["risk"]["hsl"]["enabled"] = True
     with pytest.raises(ValueError, match="migrate-config-v9"):
         prepare_config(config, verbose=False, target="canonical", runtime=None)
 
@@ -63,7 +63,7 @@ def test_explicit_engine_selectors_require_migration_when_enabled(selector):
 def test_removed_engine_requires_explicit_migration():
     config = get_expanded_config_prototype()
     config["live"]["hsl_engine"] = "legacy"
-    config["bot"]["long"]["hsl"]["enabled"] = True
+    config["bot"]["long"]["risk"]["hsl"]["enabled"] = True
     with pytest.raises(ValueError, match="migrate-config-v9"):
         prepare_config(config, verbose=False, target="canonical", runtime=None)
 
@@ -76,7 +76,7 @@ def test_runtime_schema_override_is_rejected_before_any_config_mutation(command,
 
     config = generated_template(get_expanded_config_prototype())
     config["config_version"] = version
-    config["bot"]["long"]["hsl"]["enabled"] = True
+    config["bot"]["long"]["risk"]["hsl"]["enabled"] = True
     original = deepcopy(config)
     parser = argparse.ArgumentParser()
     keys = add_config_arguments(
@@ -117,11 +117,11 @@ def test_legacy_schema_requires_explicit_migration_after_cli_enablement(
     config["bot"]["long"]["hsl"]["enabled"] = not enable
     parser = argparse.ArgumentParser()
     keys = add_config_arguments(parser, project_template_config_for_cli(get_template_config(), command), command=command)
-    args = parser.parse_args(["--bot.long.hsl.enabled", str(enable).lower()])
-    update_config_with_args(config, args, allowed_keys=keys)
-    assert config["bot"]["long"]["hsl"]["enabled"] is enable
+    args = parser.parse_args(["--bot.long.risk.hsl.enabled", str(enable).lower()])
+    attempted = deepcopy(config)
+    update_config_with_args(attempted, args, allowed_keys=keys)
     with pytest.raises(ValueError, match="migrate-config-v9"):
-        prepare_config(config, verbose=False)
+        prepare_config(attempted, verbose=False)
     source = tmp_path / "input.v8.json"
     destination = tmp_path / "output.v9.json"
     source.write_text(json.dumps(config))
@@ -131,21 +131,24 @@ def test_legacy_schema_requires_explicit_migration_after_cli_enablement(
         "--lookback-ema-span-minutes", "43200.0"
     ]) == 0
     assert source.read_bytes() == original
-    normalized = prepare_config(json.loads(destination.read_text()), verbose=False)
-    assert normalized["bot"]["long"]["hsl"]["enabled"] is enable
+    migrated = json.loads(destination.read_text())
+    update_config_with_args(migrated, args, allowed_keys=keys)
+    normalized = prepare_config(migrated, verbose=False)
+    assert normalized["bot"]["long"]["risk"]["hsl"]["enabled"] is enable
     assert "hsl_engine" not in normalized["live"]
-    assert "restart_after_red_policy" not in normalized["bot"]["long"]["hsl"]
+    assert "restart_after_red_policy" not in normalized["bot"]["long"]["risk"]["hsl"]
 
 
 @pytest.mark.parametrize("enable", [False, True])
 def test_cli_never_synchronizes_a_retired_flat_alias(enable):
     from config_utils import update_config_with_args
-    config = _v8_config()
+    config = get_expanded_config_prototype()
     config["bot"]["long"]["hsl_enabled"] = not enable
-    update_config_with_args(config, argparse.Namespace(**{"bot.long.hsl.enabled": enable}))
+    update_config_with_args(config, argparse.Namespace(**{"bot.long.risk.hsl.enabled": enable}))
+    assert config["bot"]["long"]["risk"]["hsl"]["enabled"] is enable
     assert config["bot"]["long"]["hsl_enabled"] is (not enable)
-    with pytest.raises(ValueError, match="conflict"):
-        migrate_config_v9(config, memory_span_minutes=43200.0)
+    with pytest.raises(ValueError, match="hsl_enabled.*unknown configuration field"):
+        prepare_config(config, verbose=False)
 
 
 def test_retired_hsl_migration_cli_rejects_without_writing(tmp_path, capsys):
@@ -174,11 +177,11 @@ def test_cli_supports_global_excess_budget_scaling_and_removes_allowance_selecto
         parser, project_template_config_for_cli(config, command), command=command
     )
     args = parser.parse_args(
-        ["--bot.long.hsl.scale_budget_with_excess_allowance", "true"]
+        ["--bot.long.risk.hsl.scale_budget_with_excess_allowance", "true"]
     )
     update_config_with_args(config, args, allowed_keys=keys)
     assert (
-        prepare_config(config, verbose=False)["bot"]["long"]["hsl"][
+        prepare_config(config, verbose=False)["bot"]["long"]["risk"]["hsl"][
             "scale_budget_with_excess_allowance"
         ]
         is True

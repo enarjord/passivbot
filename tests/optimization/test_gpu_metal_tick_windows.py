@@ -351,7 +351,7 @@ def _tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale", *, bar
 
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", strategy_kind, "--coins", "2", "--sides", sides,
-        "--bars", str(bars), "--seed", "43", "--hsl", hsl, "--unstuck",
+        "--bars", str(bars), "--seed", "43", "--hsl", hsl,
         "--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-cooldown-minutes", "120", "--hsl-memory-ema-span-minutes", "1440",
         "--price-shock", "0", "701", ".7", "--price-shock", "1", "911", "1.3",
@@ -383,7 +383,6 @@ def _tick_window_fixture(sides, hsl, strategy_kind="trailing_martingale", *, bar
         else:
             strategy["entry"].update(ema_span_0_minutes=7.5, ema_span_1_minutes=13.25)
             strategy.update(log_range_ema_span_minutes=9.5, log_range_ema_span_1h_candles=2.5)
-        bot["unstuck"].update(ema_span_0_minutes=5.5, ema_span_1_minutes=11.25)
     return inputs
 
 

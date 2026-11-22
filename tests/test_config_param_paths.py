@@ -15,7 +15,7 @@ def test_group_resolution_matches_single_keys_with_one_metadata_projection(
 ):
     config = get_template_config()
     config['bot']["portfolio"]['strategy_kind'] = kind
-    config["bot"]["portfolio"]["hsl"]["scope"] = mode
+    config["bot"]["portfolio"]["risk"]["hsl"]["scope"] = mode
     if not nested:
         config["bot"]["long"] = {"risk": {"max_positions": 3.0}}
     keys = [
@@ -47,7 +47,7 @@ def test_later_group_observes_current_strategy_mode_and_bot_shape():
             "long_n_positions", "hsl_drawdown_threshold_fraction"]
     first = dict(param_paths.iter_optimizer_key_paths(config, keys))
     config['bot']["portfolio"]['strategy_kind'] = "ema_anchor"
-    config["bot"]["portfolio"]["hsl"]["scope"] = "portfolio"
+    config["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "portfolio"
     config["bot"]["long"] = {"risk": {"max_positions": 2.0}}
     second = dict(param_paths.iter_optimizer_key_paths(config, keys))
     assert first["long_entry_ema_span_0_minutes"] == (
@@ -58,7 +58,7 @@ def test_later_group_observes_current_strategy_mode_and_bot_shape():
     )
     assert first["long_n_positions"] == ("bot", "long", "risk", "max_positions")
     assert second["long_n_positions"] == ("bot", "long", "risk", "max_positions")
-    assert second["hsl_drawdown_threshold_fraction"] == ("bot", "portfolio", "hsl", "drawdown_threshold_fraction")
+    assert second["hsl_drawdown_threshold_fraction"] == ("bot", "portfolio", "risk", "hsl", "drawdown_threshold_fraction")
 
 
 def test_empty_and_hsl_only_groups_preserve_lazy_metadata_errors(monkeypatch):
@@ -66,12 +66,12 @@ def test_empty_and_hsl_only_groups_preserve_lazy_metadata_errors(monkeypatch):
         raise RuntimeError("metadata unavailable")
 
     monkeypatch.setattr(param_paths, "_strategy_path_map_for_config", unavailable)
-    config = {"bot": {"portfolio": {'hsl': {'scope': 'portfolio'}}}}
+    config = {"bot": {"portfolio": {"risk": {'hsl': {'scope': 'portfolio'}}}}}
     assert list(param_paths.iter_optimizer_key_paths(config, [])) == []
     assert list(param_paths.iter_optimizer_key_paths(config, ["hsl_drawdown_threshold_fraction"])) == [
-        ("hsl_drawdown_threshold_fraction", ("bot", "portfolio", "hsl", "drawdown_threshold_fraction"))
+        ("hsl_drawdown_threshold_fraction", ("bot", "portfolio", "risk", "hsl", "drawdown_threshold_fraction"))
     ]
     paths = param_paths.iter_optimizer_key_paths(config, ["hsl_drawdown_threshold_fraction", "long_n_positions"])
-    assert next(paths) == ("hsl_drawdown_threshold_fraction", ("bot", "portfolio", "hsl", "drawdown_threshold_fraction"))
+    assert next(paths) == ("hsl_drawdown_threshold_fraction", ("bot", "portfolio", "risk", "hsl", "drawdown_threshold_fraction"))
     with pytest.raises(RuntimeError, match="metadata unavailable"):
         next(paths)

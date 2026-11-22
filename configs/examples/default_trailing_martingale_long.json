@@ -102,7 +102,10 @@
                 "base_duration_minutes": 4.2367604,
                 "max_duration_minutes": 360,
                 "min_duration_minutes": 1,
-                "weights_minutes": {"adverse_directionality": 10.345851, "exposure_ratio": 14.078595}
+                "weights_minutes": {
+                    "adverse_directionality": 10.345851,
+                    "exposure_ratio": 14.078595
+                }
             },
             "forager": {
                 "always_include": [],
@@ -117,21 +120,34 @@
                 "log_range_ema_span_minutes": 1856.2118,
                 "volume_ema_span_minutes": 479.49336
             },
-            "hsl": {
-                "cooldown_after_red_minutes": 2160.0,
-                "drawdown_fraction_ema_span_minutes": 720.0,
-                "drawdown_threshold_fraction": 0.15,
-                "enabled": false,
-                "memory_ema_span_minutes": 43200.0,
-                "panic_close_order_type": "limit",
-                "scale_budget_with_excess_allowance": false
-            },
             "risk": {
                 "max_positions": 10,
                 "position_exposure_enforcer": {"enabled": false, "threshold_ratio": 1.0},
-                "total_exposure_enforcer": {"enabled": false, "policy": "reduce_overweight", "threshold_ratio": 1.0},
+                "total_exposure_enforcer": {
+                    "enabled": false,
+                    "policy": "reduce_overweight",
+                    "threshold_ratio": 1.0
+                },
                 "total_wallet_exposure_limit_ratio": 1.5,
-                "we_excess_allowance_fraction": 0.32776852
+                "we_excess_allowance_fraction": 0.32776852,
+                "hsl": {
+                    "cooldown_after_red_minutes": 2160.0,
+                    "drawdown_fraction_ema_span_minutes": 720.0,
+                    "drawdown_threshold_fraction": 0.15,
+                    "enabled": false,
+                    "memory_ema_span_minutes": 43200.0,
+                    "panic_close_order_type": "limit",
+                    "scale_budget_with_excess_allowance": false
+                },
+                "unstuck": {
+                    "ema_distance_fraction": -0.047491595,
+                    "ema_gating_enabled": true,
+                    "ema_span_0_minutes": 431.30526,
+                    "ema_span_1_minutes": 2460.1193,
+                    "enabled": true,
+                    "exposure_trigger_ratio": 0.55261617,
+                    "loss_allowance_fraction": 0.0037045229
+                }
             },
             "strategy": {
                 "trailing_martingale": {
@@ -208,26 +224,23 @@
                 "filter_by_min_effective_cost": true,
                 "ignored_coins": [],
                 "minimum_coin_age_days": 60.0
-            },
-            "unstuck": {
-                "close_fraction": 0.11267315,
-                "ema_distance_fraction": -0.047491595,
-                "ema_gating_enabled": true,
-                "ema_span_0_minutes": 431.30526,
-                "ema_span_1_minutes": 2460.1193,
-                "enabled": true,
-                "exposure_trigger_ratio": 0.55261617,
-                "loss_allowance_fraction": 0.0037045229
             }
         },
         "portfolio": {
-            "execution": {"market_order_near_touch_fraction": 0.001, "market_orders_allowed": false},
+            "execution": {
+                "market_order_near_touch_fraction": 0.001,
+                "market_orders_allowed": false
+            },
             "hedge_mode": false,
-            "hsl": {"scope": "coin"},
-            "loss_gate": {"max_drawdown_fraction": 1.0, "memory_ema_span_minutes": 43200.0},
             "strategy_kind": "trailing_martingale",
-            "unstuck": {"memory_ema_span_minutes": 85511.137},
-            "warmup": {"max_minutes": null, "activation_span_fraction": 0.3}
+            "warmup": {"max_minutes": null, "activation_span_fraction": 0.3},
+            "risk": {
+                "loss_realization": {
+                    "memory_ema_span_minutes": 85511.137,
+                    "loss_gate": {"enabled": false}
+                },
+                "hsl": {"scope": "coin"}
+            }
         },
         "long": {"enabled": true},
         "short": {"enabled": false}
@@ -333,7 +346,10 @@
                 "entry_cooldown": {
                     "base_duration_minutes": [1.0, 60.0],
                     "min_duration_minutes": [1.0, 1.0],
-                    "weights_minutes": {"adverse_directionality": [1.0, 100.0], "exposure_ratio": [1.0, 100.0]}
+                    "weights_minutes": {
+                        "adverse_directionality": [1.0, 100.0],
+                        "exposure_ratio": [1.0, 100.0]
+                    }
                 },
                 "forager": {
                     "score_weights": {
@@ -346,18 +362,25 @@
                     "log_range_ema_span_minutes": [10.0, 3000.0],
                     "volume_ema_span_minutes": [10.0, 3000.0]
                 },
-                "hsl": {
-                    "cooldown_after_red_minutes": [2160, 2160, 10],
-                    "drawdown_fraction_ema_span_minutes": [720, 720, 1],
-                    "memory_ema_span_minutes": [43200.0, 43200.0],
-                    "drawdown_threshold_fraction": [0.15, 0.15, 0.001]
-                },
                 "risk": {
                     "max_positions": [10, 10, 1],
                     "total_wallet_exposure_limit_ratio": [1.5, 1.5, 0.01],
                     "we_excess_allowance_fraction": [0.0, 0.5],
                     "position_exposure_enforcer": {"threshold_ratio": [1, 1, 0.001]},
-                    "total_exposure_enforcer": {"threshold_ratio": [1, 1, 0.001]}
+                    "total_exposure_enforcer": {"threshold_ratio": [1, 1, 0.001]},
+                    "hsl": {
+                        "cooldown_after_red_minutes": [2160, 2160, 10],
+                        "drawdown_fraction_ema_span_minutes": [720, 720, 1],
+                        "memory_ema_span_minutes": [43200.0, 43200.0],
+                        "drawdown_threshold_fraction": [0.15, 0.15, 0.001]
+                    },
+                    "unstuck": {
+                        "ema_distance_fraction": [-0.2, 0.01],
+                        "ema_span_0_minutes": [10.0, 3000.0],
+                        "ema_span_1_minutes": [10.0, 3000.0],
+                        "exposure_trigger_ratio": [0.4, 0.9],
+                        "loss_allowance_fraction": [0.0001, 0.2]
+                    }
                 },
                 "strategy": {
                     "trailing_martingale": {
@@ -389,18 +412,12 @@
                         "log_range_ema_span_1h_candles": [10.0, 3000.0],
                         "log_range_ema_span_minutes": [10.0, 3000.0]
                     }
-                },
-                "unstuck": {
-                    "close_fraction": [0.01, 0.12],
-                    "ema_distance_fraction": [-0.2, 0.01],
-                    "ema_span_0_minutes": [10.0, 3000.0],
-                    "ema_span_1_minutes": [10.0, 3000.0],
-                    "exposure_trigger_ratio": [0.4, 0.9],
-                    "loss_allowance_fraction": [0.0001, 0.2]
                 }
             },
             "portfolio": {
-                "unstuck": {"memory_ema_span_minutes": [10080.0, 129600.0]}
+                "risk": {
+                    "loss_realization": {"memory_ema_span_minutes": [10080.0, 129600.0]}
+                }
             }
         },
         "compress_results_file": true,
@@ -411,7 +428,11 @@
             "batch_size": null,
             "checkpoint_interval_seconds": 5.0,
             "max_dispatch_candidate_bars": null,
-            "screening": {"min_survivors": 64, "scenarios": [], "survival_fraction": 0.1},
+            "screening": {
+                "min_survivors": 64,
+                "scenarios": [],
+                "survival_fraction": 0.1
+            },
             "search_cohort_size": null,
             "tuning_mode": "conservative"
         },
@@ -456,7 +477,9 @@
             "algorithm": "auto",
             "algorithms": {
                 "nsga2": {},
-                "nsga3": {"ref_dirs": {"method": "das_dennis", "n_partitions": "auto"}}
+                "nsga3": {
+                    "ref_dirs": {"method": "das_dennis", "n_partitions": "auto"}
+                }
             },
             "shared": {
                 "crossover_distribution_index": 20.0,

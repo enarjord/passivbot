@@ -17,7 +17,7 @@ from optimization.gpu.ema_bootstrap import (
     BOOTSTRAP_COUNT_COLS, effective_end_steps, pack_bootstrap_counts, validate_hourly_bootstrap_inputs,
 )
 
-from optimization.gpu.specialization import unstuck_ema_required, unstuck_required
+from optimization.gpu.specialization import unstuck_required
 from optimization.gpu.decimal import (
     _TM_DECIMAL_KEYS,
     _TM_DECIMAL_WORDS,
@@ -38,6 +38,7 @@ from optimization.gpu.runtime import (
 )
 
 from optimization.gpu.model import (
+    GLOBAL_RISK_PARAM_KEYS,
     MARKET_EXECUTION_TICKS_ABI,
     validate_market_order_slippage_fraction,
     ADAPTIVE_PARAM_KEYS,
@@ -161,21 +162,13 @@ def _with_tm_loss_gate_disabled(source: str, disabled: bool) -> str:
     return _TM_LOSS_GATE_DISABLED_DEFINE + source
 
 
-def _encode_loss_gate_max_drawdown_fraction(value: float) -> float:
-    """Match the shared risk graph's nearest binary32 fraction cast.
+def _encode_loss_gate_policy(enabled: bool, cap: float | None) -> float:
+    from config.gpu import validate_gpu_loss_gate_policy
 
-    Original float64 enablement is transported separately: a fraction just below
-    one may round to one while its configured gate remains enabled.
-    """
-
-    return 1.0 if value >= 1.0 else float(np.float32(value))
-
-
-
-
-
-
-
+    validate_gpu_loss_gate_policy(enabled, cap)
+    # The settings buffer retains a numeric column. The independent flag owns
+    # enablement; dormant caps have identical device inputs to an absent cap.
+    return 0.0
 
 
 def _validate_unstuck_ema_spans(
@@ -1072,7 +1065,7 @@ def _validate_global_memory_params(params, keys, *, sides):
     from optimization.gpu.hsl import validate_memory_span
 
     width = len(keys)
-    for key in ("unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"):
+    for key in GLOBAL_RISK_PARAM_KEYS:
         column = keys.index(key)
         values = params[:, column]
         for value in np.unique(values):
@@ -1226,7 +1219,8 @@ class _MulticoinReplayRunner:
         side: str,
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        loss_gate_max_drawdown_fraction: float = 1.0,
+        loss_gate_enabled: bool,
+        loss_gate_max_drawdown_fraction: float | None,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
@@ -1244,6 +1238,10 @@ class _MulticoinReplayRunner:
         interrupt_check=None,
         selection=None,
     ):
+        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_policy(
+            loss_gate_enabled, loss_gate_max_drawdown_fraction
+        )
+        self.loss_gate_enabled = loss_gate_enabled
         self.market_execution_ticks = _validate_market_execution_data(data, market_order_slippage_fraction)
         if max_dispatch_candidate_bars is not None and max_dispatch_candidate_bars <= 0:
             raise ValueError("max_dispatch_candidate_bars must be positive")
@@ -1407,13 +1405,6 @@ class _MulticoinReplayRunner:
         self.coin_overrides_absent = not bool(np.isfinite(coin_overrides).any())
         self.coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
         self.forager_score_hysteresis = validate_forager_score_hysteresis(forager_score_hysteresis)
-        loss_gate_max_drawdown_fraction = float(loss_gate_max_drawdown_fraction)
-        if not np.isfinite(loss_gate_max_drawdown_fraction) or loss_gate_max_drawdown_fraction < 0.0:
-            raise ValueError("loss_gate_max_drawdown_fraction must be finite and non-negative")
-        self.loss_gate_enabled = loss_gate_max_drawdown_fraction < 1.0
-        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
-            loss_gate_max_drawdown_fraction
-        )
         market_order_slippage_fraction = float(market_order_slippage_fraction)
         if (
             not np.isfinite(market_order_slippage_fraction)
@@ -1448,7 +1439,7 @@ class _MulticoinReplayRunner:
                 float(minimum_cost_filters[side]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
-                float(self.loss_gate_enabled),  # Original float64 gate activation.
+                float(self.loss_gate_enabled),  # Explicit gate activation.
                 float(self.side_activation[side]),  # Directional activation ABI 1.
             ],
             dtype=torch.float32,
@@ -1511,17 +1502,6 @@ class _MulticoinReplayRunner:
     def _library(self):
         loader, args = self._library_cache_call()
         return loader(*args)
-
-    def _unstuck_required(self, matrix):
-        if not getattr(self, "unstuck_specialization", True):
-            return True
-        return unstuck_required(matrix, self.parameter_keys, self._unstuck_ema_overrides)
-
-    def _unstuck_ema_required(self, matrix):
-        if not getattr(self, "unstuck_ema_specialization", True):
-            return True
-        keys = self.parameter_keys
-        return unstuck_ema_required(matrix, keys, self._unstuck_ema_overrides)
 
     # Disposable unified factual arithmetic. Strategy subclasses enable only
     # supported device shapes; this internal flag retains scalar ablation.
@@ -2162,8 +2142,10 @@ class _MulticoinReplayRunner:
         # additionally carries private decimal operands after each side block.
         policy_matrix = np.asarray(params, dtype=np.float32)
         self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(policy_matrix)
-        self.dispatch_unstuck_ema_enabled = self._unstuck_ema_required(policy_matrix)
-        self.dispatch_unstuck_enabled = self._unstuck_required(policy_matrix)
+        if unstuck_required(policy_matrix, self.parameter_keys, self._unstuck_ema_overrides):
+            raise ValueError("GPU replay does not support v9 unstuck exposure sizing; use a CPU backend")
+        self.dispatch_unstuck_ema_enabled = False
+        self.dispatch_unstuck_enabled = False
         packed = time.perf_counter() if profile else 0.0
         loader, library_args = self._library_cache_call()
         library, cold = _cached_library_with_miss(loader, *library_args)
@@ -2455,7 +2437,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         long_coin_overrides: np.ndarray | None = None,
         short_coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        loss_gate_max_drawdown_fraction: float = 1.0,
+        loss_gate_enabled: bool,
+        loss_gate_max_drawdown_fraction: float | None,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
@@ -2481,6 +2464,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             side="long",
             coin_overrides=long_coin_overrides,
             forager_score_hysteresis=forager_score_hysteresis,
+            loss_gate_enabled=loss_gate_enabled,
             loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
@@ -2534,9 +2518,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
-        loss_gate_max_drawdown_fraction = float(loss_gate_max_drawdown_fraction)
-        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
-            loss_gate_max_drawdown_fraction
+        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_policy(
+            loss_gate_enabled, loss_gate_max_drawdown_fraction
         )
         market_order_slippage_fraction = float(market_order_slippage_fraction)
         market_order_near_touch_fraction = float(market_order_near_touch_fraction)
@@ -2560,7 +2543,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 float(minimum_cost_filters["long"]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
-                float(self.loss_gate_enabled),  # Original float64 gate activation.
+                float(self.loss_gate_enabled),  # Explicit gate activation.
                 float(minimum_cost_filters["short"]),  # Fused side-policy ABI 2.
                 float(self.side_activation["long"]),  # Fused activation ABI 1.
                 float(self.side_activation["short"]),
@@ -2684,7 +2667,8 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         side: str,
         coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        loss_gate_max_drawdown_fraction: float = 1.0,
+        loss_gate_enabled: bool,
+        loss_gate_max_drawdown_fraction: float | None,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
@@ -2702,7 +2686,6 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
         interrupt_check=None,
         selection=None,
     ):
-        self.loss_gate_enabled = float(loss_gate_max_drawdown_fraction) < 1.0
         self.loss_gate_specialization = True
         super().__init__(
             run,
@@ -2710,6 +2693,7 @@ class MpsTrailingMartingaleMulticoinRunner(_MulticoinReplayRunner):
             side=side,
             coin_overrides=coin_overrides,
             forager_score_hysteresis=forager_score_hysteresis,
+            loss_gate_enabled=loss_gate_enabled,
             loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
@@ -2838,7 +2822,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
         long_coin_overrides: np.ndarray | None = None,
         short_coin_overrides: np.ndarray | None = None,
         forager_score_hysteresis: dict[str, float],
-        loss_gate_max_drawdown_fraction: float = 1.0,
+        loss_gate_enabled: bool,
+        loss_gate_max_drawdown_fraction: float | None,
         collect_coin_fill_counts: bool = False,
         filter_by_min_effective_cost: dict[str, bool],
         side_activation: dict[str, bool],
@@ -2864,6 +2849,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             side="long",
             coin_overrides=long_coin_overrides,
             forager_score_hysteresis=forager_score_hysteresis,
+            loss_gate_enabled=loss_gate_enabled,
             loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
             collect_coin_fill_counts=collect_coin_fill_counts,
             filter_by_min_effective_cost=filter_by_min_effective_cost,
@@ -2915,8 +2901,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
             self.coin_overrides_absent and not bool(np.isfinite(short_coin_overrides).any())
         )
         self.short_coin_overrides = torch.as_tensor(prepared_overrides, device=gpu_device())
-        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_max_drawdown_fraction(
-            float(loss_gate_max_drawdown_fraction)
+        encoded_loss_gate_max_drawdown_fraction = _encode_loss_gate_policy(
+            loss_gate_enabled, loss_gate_max_drawdown_fraction
         )
         liq_floor = max(0.0, run.starting_balance) * max(0.0, run.equity_floor_fraction)
         minimum_cost_filters = validate_minimum_cost_filters(filter_by_min_effective_cost)
@@ -2938,7 +2924,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(MpsTrailingMartingaleMulticoinRu
                 float(minimum_cost_filters["long"]),
                 0.0,  # Runtime factual-ring capacity; absent from compile identity.
                 0.0,  # Internal factual evaluation control, independently of capture.
-                float(self.loss_gate_enabled),  # Original float64 gate activation.
+                float(self.loss_gate_enabled),  # Explicit gate activation.
                 float(minimum_cost_filters["short"]),  # Fused side-policy ABI 2.
                 float(self.side_activation["long"]),  # Fused activation ABI 1.
                 float(self.side_activation["short"]),

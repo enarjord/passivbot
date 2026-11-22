@@ -54,35 +54,35 @@ def test_canonical_parent_patch_cannot_reuse_an_equal_side_pin_plan(kind, side, 
 
     source = get_template_config()
     source["bot"]["portfolio"]["strategy_kind"] = kind
-    value = source["bot"]["global"]["unstuck"]["close_fraction"]
-    source["bot"].setdefault(side, {})["unstuck"] = {"close_fraction": value}
-    source["optimize"]["bounds"] = {"global": {"unstuck": {"close_fraction": [0.02, 0.06]}}}
+    value = source["bot"]["global"]["risk"]["unstuck"]["loss_allowance_fraction"]
+    source["bot"].setdefault(side, {}).setdefault("risk", {})["unstuck"] = {"loss_allowance_fraction": value}
+    source["optimize"]["bounds"] = {"global": {"risk": {"unstuck": {"loss_allowance_fraction": [0.02, 0.06]}}}}
     config = prepare_config(source, verbose=False)
     plan = get_bound_plan(config)
     if replacement == "root":
         bot = get_bot_policy(config).source_view()
-        bot[side].pop("unstuck")
+        bot[side]["risk"].pop("unstuck")
         patch = {"bot": bot}
     else:
-        patch = {f"bot.{side}" + (".unstuck" if replacement == "parent" else ""): {}}
+        patch = {f"bot.{side}" + (".risk.unstuck" if replacement == "parent" else ""): {}}
     assert apply_bot_config_patch(config, patch)
     changed = get_bot_policy(config)
-    assert not changed.has_side_pin(side, ("unstuck", "close_fraction"))
+    assert not changed.has_side_pin(side, ("risk", "unstuck", "loss_allowance_fraction"))
     with pytest.raises(ValueError, match="does not match source authority"):
         plan.apply_vector(changed, [
-            0.055 if binding.key == "bot.global.unstuck.close_fraction" else binding.bound.low
+            0.055 if binding.key == "bot.global.risk.unstuck.loss_allowance_fraction" else binding.bound.low
             for binding in plan.bindings
         ])
     rebuilt = prepare_bound_plan(config)
     common = next(binding for binding in rebuilt.bindings
-                  if binding.key == "bot.global.unstuck.close_fraction")
+                  if binding.key == "bot.global.risk.unstuck.loss_allowance_fraction")
     assert common.effective_targets == tuple(
-        ("bot", target, "unstuck", "close_fraction") for target in ("long", "short")
+        ("bot", target, "risk", "unstuck", "loss_allowance_fraction") for target in ("long", "short")
     )
     updated = rebuilt.apply_values(changed, {common.key: 0.055})
-    assert [updated.effective_view()[target]["unstuck"]["close_fraction"]
+    assert [updated.effective_view()[target]["risk"]["unstuck"]["loss_allowance_fraction"]
             for target in ("long", "short")] == [0.055, 0.055]
-    assert not updated.has_side_pin(side, ("unstuck", "close_fraction"))
+    assert not updated.has_side_pin(side, ("risk", "unstuck", "loss_allowance_fraction"))
 
 
 @pytest.mark.parametrize("side", ["long", "short"])

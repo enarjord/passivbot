@@ -33,6 +33,8 @@ assert_correct_ccxt_version(ccxt=ccxt_async)
 
 
 class HyperliquidBot(CCXTBot):
+    supports_close_lookup_by_client_id = True
+
     # HIP-3 stock perps have a max leverage of 10x
     HIP3_MAX_LEVERAGE = 10
     # HIP-3 symbols use "xyz:" prefix (TradeXYZ builder)

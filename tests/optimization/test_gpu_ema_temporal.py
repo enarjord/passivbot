@@ -30,7 +30,7 @@ def _replay(hsl, hedge_mode, monkeypatch, sides="both"):
         monkeypatch.setattr(obj, name, forbidden)
     options = ["--fixture", "ema_anchor", "--sides", sides,
                "--coins", "3", "--bars", "3137", "--seed", "43",
-               "--hsl", hsl, "--unstuck", "--price-shock", "0", "1500", ".7",
+               "--hsl", hsl, "--price-shock", "0", "1500", ".7",
                "--price-shock", "1", "1800", "1.3"]
     if hsl != "disabled":
         options += ["--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
@@ -159,7 +159,7 @@ def test_cuda_prepared_service_fused_long_history_interrupts_between_real_chunks
         monkeypatch.setattr(obj, name, forbidden)
     inputs = fixture_inputs(build_parser().parse_args([
         "--fixture", "ema_anchor", "--sides", "both", "--coins", "3",
-        "--bars", "8237", "--seed", "43", "--hsl", "coin", "--unstuck",
+        "--bars", "8237", "--seed", "43", "--hsl", "coin",
     ]))
     completed_chunks = []
     original = mps_kernel.record_replay_chunk

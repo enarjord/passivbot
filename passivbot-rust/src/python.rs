@@ -8,8 +8,8 @@ use crate::entries::{
     calc_entries_long, calc_entries_short, calc_next_entry_long, calc_next_entry_short,
 };
 use crate::risk::{
-    calc_twel_enforcer_actions, calc_unstucking_action, gate_entries_by_twel, GateEntriesCandidate,
-    GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
+    calc_twel_enforcer_actions, gate_entries_by_twel, GateEntriesCandidate,
+    GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition,
 };
 use crate::strategies::ema_anchor::calc_quote_prices as calc_ema_anchor_quote_prices;
 use crate::strategies::registry::{strategy_kind_from_name, strategy_kind_names, strategy_spec};
@@ -1022,138 +1022,14 @@ pub fn gate_entries_by_twel_py(
 }
 
 #[pyfunction]
-pub fn calc_unstucking_close_py(
-    balance: f64,
-    allowance_long: f64,
-    allowance_short: f64,
-    positions: &Bound<'_, PyList>,
-) -> PyResult<Option<(usize, usize, f64, f64, u16)>> {
-    let positions = positions.as_ref();
-    let positions_len = positions.len()?;
-    let mut inputs: Vec<UnstuckPositionInput> = Vec::with_capacity(positions_len);
-    for item in positions.iter()? {
-        let item = item?;
-        let dict = item.downcast::<PyDict>()?;
-        let idx = dict
-            .get_item("idx")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'idx'"))?
-            .extract::<usize>()?;
-        let side_str: String = dict
-            .get_item("side")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'side'"))?
-            .extract::<String>()?;
-        let side = match side_str.as_str() {
-            "long" => LONG,
-            "short" => SHORT,
-            _ => {
-                return Err(PyValueError::new_err(
-                    "position side must be 'long' or 'short'",
-                ))
-            }
-        };
-        let position_size = dict
-            .get_item("position_size")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'position_size'"))?
-            .extract::<f64>()?;
-        let position_price = dict
-            .get_item("position_price")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'position_price'"))?
-            .extract::<f64>()?;
-        let wallet_exposure_limit_ratio = dict
-            .get_item("wallet_exposure_limit_ratio")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'wallet_exposure_limit_ratio'"))?
-            .extract::<f64>()?;
-        let effective_we_excess_allowance_fraction =
-            if let Some(value) = dict.get_item("effective_we_excess_allowance_fraction")? {
-                value.extract::<f64>()?
-            } else {
-                dict.get_item("risk_we_excess_allowance_fraction")?
-                    .ok_or_else(|| {
-                        PyValueError::new_err("position missing 'risk_we_excess_allowance_fraction'")
-                    })?
-                    .extract::<f64>()?
-            };
-        let unstuck_exposure_trigger_ratio = dict
-            .get_item("unstuck_exposure_trigger_ratio")?
-            .ok_or_else(|| {
-                PyValueError::new_err("position missing 'unstuck_exposure_trigger_ratio'")
-            })?
-            .extract::<f64>()?;
-        let unstuck_close_fraction = dict
-            .get_item("unstuck_close_fraction")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_close_fraction'"))?
-            .extract::<f64>()?;
-        let unstuck_ema_gating_enabled =
-            if let Some(value) = dict.get_item("unstuck_ema_gating_enabled")? {
-                value.extract::<bool>()?
-            } else {
-                true
-            };
-        let unstuck_ema_distance_fraction = dict
-            .get_item("unstuck_ema_distance_fraction")?
-            .ok_or_else(|| {
-                PyValueError::new_err("position missing 'unstuck_ema_distance_fraction'")
-            })?
-            .extract::<f64>()?;
-        let ema_band_upper = dict
-            .get_item("ema_band_upper")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'ema_band_upper'"))?
-            .extract::<f64>()?;
-        let ema_band_lower = dict
-            .get_item("ema_band_lower")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'ema_band_lower'"))?
-            .extract::<f64>()?;
-        let current_price = dict
-            .get_item("current_price")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'current_price'"))?
-            .extract::<f64>()?;
-        let price_step = dict
-            .get_item("price_step")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'price_step'"))?
-            .extract::<f64>()?;
-        let qty_step = dict
-            .get_item("qty_step")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'qty_step'"))?
-            .extract::<f64>()?;
-        let min_qty = dict
-            .get_item("min_qty")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'min_qty'"))?
-            .extract::<f64>()?;
-        let min_cost = dict
-            .get_item("min_cost")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'min_cost'"))?
-            .extract::<f64>()?;
-        let c_mult = dict
-            .get_item("c_mult")?
-            .ok_or_else(|| PyValueError::new_err("position missing 'c_mult'"))?
-            .extract::<f64>()?;
-
-        inputs.push(UnstuckPositionInput {
-            idx,
-            side,
-            position_size,
-            position_price,
-            wallet_exposure_limit_ratio,
-            effective_we_excess_allowance_fraction,
-            unstuck_exposure_trigger_ratio,
-            unstuck_close_fraction,
-            unstuck_ema_gating_enabled,
-            unstuck_ema_distance_fraction,
-            unstuck_loss_allowance_fraction: 0.0,
-            total_wallet_exposure_limit_ratio: 0.0,
-            ema_band_upper,
-            ema_band_lower,
-            current_price,
-            price_step,
-            qty_step,
-            min_qty,
-            min_cost,
-            c_mult,
-        });
-    }
-
-    let result = calc_unstucking_action(balance, allowance_long, allowance_short, &inputs);
-    Ok(result.map(|(idx, side, order)| (idx, side, order.qty, order.price, order.order_type.id())))
+pub fn calc_unstucking_close_py(input_json: &str) -> PyResult<Option<(usize, usize, f64, f64, u16)>> {
+    let input: crate::risk::StandaloneUnstuckInput =
+        serde_json::from_str(input_json).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    input.evaluate()
+        .map(|result| result.map(|(idx, side, order)| {
+            (idx, side, order.qty, order.price, order.order_type.id())
+        }))
+        .map_err(PyValueError::new_err)
 }
 
 #[cfg(test)]
@@ -2101,15 +1977,17 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         ));
     }
 
-    if dict.contains("lookback_ema_span_minutes")? {
-        return Err(PyValueError::new_err(
-            "lookback_ema_span_minutes is retired; supply independent risk memory spans",
-        ));
-    }
-    if dict.contains("realized_loss_gate_lookback_minutes")? {
-        return Err(PyValueError::new_err(
-            "realized_loss_gate_lookback_minutes is retired; use loss_gate_memory_ema_span_minutes",
-        ));
+    for retired in [
+        "lookback_ema_span_minutes",
+        "realized_loss_gate_lookback_minutes",
+        "unstuck_memory_ema_span_minutes",
+        "loss_gate_memory_ema_span_minutes",
+    ] {
+        if dict.contains(retired)? {
+            return Err(PyValueError::new_err(format!(
+                "{retired} is retired; use realized_loss_memory_ema_span_minutes"
+            )));
+        }
     }
     let parse_hsl_cfg = |parent: &PyDict, key: &str| -> PyResult<EquityHardStopLossConfig> {
         let item = parent
@@ -2226,16 +2104,9 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(true),
-        loss_gate_max_drawdown_fraction: dict
-            .get_item("loss_gate_max_drawdown_fraction")?
-            .map(|item| item.extract::<f64>())
-            .transpose()?
-            .unwrap_or(1.0),
-        unstuck_memory_ema_span_minutes: extract_value(dict, "unstuck_memory_ema_span_minutes")?,
-        loss_gate_memory_ema_span_minutes: extract_value(
-            dict,
-            "loss_gate_memory_ema_span_minutes",
-        )?,
+        loss_gate_enabled: extract_required_bool(dict, "loss_gate_enabled")?,
+        loss_gate_max_drawdown_fraction: extract_value(dict, "loss_gate_max_drawdown_fraction")?,
+        realized_loss_memory_ema_span_minutes: extract_value(dict, "realized_loss_memory_ema_span_minutes")?,
         equity_floor_fraction: dict
             .get_item("equity_floor_fraction")?
             .map(|item| item.extract::<f64>())
@@ -2271,17 +2142,14 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .transpose()?
             .unwrap_or(1), // default to 1m candles
     };
-    for span in [
-        params.unstuck_memory_ema_span_minutes,
-        params.loss_gate_memory_ema_span_minutes,
-    ] {
-        crate::hsl_decay::RealizedMemory::new(
-            span,
-            i64::try_from(params.first_timestamp_ms)
-                .map_err(|_| PyValueError::new_err("risk timestamp exceeds i64"))?,
-        )
-        .map_err(PyValueError::new_err)?;
-    }
+    crate::close_risk::active_gate_cap(
+        params.loss_gate_enabled, params.loss_gate_max_drawdown_fraction,
+    ).map_err(PyValueError::new_err)?;
+    crate::hsl_decay::RealizedMemory::new(
+        params.realized_loss_memory_ema_span_minutes,
+        i64::try_from(params.first_timestamp_ms)
+            .map_err(|_| PyValueError::new_err("risk timestamp exceeds i64"))?,
+    ).map_err(PyValueError::new_err)?;
     for days in params.minimum_coin_age_days {
         crate::age_admission::validate_minimum_days(days).map_err(PyValueError::new_err)?;
     }
@@ -2503,6 +2371,11 @@ fn extract_optional_twel_enforcer_policy(dict: &PyDict) -> PyResult<TwelEnforcer
 }
 
 fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
+    if dict.contains("unstuck_close_fraction")? {
+        return Err(PyValueError::new_err(
+            "unstuck_close_fraction is retired; use unstuck_exposure_trigger_ratio",
+        ));
+    }
     for key in [
         "forager_volume_drop_pct",
         "filter_volume_drop_pct",
@@ -2644,7 +2517,6 @@ fn bot_params_from_dict(dict: &PyDict, hsl: bool) -> PyResult<BotParams> {
             "unstuck_ema_gating_enabled",
             true,
         )?,
-        unstuck_close_fraction: extract_value(dict, "unstuck_close_fraction")?,
         unstuck_ema_distance_fraction: extract_value(dict, "unstuck_ema_distance_fraction")?,
         unstuck_ema_span_0_minutes: extract_value(dict, "unstuck_ema_span_0_minutes")?,
         unstuck_ema_span_1_minutes: extract_value(dict, "unstuck_ema_span_1_minutes")?,
@@ -2790,13 +2662,6 @@ fn validate_hsl_risk_unstuck_bot_params(
         true,
     )?;
     validate_finite_range(
-        &format!("{path_prefix}.unstuck_close_fraction"),
-        params.unstuck_close_fraction,
-        0.0,
-        Some(1.0),
-        true,
-    )?;
-    validate_finite_range(
         &format!("{path_prefix}.unstuck_loss_allowance_fraction"),
         params.unstuck_loss_allowance_fraction,
         0.0,
@@ -2878,13 +2743,9 @@ fn validate_orchestrator_account_risk_inputs(
         input.balance
     };
     validate_finite_range("balance_raw", balance_raw, 0.0, None, false)?;
-    validate_finite_range(
-        "global.loss_gate_max_drawdown_fraction",
-        input.global.loss_gate_max_drawdown_fraction,
-        0.0,
-        None,
-        true,
-    )?;
+    crate::close_risk::active_gate_cap(
+        input.global.loss_gate_enabled, input.global.loss_gate_max_drawdown_fraction,
+    ).map_err(PyValueError::new_err)?;
     validate_finite_range(
         "global.unstuck_allowance_long",
         input.global.unstuck_allowance_long,
@@ -2900,6 +2761,14 @@ fn validate_orchestrator_account_risk_inputs(
         true,
     )?;
     Ok(())
+}
+
+fn extract_required_bool(dict: &PyDict, key: &str) -> PyResult<bool> {
+    let value = dict.get_item(key)?
+        .ok_or_else(|| PyValueError::new_err(format!("missing required key: {key}")))?;
+    value.downcast::<pyo3::types::PyBool>()
+        .map(|flag| flag.is_true())
+        .map_err(|_| PyValueError::new_err(format!("{key} must be a boolean")))
 }
 
 fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> PyResult<T> {
@@ -4197,6 +4066,31 @@ pub fn compute_protective_closes_json(input_json: &str) -> PyResult<String> {
         .map_err(pyo3::exceptions::PyValueError::new_err)?;
     serde_json::to_string(&orders)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+pub fn project_close_reservation_json(input_json: &str) -> PyResult<String> {
+    let input: crate::close_risk::ReservationInput =
+        serde_json::from_str(input_json).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let output = input.evaluate().map_err(PyValueError::new_err)?;
+    serde_json::to_string(&output).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+#[pyo3(signature = (balance, loss_gate_enabled, loss_gate_max_drawdown_fraction, drawdown))]
+pub fn calc_loss_gate_headroom_v9(
+    balance: f64,
+    loss_gate_enabled: &Bound<'_, PyAny>,
+    loss_gate_max_drawdown_fraction: Option<f64>,
+    drawdown: f64,
+) -> PyResult<Option<f64>> {
+    let enabled = loss_gate_enabled
+        .downcast::<pyo3::types::PyBool>()
+        .map_err(|_| PyValueError::new_err("loss_gate_enabled must be a boolean"))?
+        .is_true();
+    crate::close_risk::active_gate_cap(enabled, loss_gate_max_drawdown_fraction)
+        .and_then(|cap| cap.map(|cap| crate::hsl_decay::allowance(balance, cap, drawdown)).transpose())
+        .map_err(PyValueError::new_err)
 }
 
 #[pyfunction]

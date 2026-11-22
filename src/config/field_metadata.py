@@ -33,7 +33,7 @@ def enrich_fields(fields):
                         coin_override=CoinOverridePolicy.FORBIDDEN)
             if path[2] != "strategy" and key in recommendations:
                 data["recommended_bounds"] = tuple(recommendations[key])
-            elif path[:3] == ("bot", "portfolio", "hsl") and "long_" + str(key) in recommendations:
+            elif path[:4] == ("bot", "portfolio", "risk", "hsl") and "long_" + str(key) in recommendations:
                 data["recommended_bounds"] = tuple(recommendations["long_" + key])
             if path[1] in {"long", "short"}:
                 if local in allowed:
@@ -275,20 +275,26 @@ def _bot_metadata(path):
             data["domain"] = FieldDomain(minimum=1.0, maximum=100_000.0, finite=True)
         else:
             data["description"] = "Positive finite span required when this ranking component is active."
-    elif local == "hsl.drawdown_threshold_fraction":
+    elif local == "risk.hsl.drawdown_threshold_fraction":
         data.update(unit="fraction", denominator="scope equity plus remembered drawdown",
                     domain=FieldDomain(minimum=0.0, maximum=1.0, exclusive_minimum=True, finite=True),
                     description="RED requires both current and smoothed drawdown ratios to exceed this threshold.")
-    elif local == "hsl.cooldown_after_red_minutes":
+    elif local == "risk.hsl.cooldown_after_red_minutes":
         data.update(unit="minutes", domain=FieldDomain(minimum=0.0, finite=True))
-    elif local == "hsl.panic_close_order_type":
+    elif local == "risk.hsl.panic_close_order_type":
         data["domain"] = FieldDomain(choices=("limit", "market"))
-    elif local == "hsl.scope":
+    elif local == "risk.hsl.scope":
         data["domain"] = FieldDomain(choices=("coin", "position_side", "portfolio"))
-    elif local == "loss_gate.max_drawdown_fraction":
-        data.update(unit="fraction", denominator="raw balance plus loss-gate remembered drawdown",
-                    domain=FieldDomain(minimum=0.0, finite=True),
-                    description="Values at least 1 disable the gate; zero blocks lossy non-panic closes.")
+    elif local == "risk.loss_realization.memory_ema_span_minutes":
+        data.update(unit="minutes", domain=FieldDomain(minimum=1.0, finite=True),
+                    description="One EMA span for account-wide realized-loss memory used by unstuck and the enabled loss gate.")
+    elif local == "risk.loss_realization.loss_gate.enabled":
+        data.update(description="Explicit permission to apply the portfolio loss gate.")
+    elif local == "risk.loss_realization.loss_gate.max_realized_drawdown_fraction":
+        data.update(unit="fraction", denominator="raw balance plus remembered realized drawdown",
+                    domain=FieldDomain(minimum=0.0, maximum=1.0, exclusive_maximum=True, finite=True),
+                    optimize_when="at least one evaluated scenario enables the loss gate",
+                    description="Required when the loss gate is enabled. Zero blocks lossy non-panic closes.")
     elif local == "risk.max_positions":
         data.update(unit="positions", domain=FieldDomain(minimum=0, finite=True))
     elif local == "risk.total_wallet_exposure_limit_ratio":
@@ -307,21 +313,18 @@ def _bot_metadata(path):
                         description="Positive threshold used by the unconditional total-exposure entry cap and optional total-exposure reducer.")
     elif local == "risk.total_exposure_enforcer.policy":
         data["domain"] = FieldDomain(choices=("reduce_overweight", "reduce_portfolio"))
-    elif local == "unstuck.close_fraction":
-        data.update(unit="fraction", denominator="raw balance times effective per-position wallet exposure limit, converted at close price",
-                    domain=FieldDomain(minimum=0.0, maximum=1.0, finite=True))
-    elif local == "unstuck.loss_allowance_fraction":
+    elif local == "risk.unstuck.loss_allowance_fraction":
         data.update(unit="fraction", denominator="applicable total wallet exposure limit",
                     domain=FieldDomain(minimum=0.0, finite=True),
                     description="Multiplies applicable TWEL in the realized-loss allowance formula.")
-    elif local == "unstuck.exposure_trigger_ratio":
+    elif local == "risk.unstuck.exposure_trigger_ratio":
         data.update(unit="ratio", denominator="effective per-position wallet exposure limit",
                     domain=FieldDomain(finite=True),
                     description="Eligibility requires position wallet exposure / effective WEL strictly above this value.")
-    elif local == "unstuck.ema_distance_fraction":
+    elif local == "risk.unstuck.ema_distance_fraction":
         data.update(unit="fraction", denominator="unstuck EMA band reference",
                     domain=FieldDomain(minimum=-1.0, exclusive_minimum=True, finite=True) if path[1] == "long"
                     else FieldDomain(maximum=1.0, exclusive_maximum=True, finite=True))
-    elif local in {"unstuck.ema_span_0_minutes", "unstuck.ema_span_1_minutes"}:
+    elif local in {"risk.unstuck.ema_span_0_minutes", "risk.unstuck.ema_span_1_minutes"}:
         data.update(unit="minutes", domain=FieldDomain(minimum=0.0, exclusive_minimum=True, finite=True))
     return data

@@ -32,11 +32,10 @@ FIXTURE_DEFAULTS = {
     "unstuck": False, "market_orders": False, "filter_by_min_effective_cost": False,
     "hsl_drawdown_threshold_fraction": 0.05, "hsl_drawdown_fraction_ema_span_minutes": 30.0,
     "hsl_cooldown_minutes": 30.0, "hsl_memory_ema_span_minutes": 1440.0,
-    "unstuck_memory_ema_span_minutes": 1440.0, "loss_gate_memory_ema_span_minutes": 1440.0, "price_shocks": [],
+    "realized_loss_memory_ema_span_minutes": 1440.0, "price_shocks": [],
 }
 STRESS_OPTIONS = ("hsl_drawdown_threshold_fraction", "hsl_drawdown_fraction_ema_span_minutes", "hsl_cooldown_minutes",
-                  "hsl_memory_ema_span_minutes", "unstuck_memory_ema_span_minutes",
-                  "loss_gate_memory_ema_span_minutes", "price_shocks")
+                  "hsl_memory_ema_span_minutes", "realized_loss_memory_ema_span_minutes", "price_shocks")
 # Provisional measurement gates for selected definitions, not a release certificate.
 DEFAULT_TOLERANCES = {
     **{name: MetricTolerance(1e-5, 1e-4) for name in EXPOSURE_RMS_METRICS},
@@ -98,8 +97,7 @@ def resolve_fixture_args(args):
                               ("hsl_drawdown_fraction_ema_span_minutes", 1, math.inf),
                               ("hsl_cooldown_minutes", 0, math.inf),
                               ("hsl_memory_ema_span_minutes", 1, math.inf),
-                              ("unstuck_memory_ema_span_minutes", 1, math.inf),
-                              ("loss_gate_memory_ema_span_minutes", 1, math.inf)):
+                              ("realized_loss_memory_ema_span_minutes", 1, math.inf)):
         value = getattr(args, name)
         if name.endswith("ema_span_minutes"):
             try:
@@ -192,14 +190,14 @@ def fixture_inputs(args):
         bot = config["bot"][side]
         bot["enabled"] = side in active
         bot['risk'].update({'max_positions': args.coins if side in active else 0, 'total_wallet_exposure_limit_ratio': 1.0 if side in active else 0.0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**bot['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**bot['risk']['total_exposure_enforcer'], 'enabled': False}})
-        bot["hsl"].update(
+        bot["risk"]["hsl"].update(
             enabled=side in active and args.hsl in {"coin", "position_side"},
             drawdown_threshold_fraction=args.hsl_drawdown_threshold_fraction,
             drawdown_fraction_ema_span_minutes=args.hsl_drawdown_fraction_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
             cooldown_after_red_minutes=args.hsl_cooldown_minutes,
         )
-        bot["unstuck"]["enabled"] = args.unstuck and side in active
+        bot["risk"]["unstuck"]["enabled"] = args.unstuck and side in active
         # Synthetic histories can be much shorter than the starter's RMS
         # window. Leave RMS consumers off unless a caller enables them.
         bot["forager"]["score_weights"]["rms_directionality"] = 0.0
@@ -211,14 +209,15 @@ def fixture_inputs(args):
             weights_minutes={"adverse_directionality": 0.0, "exposure_ratio": 0.0},
         )
     if args.hsl == "portfolio":
-        config["bot"]["portfolio"]["hsl"].update(
+        config["bot"]["portfolio"]["risk"]["hsl"].update(
             enabled=True, drawdown_threshold_fraction=args.hsl_drawdown_threshold_fraction,
             drawdown_fraction_ema_span_minutes=args.hsl_drawdown_fraction_ema_span_minutes,
             memory_ema_span_minutes=args.hsl_memory_ema_span_minutes,
             cooldown_after_red_minutes=args.hsl_cooldown_minutes,
         )
-    config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = args.unstuck_memory_ema_span_minutes
-    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = args.loss_gate_memory_ema_span_minutes
+    config["bot"]["portfolio"]["risk"]["loss_realization"][
+        "memory_ema_span_minutes"
+    ] = args.realized_loss_memory_ema_span_minutes
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
     # Ordered coins are derived preparation metadata, outside the canonical config.
     config["backtest"]["coins"] = {args.exchange: coins}

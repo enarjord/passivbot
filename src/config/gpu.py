@@ -72,15 +72,15 @@ def parse_screening_scenarios(value: str) -> list[str]:
 
 def gpu_hsl_policy(config: dict, side: str) -> dict:
 
-    if config["bot"]["portfolio"]["hsl"]["scope"] == "portfolio":
-        return config["bot"]["portfolio"]["hsl"]
-    return config.get("bot", {}).get(side, {}).get("hsl", {})
+    if config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "portfolio":
+        return config["bot"]["portfolio"]["risk"]["hsl"]
+    return config.get("bot", {}).get(side, {}).get("risk", {}).get("hsl", {})
 
 
 def gpu_hsl_side_enabled(config: dict, side: str, markets_by_exchange=None) -> bool:
     from config.hsl import _side_has_enabled_policy
 
-    if config["bot"]["portfolio"]["hsl"]["scope"] == "coin":
+    if config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "coin":
         return _side_has_enabled_policy(config, side, markets_by_exchange)
     globally_enabled = bool(gpu_hsl_policy(config, side).get("enabled", False))
     if globally_enabled:
@@ -88,7 +88,7 @@ def gpu_hsl_side_enabled(config: dict, side: str, markets_by_exchange=None) -> b
     for patch in (config.get("coin_overrides") or {}).values():
         if not isinstance(patch, dict):
             continue
-        hsl_patch = patch.get("bot", {}).get(side, {}).get("hsl", {}) or {}
+        hsl_patch = patch.get("bot", {}).get(side, {}).get("risk", {}).get("hsl", {}) or {}
         if isinstance(hsl_patch, dict) and bool(hsl_patch.get("enabled", False)):
             return True
     return False
@@ -103,7 +103,22 @@ def validate_hsl_gpu_inputs(config: dict) -> None:
         raise ValueError("GPU HSL requires 1m candles")
 
 
-def validate_gpu_backtest_config(config: dict) -> None:
+def validate_gpu_loss_gate_policy(enabled: bool, cap: float | None) -> None:
+    if type(enabled) is not bool:
+        raise ValueError("GPU loss_gate_enabled must be an explicit boolean")
+    if cap is not None and (
+        type(cap) not in (int, float) or not math.isfinite(cap) or not 0.0 <= cap < 1.0
+    ):
+        raise ValueError("GPU loss_gate_max_drawdown_fraction must be in [0, 1) or null")
+    if enabled and cap is None:
+        raise ValueError("GPU loss_gate_max_drawdown_fraction is required when the gate is enabled")
+    if enabled:
+        raise ValueError("GPU replay does not support v9 realized-loss close sizing; use a CPU backend")
+
+
+def validate_gpu_backtest_config(
+    config: dict, *, check_realized_close_policies: bool = True
+) -> None:
     """Reject unsupported simulation contracts without importing a device runtime."""
     from config.validate import validate_limit_order_fill_buffer_fraction
 
@@ -132,3 +147,22 @@ def validate_gpu_backtest_config(config: dict) -> None:
         raise ValueError("GPU backtests require backtest.btc_collateral_target_ratio=0; use a CPU backend")
     validate_limit_order_fill_buffer_fraction(backtest["limit_order_fill_buffer_fraction"])
     validate_hsl_gpu_inputs(config)
+    if check_realized_close_policies:
+        validate_gpu_realized_close_policies(config)
+
+
+def validate_gpu_realized_close_policies(config: dict) -> None:
+    from config.bot_inheritance import get_bot_policy, get_side_field_catalog, resolve_bot_policy
+    from config.risk_memory import require_loss_realization_policy
+
+    _, gate_enabled, gate_cap = require_loss_realization_policy(config)
+    validate_gpu_loss_gate_policy(gate_enabled, gate_cap)
+    bot = config["bot"]
+    if get_bot_policy(config) is None:
+        bot = resolve_bot_policy(bot, get_side_field_catalog()).effective_view()
+    for side in ("long", "short"):
+        if bot[side]["risk"]["unstuck"]["enabled"] or any(
+            patch.get("bot", {}).get(side, {}).get("risk", {}).get("unstuck", {}).get("enabled")
+            for patch in config.get("coin_overrides", {}).values()
+        ):
+            raise ValueError("GPU replay does not support v9 unstuck exposure sizing; use a CPU backend")

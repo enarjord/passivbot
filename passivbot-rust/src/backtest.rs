@@ -23,7 +23,7 @@ use crate::strategies::{
 };
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
-    BacktestParams, Balance, BotParams, BotParamsPair, EMABands, Equities, ExchangeParams, Fill,
+    BacktestParams, Balance, BotParams, BotParamsPair, Equities, ExchangeParams, Fill,
     Order, OrderBook, OrderType, Position, RuntimeBudgetState, RuntimeBudgetStatePair,
     StrategyParamsPairValue, TrailingPriceBundle,
 };
@@ -37,7 +37,6 @@ use std::collections::HashSet;
 // Orchestrator-only: legacy backtest order-generation path removed in this branch.
 const DEBUG_DUMP_ORDERS: bool = false;
 const DEBUG_TRACE_BALANCE: bool = false;
-const DEBUG_DUMP_UNSTUCK_CALC: bool = false;
 // Runtime profiler for the orchestrator path. Enable by setting env var `PASSIVBOT_ORCH_PROFILE=1`.
 const ORCH_PROFILE_ENV: &str = "PASSIVBOT_ORCH_PROFILE";
 // Limit debug snapshots to a narrow window in the backtest.
@@ -47,10 +46,6 @@ const DEBUG_MAX_STEPS: usize = 0;
 const DEBUG_EXTRA_WINDOW: Option<(usize, usize)> = None;
 // Optional coin filter for debug dumps (by coin name, e.g. Some("LINK")); None dumps all coins.
 const DEBUG_COIN_FILTER: Option<&str> = None;
-// Optional window for unstuck debug dump (inclusive bounds). Set to None to disable.
-const DEBUG_UNSTUCK_WINDOW: Option<(usize, usize)> = None;
-// Optional coin filter for unstuck debug dump (by coin name, e.g. Some("LINK")); None dumps all.
-const DEBUG_UNSTUCK_COIN_FILTER: Option<&str> = None;
 // Optional window for balance trace debug (inclusive bounds). Set to None to disable.
 const DEBUG_TRACE_WINDOW: Option<(usize, usize)> = None;
 // Optional coin filter for balance trace debug (by coin name, e.g. Some("SOL")); None dumps all.
@@ -61,64 +56,6 @@ use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::time::Instant;
-
-#[derive(Serialize)]
-struct UnstuckCalcDebug {
-    step: usize,
-    coin: String,
-    idx: usize,
-    side: usize,
-    balance: f64,
-    balance_bits: u64,
-    balance_raw: f64,
-    balance_raw_bits: u64,
-    realized_pnl_drawdown: f64,
-    realized_pnl_drawdown_bits: u64,
-    allowance: f64,
-    allowance_bits: u64,
-    position_size: f64,
-    position_size_bits: u64,
-    position_price: f64,
-    position_price_bits: u64,
-    current_price: f64,
-    current_price_bits: u64,
-    ema_band_upper: f64,
-    ema_band_upper_bits: u64,
-    ema_band_lower: f64,
-    ema_band_lower_bits: u64,
-    wallet_exposure_limit_ratio: f64,
-    wallet_exposure_limit_ratio_bits: u64,
-    risk_we_excess_allowance_fraction: f64,
-    unstuck_exposure_trigger_ratio: f64,
-    unstuck_close_fraction: f64,
-    unstuck_ema_distance_fraction: f64,
-    qty_step: f64,
-    price_step: f64,
-    min_qty: f64,
-    min_cost: f64,
-    c_mult: f64,
-    effective_wel: f64,
-    effective_wel_bits: u64,
-    wallet_exposure: f64,
-    wallet_exposure_bits: u64,
-    ema_price_target: f64,
-    ema_price_target_bits: u64,
-    ema_price_rounded: f64,
-    ema_price_rounded_bits: u64,
-    meets_trigger: bool,
-    min_entry_qty: f64,
-    min_entry_qty_bits: u64,
-    target_qty_raw: f64,
-    target_qty_raw_bits: u64,
-    target_qty_dn: f64,
-    target_qty_dn_bits: u64,
-    close_qty_pre_allowance: f64,
-    close_qty_pre_allowance_bits: u64,
-    pnl_if_closed: f64,
-    pnl_if_closed_bits: u64,
-    close_qty_final: f64,
-    close_qty_final_bits: u64,
-}
 
 fn calc_effective_min_cost(price: f64, exchange: &ExchangeParams) -> f64 {
     qty_to_cost(calc_min_entry_qty(price, exchange), price, exchange.c_mult)
@@ -300,39 +237,6 @@ fn refresh_orchestrator_hourly_log_ranges(
                 values.push((span, value));
             }
         }
-    }
-}
-
-impl EMAs {
-    pub fn compute_unstuck_bands(&self, pside: usize) -> EMABands {
-        let (upper, lower) = match pside {
-            LONG => (
-                *self
-                    .unstuck_long
-                    .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MIN),
-                *self
-                    .unstuck_long
-                    .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MAX),
-            ),
-            SHORT => (
-                *self
-                    .unstuck_short
-                    .iter()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MIN),
-                *self
-                    .unstuck_short
-                    .iter()
-                    .min_by(|a, b| a.partial_cmp(b).unwrap())
-                    .unwrap_or(&f64::MAX),
-            ),
-            _ => panic!("Invalid pside"),
-        };
-        EMABands { upper, lower }
     }
 }
 
@@ -532,10 +436,8 @@ pub struct BacktestEngine<'a, const ORGANILLO: bool> {
     hsl_scopes: Vec<hsl_runtime::Scope>,
     hsl_initialized: bool,
     hsl_marks: Vec<f64>,
-    unstuck_memory: crate::hsl_decay::RealizedMemory,
-    loss_gate_memory: crate::hsl_decay::RealizedMemory,
-    unstuck_memory_enabled: bool,
-    loss_gate_memory_enabled: bool,
+    realized_loss_memory: crate::hsl_decay::RealizedMemory,
+    realized_loss_memory_enabled: bool,
     hsl_report: hsl_report::Report,
     btc_collateral_initialized: bool,
     strategy_equity_series: Vec<f64>,
@@ -828,6 +730,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         }
     }
 
+    #[cfg(test)]
     fn unstuck_allowance_for_position(&self, idx: usize, side: usize) -> Result<f64, String> {
         let bp = self.bp(idx, side);
         if !bp.unstuck_enabled
@@ -840,182 +743,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             self.balance.usd_total_balance,
             bp.unstuck_loss_allowance_fraction,
             bp.total_wallet_exposure_limit_ratio,
-            self.unstuck_memory.drawdown(),
+            self.realized_loss_memory.drawdown(),
         )
-    }
-
-    fn debug_dump_unstuck_calc(&mut self, k: usize, idx: usize, side: usize) -> Result<(), String> {
-        if !DEBUG_DUMP_UNSTUCK_CALC {
-            return Ok(());
-        }
-        if DEBUG_UNSTUCK_WINDOW
-            .map(|(start, end)| k < start || k > end)
-            .unwrap_or(true)
-        {
-            return Ok(());
-        }
-
-        let coin = self
-            .backtest_params
-            .coins
-            .get(idx)
-            .cloned()
-            .unwrap_or_else(|| format!("idx_{idx}"));
-        if let Some(want) = DEBUG_UNSTUCK_COIN_FILTER {
-            if coin != want {
-                return Ok(());
-            }
-        }
-
-        let position = match side {
-            LONG => self.positions.long[idx],
-            SHORT => self.positions.short[idx],
-            _ => return Ok(()),
-        };
-        if position.size == 0.0 || !position.price.is_finite() || position.price <= 0.0 {
-            return Ok(());
-        }
-
-        let balance = self.balance.usd_total_balance_rounded;
-        let balance_raw = self.balance.usd_total_balance;
-        let realized_pnl_drawdown = self.unstuck_memory.drawdown();
-        let allowance = self.unstuck_allowance_for_position(idx, side)?;
-        let bp = self.bp(idx, side);
-
-        let runtime_budget = self.runtime_budget(idx, side);
-        let ema_bands = self.emas[idx].compute_unstuck_bands(side);
-        let current_price = self.hlcvs_value(k, idx, CLOSE);
-        let ex = &self.exchange_params_list[idx];
-
-        let size_abs = position.size.abs();
-        let effective_wel = wallet_exposure_limit_ratio_with_allowance_from_base(
-            bp,
-            runtime_budget.effective_wallet_exposure_limit_ratio,
-        );
-        let wallet_exposure = calc_wallet_exposure(ex.c_mult, balance, size_abs, position.price);
-        let ema_price_target = match side {
-            LONG => ema_bands.upper * (1.0 + bp.unstuck_ema_distance_fraction),
-            SHORT => ema_bands.lower * (1.0 - bp.unstuck_ema_distance_fraction),
-            _ => 0.0,
-        };
-        let ema_price_rounded = match side {
-            LONG => round_up(ema_price_target, ex.price_step),
-            SHORT => round_dn(ema_price_target, ex.price_step),
-            _ => 0.0,
-        };
-        let meets_trigger = match side {
-            LONG => current_price >= ema_price_rounded,
-            SHORT => current_price <= ema_price_rounded,
-            _ => false,
-        };
-
-        let min_entry_qty = calc_min_entry_qty(current_price, ex);
-        let target_qty_raw = crate::utils::cost_to_qty(
-            balance * effective_wel * bp.unstuck_close_fraction,
-            current_price,
-            ex.c_mult,
-        );
-        let target_qty_dn = round_dn(target_qty_raw, ex.qty_step).max(0.0);
-        let close_qty_pre_allowance = match side {
-            LONG => -f64::min(size_abs, f64::max(min_entry_qty, target_qty_dn)),
-            SHORT => f64::min(size_abs, f64::max(min_entry_qty, target_qty_dn)),
-            _ => 0.0,
-        };
-
-        let pnl_if_closed = match side {
-            LONG => calc_pnl_long(
-                position.price,
-                current_price,
-                close_qty_pre_allowance,
-                ex.c_mult,
-            ),
-            SHORT => calc_pnl_short(
-                position.price,
-                current_price,
-                close_qty_pre_allowance,
-                ex.c_mult,
-            ),
-            _ => 0.0,
-        };
-
-        let mut close_qty_final = close_qty_pre_allowance;
-        if allowance > 0.0 && pnl_if_closed < 0.0 {
-            let pnl_abs = pnl_if_closed.abs();
-            if pnl_abs > allowance {
-                let scaled_qty = close_qty_pre_allowance.abs() * (allowance / pnl_abs);
-                let scaled_qty = f64::min(size_abs, scaled_qty);
-                let scaled_qty = f64::max(min_entry_qty, round_dn(scaled_qty, ex.qty_step));
-                close_qty_final = match side {
-                    LONG => -scaled_qty,
-                    SHORT => scaled_qty,
-                    _ => close_qty_pre_allowance,
-                };
-            }
-        }
-
-        let payload = UnstuckCalcDebug {
-            step: k,
-            coin,
-            idx,
-            side,
-            balance,
-            balance_bits: balance.to_bits(),
-            balance_raw,
-            balance_raw_bits: balance_raw.to_bits(),
-            realized_pnl_drawdown,
-            realized_pnl_drawdown_bits: realized_pnl_drawdown.to_bits(),
-            allowance,
-            allowance_bits: allowance.to_bits(),
-            position_size: position.size,
-            position_size_bits: position.size.to_bits(),
-            position_price: position.price,
-            position_price_bits: position.price.to_bits(),
-            current_price,
-            current_price_bits: current_price.to_bits(),
-            ema_band_upper: ema_bands.upper,
-            ema_band_upper_bits: ema_bands.upper.to_bits(),
-            ema_band_lower: ema_bands.lower,
-            ema_band_lower_bits: ema_bands.lower.to_bits(),
-            wallet_exposure_limit_ratio: runtime_budget.effective_wallet_exposure_limit_ratio,
-            wallet_exposure_limit_ratio_bits: runtime_budget.effective_wallet_exposure_limit_ratio.to_bits(),
-            risk_we_excess_allowance_fraction: bp.risk_we_excess_allowance_fraction,
-            unstuck_exposure_trigger_ratio: bp.unstuck_exposure_trigger_ratio,
-            unstuck_close_fraction: bp.unstuck_close_fraction,
-            unstuck_ema_distance_fraction: bp.unstuck_ema_distance_fraction,
-            qty_step: ex.qty_step,
-            price_step: ex.price_step,
-            min_qty: ex.min_qty,
-            min_cost: ex.min_cost,
-            c_mult: ex.c_mult,
-            effective_wel,
-            effective_wel_bits: effective_wel.to_bits(),
-            wallet_exposure,
-            wallet_exposure_bits: wallet_exposure.to_bits(),
-            ema_price_target,
-            ema_price_target_bits: ema_price_target.to_bits(),
-            ema_price_rounded,
-            ema_price_rounded_bits: ema_price_rounded.to_bits(),
-            meets_trigger,
-            min_entry_qty,
-            min_entry_qty_bits: min_entry_qty.to_bits(),
-            target_qty_raw,
-            target_qty_raw_bits: target_qty_raw.to_bits(),
-            target_qty_dn,
-            target_qty_dn_bits: target_qty_dn.to_bits(),
-            close_qty_pre_allowance,
-            close_qty_pre_allowance_bits: close_qty_pre_allowance.to_bits(),
-            pnl_if_closed,
-            pnl_if_closed_bits: pnl_if_closed.to_bits(),
-            close_qty_final,
-            close_qty_final_bits: close_qty_final.to_bits(),
-        };
-
-        let fname = "debug_unstuck_calc_orchestrator.json";
-        if let Ok(mut f) = File::create(fname) {
-            let _ = serde_json::to_writer_pretty(&mut f, &payload);
-            let _ = writeln!(f);
-        }
-        Ok(())
     }
 
     fn record_balance_trace(
@@ -1307,6 +1036,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                         .copied()
                         .flatten(),
                     symbol_idx: idx,
+                    symbol: self.backtest_params.coins[idx].clone(),
                     order_book,
                     exchange,
                     tradable,
@@ -1364,11 +1094,12 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
                 auto_unstuck_allowed: Some(true),
                 unstuck_allowance_long: long_allowance,
                 unstuck_allowance_short: short_allowance,
+                loss_gate_enabled: self.backtest_params.loss_gate_enabled,
+                limit_orders_post_only: true,
                 loss_gate_max_drawdown_fraction: self
                     .backtest_params
                     .loss_gate_max_drawdown_fraction,
-                unstuck_realized_pnl_drawdown: self.unstuck_memory.drawdown(),
-                loss_gate_realized_pnl_drawdown: self.loss_gate_memory.drawdown(),
+                realized_pnl_drawdown: self.realized_loss_memory.drawdown(),
                 sort_global: false,
                 global_bot_params: self.bot_params_master.clone(),
                 hedge_mode: self.backtest_params.hedge_mode,
@@ -1398,10 +1129,10 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
 
         input.global.unstuck_allowance_long = self.unstuck_allowance_diagnostic(LONG);
         input.global.unstuck_allowance_short = self.unstuck_allowance_diagnostic(SHORT);
+        input.global.loss_gate_enabled = self.backtest_params.loss_gate_enabled;
         input.global.loss_gate_max_drawdown_fraction =
             self.backtest_params.loss_gate_max_drawdown_fraction;
-        input.global.unstuck_realized_pnl_drawdown = self.unstuck_memory.drawdown();
-        input.global.loss_gate_realized_pnl_drawdown = self.loss_gate_memory.drawdown();
+        input.global.realized_pnl_drawdown = self.realized_loss_memory.drawdown();
 
         input.peek_hints = peek_hints;
         input.forager_hysteresis = forager_hysteresis;
@@ -2019,30 +1750,20 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             hsl_scopes: Vec::new(),
             hsl_initialized: false,
             hsl_marks: vec![f64::NAN; n_coins],
-            loss_gate_memory_enabled: backtest_params.loss_gate_max_drawdown_fraction.is_finite()
-                && backtest_params.loss_gate_max_drawdown_fraction >= 0.0
-                && backtest_params.loss_gate_max_drawdown_fraction < 1.0,
-            unstuck_memory_enabled: bot_params.iter().any(|pair| {
+            realized_loss_memory_enabled: backtest_params.loss_gate_enabled || bot_params.iter().any(|pair| {
                 [&pair.long, &pair.short].iter().any(|p| {
                     p.unstuck_enabled
                         && p.unstuck_loss_allowance_fraction > 0.0
-                        && p.unstuck_close_fraction > 0.0
                         && p.unstuck_exposure_trigger_ratio > 0.0
                         && p.total_wallet_exposure_limit_ratio > 0.0
                 })
             }),
-            unstuck_memory: crate::hsl_decay::RealizedMemory::new(
-                backtest_params.unstuck_memory_ema_span_minutes,
+            realized_loss_memory: crate::hsl_decay::RealizedMemory::new(
+                backtest_params.realized_loss_memory_ema_span_minutes,
                 i64::try_from(backtest_params.first_timestamp_ms)
                     .expect("risk timestamp exceeds i64"),
             )
-            .expect("invalid unstuck memory span"),
-            loss_gate_memory: crate::hsl_decay::RealizedMemory::new(
-                backtest_params.loss_gate_memory_ema_span_minutes,
-                i64::try_from(backtest_params.first_timestamp_ms)
-                    .expect("risk timestamp exceeds i64"),
-            )
-            .expect("invalid loss-gate memory span"),
+            .expect("invalid realized-loss memory span"),
             hsl_report: hsl_report::Report::new(
                 backtest_params.hsl_detailed_report && !backtest_params.metrics_only,
                 !backtest_params.metrics_only,
@@ -2170,11 +1891,8 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             let risk_close_timestamp =
                 i64::try_from(self.first_timestamp_ms + (k as u64 + 1) * self.interval_ms)
                     .map_err(|_| "risk close timestamp overflow")?;
-            if self.unstuck_memory_enabled {
-                self.unstuck_memory.advance_to(risk_close_timestamp)?;
-            }
-            if self.loss_gate_memory_enabled {
-                self.loss_gate_memory.advance_to(risk_close_timestamp)?;
+            if self.realized_loss_memory_enabled {
+                self.realized_loss_memory.advance_to(risk_close_timestamp)?;
             }
             self.update_emas(k);
             self.update_rounded_balance(k);
@@ -2911,7 +2629,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             self.balance.usd_total_balance,
             p.unstuck_loss_allowance_fraction,
             p.total_wallet_exposure_limit_ratio,
-            self.unstuck_memory.drawdown(),
+            self.realized_loss_memory.drawdown(),
         )
         .unwrap_or(f64::NAN)
     }
@@ -3657,18 +3375,6 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
         let peek_hints: Option<EntryPeekHints> = None;
         if let (Some(p), Some(started)) = (self.orch_profile.as_mut(), t0) {
             OrchProfile::add_ns(&mut p.peek_hints_ns, started.elapsed());
-        }
-
-        // Debug: dump exact unstuck calculation inputs/components for parity investigations.
-        for idx in 0..self.positions.long.len() {
-            if self.positions.long[idx].size != 0.0 {
-                self.debug_dump_unstuck_calc(k, idx, LONG)?;
-            }
-        }
-        for idx in 0..self.positions.short.len() {
-            if self.positions.short[idx].size != 0.0 {
-                self.debug_dump_unstuck_calc(k, idx, SHORT)?;
-            }
         }
 
         let (res, input_update_elapsed, compute_elapsed) = {
@@ -4602,9 +4308,9 @@ mod tests {
             dynamic_wel_by_tradability: true,
             forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -5212,9 +4918,9 @@ mod tests {
             dynamic_wel_by_tradability: true,
             forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -5292,9 +4998,9 @@ mod tests {
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -5360,9 +5066,9 @@ mod tests {
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -5464,9 +5170,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: hs,
             market_orders_allowed: false,
@@ -5551,9 +5257,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: hs,
             market_orders_allowed: false,
@@ -5649,9 +5355,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -5745,9 +5451,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: true,
@@ -5830,9 +5536,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: true,
@@ -5927,9 +5633,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: true,
@@ -6041,9 +5747,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6106,9 +5812,9 @@ mod tests {
                 filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
                 dynamic_wel_by_tradability: true,
                 hedge_mode: true,
-                loss_gate_max_drawdown_fraction: 1.0,
-                unstuck_memory_ema_span_minutes: 43_200.0,
-                loss_gate_memory_ema_span_minutes: 43_200.0,
+                loss_gate_enabled: false,
+                loss_gate_max_drawdown_fraction: None,
+                realized_loss_memory_ema_span_minutes: 43_200.0,
                 equity_floor_fraction: 0.05,
                 equity_hard_stop_loss: EquityHardStopLossConfig::default(),
                 market_orders_allowed: false,
@@ -6178,9 +5884,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: hs,
             market_orders_allowed: false,
@@ -6254,9 +5960,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6341,9 +6047,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6426,9 +6132,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6452,7 +6158,7 @@ mod tests {
         bt.pnl_cumsum_max = 10.0;
         bt.pnl_cumsum_running = 0.0;
         bt.pnl_cumsum_running_net = 0.0;
-        bt.unstuck_memory.fill(0, -10.0).unwrap();
+        bt.realized_loss_memory.fill(0, -10.0).unwrap();
 
         let input = bt.get_orchestrator_input_cached(1, None, None);
         assert!(
@@ -6465,9 +6171,9 @@ mod tests {
         );
 
         let expected_from_raw =
-            crate::hsl_decay::allowance_for(200.0, 0.2, 0.5, bt.unstuck_memory.drawdown()).unwrap();
+            crate::hsl_decay::allowance_for(200.0, 0.2, 0.5, bt.realized_loss_memory.drawdown()).unwrap();
         let expected_from_snapped =
-            crate::hsl_decay::allowance_for(100.0, 0.2, 0.5, bt.unstuck_memory.drawdown()).unwrap();
+            crate::hsl_decay::allowance_for(100.0, 0.2, 0.5, bt.realized_loss_memory.drawdown()).unwrap();
         assert!(
             (input.global.unstuck_allowance_long - expected_from_raw).abs() < 1e-12,
             "expected unstuck allowance to use raw balance"
@@ -6527,9 +6233,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6586,7 +6292,7 @@ mod tests {
 
         // Verify the unstuck allowance used the new raw balance, not the old one
         let expected_allowance =
-            crate::hsl_decay::allowance_for(1050.0, 0.2, 0.5, bt.unstuck_memory.drawdown())
+            crate::hsl_decay::allowance_for(1050.0, 0.2, 0.5, bt.realized_loss_memory.drawdown())
                 .unwrap();
         assert!(
             (input2.global.unstuck_allowance_long - expected_allowance).abs() < 1e-12,
@@ -6649,9 +6355,9 @@ mod tests {
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -6803,9 +6509,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: true,
@@ -6912,9 +6618,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -7041,9 +6747,9 @@ mod tests {
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
             forager_score_hysteresis: crate::types::ForagerScoreHysteresis::uniform(0.0),
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -7119,9 +6825,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: false,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -7201,9 +6907,9 @@ mod tests {
             filter_by_min_effective_cost: crate::types::MinimumCostFilter::uniform(false),
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
-            loss_gate_max_drawdown_fraction: 1.0,
-            unstuck_memory_ema_span_minutes: 43_200.0,
-            loss_gate_memory_ema_span_minutes: 43_200.0,
+            loss_gate_enabled: false,
+            loss_gate_max_drawdown_fraction: None,
+            realized_loss_memory_ema_span_minutes: 43_200.0,
             equity_floor_fraction: 0.05,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             market_orders_allowed: false,
@@ -7251,7 +6957,6 @@ mod tests {
         let strategies = strategy_pair_for_ema_tests(&bp);
         let baseline = calc_warmup_bars(&[bp.clone()], &[strategies.clone()]);
         bp.long.unstuck_loss_allowance_fraction = 0.01;
-        bp.long.unstuck_close_fraction = 0.1;
         bp.long.unstuck_exposure_trigger_ratio = 0.9;
         bp.long.total_wallet_exposure_limit_ratio = 1.0;
         bp.long.n_positions = 1;
@@ -7277,7 +6982,7 @@ mod tests {
             let mut inactive = bp.clone();
             match control {
                 0 => inactive.long.unstuck_loss_allowance_fraction = 0.0,
-                1 => inactive.long.unstuck_close_fraction = 0.0,
+                1 => inactive.long.unstuck_exposure_trigger_ratio = 0.0,
                 2 => inactive.long.unstuck_exposure_trigger_ratio = 0.0,
                 3 => inactive.long.total_wallet_exposure_limit_ratio = 0.0,
                 _ => inactive.long.n_positions = 0,
@@ -7503,7 +7208,6 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
             if pair.long.unstuck_enabled
                 && pair.long.unstuck_ema_gating_enabled
                 && pair.long.unstuck_loss_allowance_fraction > 0.0
-                && pair.long.unstuck_close_fraction > 0.0
                 && pair.long.unstuck_exposure_trigger_ratio > 0.0
                 && pair.long.total_wallet_exposure_limit_ratio > 0.0
                 && pair.long.n_positions > 0
@@ -7515,7 +7219,6 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
             if pair.long.unstuck_enabled
                 && pair.long.unstuck_ema_gating_enabled
                 && pair.long.unstuck_loss_allowance_fraction > 0.0
-                && pair.long.unstuck_close_fraction > 0.0
                 && pair.long.unstuck_exposure_trigger_ratio > 0.0
                 && pair.long.total_wallet_exposure_limit_ratio > 0.0
                 && pair.long.n_positions > 0
@@ -7534,7 +7237,6 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
             if pair.short.unstuck_enabled
                 && pair.short.unstuck_ema_gating_enabled
                 && pair.short.unstuck_loss_allowance_fraction > 0.0
-                && pair.short.unstuck_close_fraction > 0.0
                 && pair.short.unstuck_exposure_trigger_ratio > 0.0
                 && pair.short.total_wallet_exposure_limit_ratio > 0.0
                 && pair.short.n_positions > 0
@@ -7546,7 +7248,6 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
             if pair.short.unstuck_enabled
                 && pair.short.unstuck_ema_gating_enabled
                 && pair.short.unstuck_loss_allowance_fraction > 0.0
-                && pair.short.unstuck_close_fraction > 0.0
                 && pair.short.unstuck_exposure_trigger_ratio > 0.0
                 && pair.short.total_wallet_exposure_limit_ratio > 0.0
                 && pair.short.n_positions > 0
