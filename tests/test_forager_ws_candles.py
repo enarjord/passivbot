@@ -1868,13 +1868,13 @@ def test_malformed_receive_repeats_keep_durable_events_and_distinct_network_warn
     try:
         with caplog.at_level(logging.INFO):
             observe(bot, "BTC", error=malformed)
+            now = 1.0
+            observe(bot, "ETH", error=transport)
+            now = 100.0
+            observe(bot, "ETH", error=transport)
             now = 301.0
             observe(bot, "BTC", error=malformed)
             now = 302.0
-            observe(bot, "ETH", error=transport)
-            now = 400.0
-            observe(bot, "ETH", error=transport)
-            now = 603.0
             observe(bot, "ETH", error=transport)
             observe(bot, "ETH", recovered=True)
             observe(bot, "BTC", recovered=True)
@@ -1887,13 +1887,14 @@ def test_malformed_receive_repeats_keep_durable_events_and_distinct_network_warn
     assert ["cause=malformed_kline" in message for message in warnings] == [
         True, False, False, True,
     ]
+    assert "failures=2" in warnings[1]
     assert "receive recovered symbols=2 failures=5" in caplog.text
     assert "private" not in caplog.text
     assert [event.data["receive_status"] for event in durable.events] == [
         "failed", "failed", "failed", "failed", "failed", "recovered", "recovered", "failed",
     ]
     assert [event.data.get("receive_cause") for event in durable.events] == [
-        "malformed_kline", "malformed_kline", None, None, None, None, None, "malformed_kline",
+        "malformed_kline", None, None, "malformed_kline", None, None, None, "malformed_kline",
     ]
 
 
