@@ -170,6 +170,7 @@ pub struct StrategyRequest<'a> {
     pub position: &'a Position,
     pub trailing: &'a TrailingPriceBundle,
     pub next_candle: Option<NextStepHint>,
+    pub close_grid_from_current_snapshot: bool,
     pub peek: Option<PeekBehavior>,
 }
 

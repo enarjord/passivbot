@@ -81,8 +81,8 @@ def _fixture(side, strategy_kind, buffer, coin_count=1, market_orders=False):
         cfg['bot'][s]['risk'].update({'total_wallet_exposure_limit_ratio': 1.0 if s == side else 0.0, 'max_positions': coin_count if s == side else 0, 'we_excess_allowance_fraction': 0.0, 'position_exposure_enforcer': {**cfg['bot'][s]['risk']['position_exposure_enforcer'], 'enabled': False}, 'total_exposure_enforcer': {**cfg['bot'][s]['risk']['total_exposure_enforcer'], 'enabled': False}})
         cfg['bot'][s]['entry_cooldown'].update(base_duration_minutes=0.0, min_duration_minutes=0.0,
                                              max_duration_minutes=0.0)
-        cfg['bot'][s]['hsl']['enabled'] = False
-        cfg['bot'][s]['unstuck']['enabled'] = False
+        cfg['bot'][s]['risk']['hsl']['enabled'] = False
+        cfg['bot'][s]['risk']['unstuck']['enabled'] = False
         if strategy_kind == 'trailing_martingale':
             st = cfg['bot'][s]['strategy'][strategy_kind]
             st['entry'].update(ema_span_0_minutes=2., ema_span_1_minutes=3., initial_ema_distance_fraction=0.,

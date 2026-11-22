@@ -110,17 +110,17 @@ def build_coin_override_parameters(
                     effective_bot.get("risk_wel_enforcer_threshold_ratio", 0.0) or 0.0,
                 )
 
-        unstuck_patch = side_patch.get("unstuck", {}) or {}
+        unstuck_patch = risk_patch.get("unstuck", {}) or {}
         unstuck_keys = (
             ("enabled", "unstuck_enabled"),
             ("ema_gating_enabled", "unstuck_ema_gating_enabled"),
-            ("close_fraction", "unstuck_close_fraction"),
+            (None, None),  # Reserved shader column.
             ("ema_distance_fraction", "unstuck_ema_distance_fraction"),
             ("loss_allowance_fraction", "unstuck_loss_allowance_fraction"),
             ("exposure_trigger_ratio", "unstuck_exposure_trigger_ratio"),
         )
         for offset, (key, runtime_key) in enumerate(unstuck_keys):
-            if key in unstuck_patch:
+            if key is not None and key in unstuck_patch:
                 matrix[row, column("UNSTUCK_START_COLUMN") + offset] = float(effective_bot[runtime_key])
         for offset, key in enumerate(model.UNSTUCK_EMA_PARAM_KEYS):
             if coupled:
@@ -134,7 +134,7 @@ def build_coin_override_parameters(
             elif _lookup(side_patch, FLAT_BOT_KEY_TO_GROUP_PATH[key]) is not _MISSING:
                 matrix[row, column("UNSTUCK_EMA_START_COLUMN") + offset] = float(effective_bot[key])
 
-        hsl_patch = side_patch.get("hsl", {}) or {}
+        hsl_patch = risk_patch.get("hsl", {}) or {}
         if hsl_patch:
             packed = pack_params(effective_bot, signal_mode="coin")
             for offset, (key, path) in enumerate(model.HSL_COIN_OVERRIDE_PATHS):

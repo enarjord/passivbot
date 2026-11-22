@@ -111,7 +111,7 @@ def replay_inputs(kind, topology, margins):
     config["bot"]["portfolio"]["strategy_kind"] = kind
     config["bot"]["portfolio"]["hedge_mode"] = topology != "oneway"
     config["bot"]["portfolio"]["warmup"].update(max_minutes=1.0, activation_span_fraction=1.0)
-    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
+    config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] = {"enabled": False}
     config["bot"]["portfolio"]["execution"]["market_orders_allowed"] = False
     coins = ["AAA", "BBB", "CCC"]
     enabled = (topology,) if topology in ("long", "short") else ("long", "short")
@@ -126,8 +126,8 @@ def replay_inputs(kind, topology, margins):
                            we_excess_allowance_fraction=0.0)
         bot["risk"]["position_exposure_enforcer"]["enabled"] = False
         bot["risk"]["total_exposure_enforcer"]["enabled"] = False
-        bot["hsl"]["enabled"] = False
-        bot["unstuck"]["enabled"] = False
+        bot["risk"]["hsl"]["enabled"] = False
+        bot["risk"]["unstuck"]["enabled"] = False
         bot["entry_cooldown"]["base_duration_minutes"] = 1000.0
         bot["forager"].update(volume_ema_span_minutes=1.0,
                               score_hysteresis_margin=margins[side])

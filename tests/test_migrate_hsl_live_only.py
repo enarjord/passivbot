@@ -84,11 +84,10 @@ def test_gpu_migration_works_with_live_only_dependencies(tmp_path, in_place, coa
         migrated = json.loads(output.read_text())
         assert migrated["config_version"] == CONFIG_SCHEMA_VERSION
         assert migrated["optimize"]["backend"] == "gpu"
-        assert "restart_after_red_policy" not in migrated["bot"]["long"]["hsl"]
-        assert migrated["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
-        assert migrated["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 43200.0
+        assert "restart_after_red_policy" not in migrated["bot"]["long"]["risk"]["hsl"]
+        assert migrated["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 43200.0
         for pside in ("long", "short"):
-            assert migrated["bot"][pside]["hsl"]["memory_ema_span_minutes"] == 43200.0
+            assert migrated["bot"][pside]["risk"]["hsl"]["memory_ema_span_minutes"] == 43200.0
         assert "lookback_ema_span_minutes" not in migrated["live"]
         if not in_place:
             assert source.read_bytes() == before

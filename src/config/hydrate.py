@@ -299,5 +299,5 @@ def normalize_optimizer_settings(
     sort_optimize_bounds_in_place(
         result["optimize"]["bounds"],
         strategy_kind=get_optional_config_value(result, 'bot.portfolio.strategy_kind'),
-        portfolio_hsl=result["bot"]["portfolio"]["hsl"]["scope"] == "portfolio",
+        portfolio_hsl=result["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "portfolio",
     )

@@ -174,12 +174,12 @@ def couple_unstuck_ema_spans(config, pside, *, trace=None):
                 raise ValueError(
                     f"couple_unstuck_ema_spans requires positive finite strategy spans: {coin} {pside}.{key}={value!r}"
                 )
-            target.setdefault("unstuck", {})[key] = value
+            target.setdefault("risk", {}).setdefault("unstuck", {})[key] = value
             if trace is not None:
                 source_path = (*strategy_path, key)
                 if key in patched_spans:
                     source_path = ("coin_overrides", coin, *source_path)
-                trace("couple_unstuck_ema_spans", (*target_path, "unstuck", key),
+                trace("couple_unstuck_ema_spans", (*target_path, "risk", "unstuck", key),
                       (source_path,), value, "copy")
             # Refresh transport aliases only when this config already carries them.
             alias = f"unstuck_{key}"
@@ -245,7 +245,7 @@ def materialize_coupled_scenario_spans(config):
             saved["coin_overrides"] = effective["coin_overrides"]
         for side in ("long", "short"):
             for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
-                saved[f"bot.{side}.unstuck.{key}"] = effective["bot"][side]["unstuck"][
+                saved[f"bot.{side}.risk.unstuck.{key}"] = effective["bot"][side]["risk"]["unstuck"][
                     key
                 ]
         scenario["overrides"] = saved

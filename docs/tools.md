@@ -670,9 +670,9 @@ passivbot tool clean-config input.json directional.json --bot-layout side
 ## Explain a config setting
 
 ```shell
-passivbot tool config-explain input.json bot.long.unstuck.ema_span_0_minutes
-passivbot tool config-explain input.json bot.long.unstuck.ema_span_0_minutes --coin BTC --json
-passivbot tool config-explain input.json bot.long.unstuck.close_fraction --scenario base --optimize
+passivbot tool config-explain input.json bot.long.risk.unstuck.ema_span_0_minutes
+passivbot tool config-explain input.json bot.long.risk.unstuck.ema_span_0_minutes --coin BTC --json
+passivbot tool config-explain input.json bot.long.risk.unstuck.loss_allowance_fraction --scenario base --optimize
 ```
 
 The read-only offline report shows the value, declared type, scope, unit/denominator when known,

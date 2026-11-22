@@ -125,9 +125,11 @@ def _ema_anchor_optimizer_config():
     sides = {
         side: {
             "enabled": True,
-            "risk": {"max_positions": positions},
-            "hsl": {"enabled": False},
-            "unstuck": {"enabled": False},
+            "risk": {
+                "max_positions": positions,
+                "hsl": {"enabled": False},
+                "unstuck": {"enabled": False},
+            },
             "entry_cooldown": {"base_duration_minutes": 1.0},
             "strategy": {"ema_anchor": {"entry_qty_exposure_coefficient": 0.5}},
         }
@@ -357,10 +359,10 @@ class TestApplyConfigOverrides:
     def test_bot_shared_paths_update_canonical_values(self):
         config = get_expanded_config_prototype()
         _apply_config_overrides(config, {
-            "bot.long.hsl.cooldown_after_red_minutes": 1.0,
+            "bot.long.risk.hsl.cooldown_after_red_minutes": 1.0,
             "bot.long.entry_cooldown.base_duration_minutes": 2.5,
         })
-        assert config["bot"]["long"]["hsl"]["cooldown_after_red_minutes"] == pytest.approx(1.0)
+        assert config["bot"]["long"]["risk"]["hsl"]["cooldown_after_red_minutes"] == pytest.approx(1.0)
         assert config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
         assert "risk_entry_cooldown_minutes" not in config["bot"]["long"]
         with pytest.raises(KeyError, match="missing"):
@@ -967,13 +969,17 @@ def test_gpu_preparation_preflight_delegates_effective_suite(monkeypatch):
 
     monkeypatch.setattr(
         "config.gpu.validate_gpu_backtest_config",
-        lambda actual_config: calls.append(actual_config),
+        lambda actual_config, *, check_realized_close_policies=True: calls.append(
+            (actual_config, check_realized_close_policies)
+        ),
     )
 
     optimize._run_gpu_preparation_preflight(config, suite_cfg)
 
     assert len(calls) == 2
-    effective_config, scenario_config = calls
+    (effective_config, check_base_policy), (scenario_config, check_scenario_policy) = calls
+    assert check_base_policy is False
+    assert check_scenario_policy is True
     assert effective_config is not config
     assert effective_config["backtest"]["starting_balance"] == 1500.0
     assert config["backtest"]["starting_balance"] != 1500.0
@@ -1539,16 +1545,16 @@ class TestIndividualToConfig:
         template = {
             "bot": {
                 "long": {
+                    "risk": {"hsl": {"memory_ema_span_minutes": 120.0}},
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_exposure_ratio_coefficient": 0.0}},
                     },
-                    "hsl": {"memory_ema_span_minutes": 120.0},
                 },
                 "short": {
+                    "risk": {"hsl": {"drawdown_threshold_fraction": 0.25}},
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_exposure_ratio_coefficient": 0.0}},
                     },
-                    "hsl": {"drawdown_threshold_fraction": 0.25},
                 },
             },
             "optimize": {
@@ -1571,15 +1577,15 @@ class TestIndividualToConfig:
             individual, mock_overrides, overrides_list, template
         )
 
-        assert result["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == pytest.approx(60.0)
-        assert result["bot"]["short"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.22)
+        assert result["bot"]["long"]["risk"]["hsl"]["memory_ema_span_minutes"] == pytest.approx(60.0)
+        assert result["bot"]["short"]["risk"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.22)
 
     def test_applies_optimize_fixed_runtime_overrides_without_mutating_template(self):
         individual = [1.0, 2.0, 0.25, 3.0, 4.0]
         template = {
             "bot": {
                 "long": {
-                    "hsl": {"drawdown_threshold_fraction": 0.2, "cooldown_after_red_minutes": 0.3},
+                    "risk": {"hsl": {"drawdown_threshold_fraction": 0.2, "cooldown_after_red_minutes": 0.3}},
                     "hsl_cooldown_minutes_after_red": 0.3,
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_fraction": 0.0, "threshold_exposure_ratio_coefficient": 0.0}},
@@ -1601,18 +1607,18 @@ class TestIndividualToConfig:
                         "long_hsl_drawdown_threshold_fraction": [0.15, 0.35, 0.01],
                     },
                 ),
-                "fixed_runtime_overrides": {"bot.long.hsl.cooldown_after_red_minutes": 1.0},
+                "fixed_runtime_overrides": {"bot.long.risk.hsl.cooldown_after_red_minutes": 1.0},
             },
         }
         original_template = deepcopy(template)
         result = individual_to_config(individual, lambda x, y, z: y, [], template)
 
-        assert result["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.25)
-        assert result["bot"]["long"]["hsl"][
+        assert result["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["risk"]["hsl"][
             "cooldown_after_red_minutes"
         ] == pytest.approx(1.0)
-        assert result["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.25)
-        assert result["bot"]["long"]["hsl"][
+        assert result["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["risk"]["hsl"][
             "cooldown_after_red_minutes"
         ] == pytest.approx(1.0)
         assert template == original_template
@@ -1636,7 +1642,12 @@ class TestIndividualToConfig:
             "live": {},
             "bot": {
                 "long": {
-                    "risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 0.55},
+                    "risk": {
+                        "max_positions": 1,
+                        "total_wallet_exposure_limit_ratio": 0.55,
+                        "hsl": {"enabled": False, "drawdown_threshold_fraction": 0.2},
+                        "unstuck": {"loss_allowance_fraction": 0.05, "ema_distance_fraction": -0.05},
+                    },
                     "forager": {
                         "volume_ema_span_minutes": 520,
                         "log_range_ema_span_minutes": 225,
@@ -1648,8 +1659,6 @@ class TestIndividualToConfig:
                             "log_range": 1.0,
                         },
                     },
-                    "hsl": {"enabled": False, "drawdown_threshold_fraction": 0.2},
-                    "unstuck": {"close_fraction": 0.05, "ema_distance_fraction": -0.05},
                     "strategy": {
                         "ema_anchor": {
                             "base_qty_fraction": 0.012,
@@ -1666,7 +1675,12 @@ class TestIndividualToConfig:
                         "ema_readiness": 0.05,
                         "volatility": 0.05,
                     },
-                    "risk": {"max_positions": 3, "total_wallet_exposure_limit_ratio": 0.25},
+                    "risk": {
+                        "max_positions": 3,
+                        "total_wallet_exposure_limit_ratio": 0.25,
+                        "hsl": {"enabled": True, "drawdown_threshold_fraction": 0.1},
+                        "unstuck": {"loss_allowance_fraction": 0.11, "ema_distance_fraction": -0.11},
+                    },
                     "forager": {
                         "volume_ema_span_minutes": 360,
                         "log_range_ema_span_minutes": 10,
@@ -1678,8 +1692,6 @@ class TestIndividualToConfig:
                             "log_range": 0.5,
                         },
                     },
-                    "hsl": {"enabled": True, "drawdown_threshold_fraction": 0.1},
-                    "unstuck": {"close_fraction": 0.11, "ema_distance_fraction": -0.11},
                     "strategy": {
                         "ema_anchor": {
                             "base_qty_fraction": 0.004,
@@ -1726,9 +1738,9 @@ class TestIndividualToConfig:
         template["bot"]["short"]["enabled"] = True
 
         for side in ("long", "short"):
-            template["bot"][side]["hsl"] = {
-                **get_expanded_config_prototype()["bot"][side]["hsl"],
-                **template["bot"][side]["hsl"],
+            template["bot"][side]["risk"]["hsl"] = {
+                **get_expanded_config_prototype()["bot"][side]["risk"]["hsl"],
+                **template["bot"][side]["risk"]["hsl"],
             }
         result = individual_to_config(
             individual,
@@ -1739,8 +1751,8 @@ class TestIndividualToConfig:
 
         assert result["bot"]["short"]["risk"] == result["bot"]["long"]["risk"]
         assert result["bot"]["short"]["forager"] == result["bot"]["long"]["forager"]
-        assert result["bot"]["short"]["hsl"] == result["bot"]["long"]["hsl"]
-        assert result["bot"]["short"]["unstuck"] == result["bot"]["long"]["unstuck"]
+        assert result["bot"]["short"]["risk"]["hsl"] == result["bot"]["long"]["risk"]["hsl"]
+        assert result["bot"]["short"]["risk"]["unstuck"] == result["bot"]["long"]["risk"]["unstuck"]
         assert (
             result["bot"]["short"]["strategy"]["ema_anchor"]
             == result["bot"]["long"]["strategy"]["ema_anchor"]
@@ -2336,16 +2348,16 @@ class TestConfigToIndividual:
         config = {
             "bot": {
                 "long": {
+                    "risk": {"hsl": {"memory_ema_span_minutes": 60.0}},
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_fraction": 1.0, "threshold_exposure_ratio_coefficient": 2.0}},
                     },
-                    "hsl": {"memory_ema_span_minutes": 60.0},
                 },
                 "short": {
+                    "risk": {"hsl": {"drawdown_threshold_fraction": 0.22}},
                     "strategy": {
                         "trailing_martingale": {"entry": {"initial_qty_fraction": 3.0, "threshold_exposure_ratio_coefficient": 4.0}},
                     },
-                    "hsl": {"drawdown_threshold_fraction": 0.22},
                 },
             },
             "optimize": {
@@ -3025,6 +3037,7 @@ class TestApplyFineTuneBounds:
             "optimize": {
                 "bounds": {
                     "long": {
+                        "risk": {"unstuck": {"exposure_trigger_ratio": [0.0, 1.0]}},
                         "strategy": {
                             "trailing_martingale": {
                                 "entry": {"threshold_base_fraction": [0.0, 1.0]},
@@ -3034,19 +3047,18 @@ class TestApplyFineTuneBounds:
                                 },
                             }
                         },
-                        "unstuck": {"exposure_trigger_ratio": [0.0, 1.0]},
                     }
                 }
             },
             "bot": {
                 "long": {
+                    "risk": {"unstuck": {"exposure_trigger_ratio": 0.44}},
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"threshold_base_fraction": 0.33},
                             "close": {"qty_fraction": 0.22, "threshold_base_fraction": 0.11},
                         }
                     },
-                    "unstuck": {"exposure_trigger_ratio": 0.44},
                 },
                 "portfolio": {"strategy_kind": "trailing_martingale"},
             },
@@ -3060,7 +3072,7 @@ class TestApplyFineTuneBounds:
         assert tm_bounds["close"]["qty_fraction"] == [0.0, 1.0]
         assert tm_bounds["close"]["threshold_base_fraction"] == [0.0, 1.0]
         assert tm_bounds["entry"]["threshold_base_fraction"] == [0.33, 0.33]
-        assert config["optimize"]["bounds"]["long"]["unstuck"]["exposure_trigger_ratio"] == [0.44, 0.44]
+        assert config["optimize"]["bounds"]["long"]["risk"]["unstuck"]["exposure_trigger_ratio"] == [0.44, 0.44]
 
     def test_fine_tune_params_accept_leaf_suffix_selectors(self, caplog):
         caplog.set_level(logging.INFO)
@@ -3253,13 +3265,13 @@ class TestApplyFineTuneBounds:
             "optimize": {
                 "bounds": {
                     "long": {
+                        "risk": {"unstuck": {"loss_allowance_fraction": [0.0, 1.0]}},
                         "strategy": {
                             "trailing_martingale": {
                                 "entry": {"threshold_base_fraction": [0.0, 1.0]},
                                 "close": {"qty_fraction": [0.0, 1.0]},
                             }
                         },
-                        "unstuck": {"close_fraction": [0.0, 1.0]},
                     },
                     "short": {
                         "strategy": {
@@ -3271,13 +3283,13 @@ class TestApplyFineTuneBounds:
             },
             "bot": {
                 "long": {
+                    "risk": {"unstuck": {"loss_allowance_fraction": 0.4}},
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"threshold_base_fraction": 0.1},
                             "close": {"qty_fraction": 0.3},
                         }
                     },
-                    "unstuck": {"close_fraction": 0.4},
                 },
                 "short": {
                     "strategy": {"trailing_martingale": {"entry": {"threshold_base_fraction": 0.5}}}
@@ -3297,7 +3309,7 @@ class TestApplyFineTuneBounds:
         assert long_tm_bounds["entry"]["threshold_base_fraction"] == [0.1, 0.1]
         assert long_tm_bounds["close"]["qty_fraction"] == [0.3, 0.3]
         assert short_tm_bounds["entry"]["threshold_base_fraction"] == [0.0, 1.0]
-        assert config["optimize"]["bounds"]["long"]["unstuck"]["close_fraction"] == [
+        assert config["optimize"]["bounds"]["long"]["risk"]["unstuck"]["loss_allowance_fraction"] == [
             0.0,
             1.0,
         ]
@@ -3332,20 +3344,18 @@ class TestApplyFineTuneBounds:
         config = {
             "optimize": {
                 "bounds": {
-                    "long": {"hsl": {"drawdown_threshold_fraction": [0.1, 0.3]}},
+                    "long": {"risk": {"hsl": {"drawdown_threshold_fraction": [0.1, 0.3]}}},
                 },
-                "fixed_params": ["long.hsl.drawdown_threshold_fraction"],
+                "fixed_params": ["long.risk.hsl.drawdown_threshold_fraction"],
             },
             "bot": {
-                "long": {
-                    "hsl": {"drawdown_threshold_fraction": 0.22},
-                },
+                "long": {"risk": {"hsl": {"drawdown_threshold_fraction": 0.22}}},
                 "short": {},
             },
         }
         apply_fine_tune_bounds(config, [], set())
 
-        assert config["optimize"]["bounds"]["long"]["hsl"]["drawdown_threshold_fraction"] == [
+        assert config["optimize"]["bounds"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] == [
             0.22,
             0.22,
         ]
@@ -3538,14 +3548,17 @@ class TestApplyFineTuneBounds:
             },
             "bot": {
                 "long": {
-                    "hsl": {"enabled": True, "cooldown_after_red_minutes": 3.0},
                     "strategy": {
                         "trailing_martingale": {
                             "entry": {"initial_qty_fraction": 0.1, "threshold_exposure_ratio_coefficient": 0.2},
                             "close": {"qty_fraction": 0.3},
                         }
                     },
-                    "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
+                    "risk": {
+                        "max_positions": 1.0,
+                        "total_wallet_exposure_limit_ratio": 1.0,
+                        "hsl": {"enabled": True, "cooldown_after_red_minutes": 3.0},
+                    },
                 },
                 "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                 "portfolio": {"strategy_kind": "trailing_martingale"},
@@ -3561,7 +3574,6 @@ class TestApplyFineTuneBounds:
                 "live": {},
                 "bot": {
                     "long": {
-                        "hsl": {"enabled": False},
                         "strategy": {
                             "trailing_martingale": {
                                 "entry": {
@@ -3571,7 +3583,11 @@ class TestApplyFineTuneBounds:
                                 "close": {"qty_fraction": values[2]},
                             }
                         },
-                        "risk": {"max_positions": 1.0, "total_wallet_exposure_limit_ratio": 1.0},
+                        "risk": {
+                            "max_positions": 1.0,
+                            "total_wallet_exposure_limit_ratio": 1.0,
+                            "hsl": {"enabled": False},
+                        },
                     },
                     "short": {"risk": {"max_positions": 0.0, "total_wallet_exposure_limit_ratio": 0.0}},
                     "portfolio": {"strategy_kind": "trailing_martingale"},
@@ -3588,7 +3604,7 @@ class TestApplyFineTuneBounds:
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] == pytest.approx(0.9)
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["threshold_exposure_ratio_coefficient"] == pytest.approx(1.0)
         assert result["bot"]["long"]["strategy"]["trailing_martingale"]["close"]["qty_fraction"] == pytest.approx(0.66)
-        assert result["bot"]["long"]["hsl"]["enabled"] is True
+        assert result["bot"]["long"]["risk"]["hsl"]["enabled"] is True
         assert result["_optimizer_anchor"]["id"] == 1
         assert (
             "optimizer anchor fixed values clamped to optimize bounds | count=2"
@@ -3934,8 +3950,10 @@ class TestExtractConfigs:
             result = extract_configs(path)
             assert len(result) == 1
             assert "bot" in result[0]
-            assert result[0]["bot"]["portfolio"]["unstuck"] == template["bot"]["portfolio"]["unstuck"]
-            assert result[0]["bot"]["portfolio"]["loss_gate"] == template["bot"]["portfolio"]["loss_gate"]
+            assert (
+                result[0]["bot"]["portfolio"]["risk"]["loss_realization"]
+                == template["bot"]["portfolio"]["risk"]["loss_realization"]
+            )
         finally:
             os.unlink(path)
 
@@ -4186,8 +4204,8 @@ class TestResultRecorder:
         assert entry["bot"]["long"]["risk"] == entry["bot"]["short"]["risk"]
         replay = prepare_config(entry, verbose=False)
         assert replay["bot"]["long"]["forager"] == replay["bot"]["short"]["forager"]
-        assert entry["bot"]["long"]["hsl"] == entry["bot"]["short"]["hsl"]
-        assert entry["bot"]["long"]["unstuck"] == entry["bot"]["short"]["unstuck"]
+        assert entry["bot"]["long"]["risk"]["hsl"] == entry["bot"]["short"]["risk"]["hsl"]
+        assert entry["bot"]["long"]["risk"]["unstuck"] == entry["bot"]["short"]["risk"]["unstuck"]
         assert (
             entry["bot"]["long"]["strategy"][strategy_kind]
             == entry["bot"]["short"]["strategy"][strategy_kind]
@@ -4244,8 +4262,8 @@ class TestResultRecorder:
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
             replay = prepare_config(saved, verbose=False)
             assert replay["bot"]["long"]["forager"] == replay["bot"]["short"]["forager"]
-            assert saved["bot"]["long"]["hsl"] == saved["bot"]["short"]["hsl"]
-            assert saved["bot"]["long"]["unstuck"] == saved["bot"]["short"]["unstuck"]
+            assert saved["bot"]["long"]["risk"]["hsl"] == saved["bot"]["short"]["risk"]["hsl"]
+            assert saved["bot"]["long"]["risk"]["unstuck"] == saved["bot"]["short"]["risk"]["unstuck"]
             assert (
                 saved["bot"]["long"]["strategy"][strategy_kind]
                 == saved["bot"]["short"]["strategy"][strategy_kind]
@@ -4293,8 +4311,8 @@ class TestResultRecorder:
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
             replay = prepare_config(saved, verbose=False)
             assert replay["bot"]["long"]["forager"] == replay["bot"]["short"]["forager"]
-            assert saved["bot"]["long"]["hsl"] == saved["bot"]["short"]["hsl"]
-            assert saved["bot"]["long"]["unstuck"] == saved["bot"]["short"]["unstuck"]
+            assert saved["bot"]["long"]["risk"]["hsl"] == saved["bot"]["short"]["risk"]["hsl"]
+            assert saved["bot"]["long"]["risk"]["unstuck"] == saved["bot"]["short"]["risk"]["unstuck"]
             assert (
                 saved["bot"]["long"]["strategy"][strategy_kind]
                 == saved["bot"]["short"]["strategy"][strategy_kind]

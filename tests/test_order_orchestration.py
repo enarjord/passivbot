@@ -33,7 +33,7 @@ class OrchestrationBot(Passivbot):
         source = get_expanded_config_prototype()
         for side in ("long", "short"):
             source["bot"][side]["enabled"] = True
-            source["bot"][side]["unstuck"]["enabled"] = False
+            source["bot"][side]["risk"]["unstuck"]["enabled"] = False
         # This wrapper stubs unstuck selection and tests ordinary reconciliation.
         self.config = prepare_config(source, target="live", runtime="live", verbose=False)
         self.coin_overrides = {}

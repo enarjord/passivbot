@@ -24,11 +24,11 @@ async def test_renewal_before_consumption_does_not_starve_ordinary_plans(tmp_pat
     legacy = prepare_config(load_fake_hsl_config(), target="canonical", runtime=None, verbose=False)
     cfg = generated_template(mutable_runtime_fixture(legacy), "coin")
     for side in ("long", "short"):
-        cfg["bot"][side]["unstuck"]["enabled"] = False
+        cfg["bot"][side]["risk"]["unstuck"]["enabled"] = False
         cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
+    cfg["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]["enabled"] = False
     cfg["bot"]["long"]["universe"]["approved_coins"] = ["BTC"]
-    cfg["bot"]["long"]["hsl"].update(enabled=True, drawdown_fraction_ema_span_minutes=1.0,
+    cfg["bot"]["long"]["risk"]["hsl"].update(enabled=True, drawdown_fraction_ema_span_minutes=1.0,
                                           drawdown_threshold_fraction=0.5)
     set_risk_memory_spans(cfg, 288.0)
     config_path = tmp_path/"config.json"

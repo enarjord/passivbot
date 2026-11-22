@@ -71,7 +71,7 @@ def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
     import numpy as np
     flags = ["--hsl", "portfolio", "--bars", "128", "--coins", "2", "--sides", "both",
              "--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
-             "--unstuck-memory-ema-span-minutes", "15.5", "--loss-gate-memory-ema-span-minutes", "31.25",
+             "--realized-loss-memory-ema-span-minutes", "31.25",
              "--hsl-cooldown-minutes", "10000", "--price-shock", "0", "64", ".7"]
     args = options("--candidates", "2", *flags)
     inputs, configs, parameters = benchmark._cohort(args, "ema_anchor", 7)
@@ -85,14 +85,12 @@ def test_cohort_uses_same_resolved_stress_fixture_as_parity_tool():
     )
     assert len(configs) == len(parameters) == 2
     for config in configs:
-        assert config["bot"]["portfolio"]["hsl"]["scope"] == "portfolio"
-        assert config["bot"]["portfolio"]["hsl"]["drawdown_threshold_fraction"] == .002
-        assert config["bot"]["portfolio"]["hsl"]["drawdown_fraction_ema_span_minutes"] == 2.5
-        assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 15.5
-        assert config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 31.25
+        assert config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "portfolio"
+        assert config["bot"]["portfolio"]["risk"]["hsl"]["drawdown_threshold_fraction"] == .002
+        assert config["bot"]["portfolio"]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] == 2.5
+        assert config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 31.25
     assert args.price_shocks == [[0, 64, .7]]
-    assert args.unstuck_memory_ema_span_minutes == 15.5
-    assert args.loss_gate_memory_ema_span_minutes == 31.25
+    assert args.realized_loss_memory_ema_span_minutes == 31.25
 
 
 @pytest.mark.parametrize("flags", [("--widths", "0"), ("--widths", "broken"),

@@ -839,6 +839,11 @@ def apply_bot_config_patch(config, overrides, *, channel="authored", policy_sour
     serialized metadata and never resolves source files. Equal declarations and
     parent replacements retain presence through the same typed source API.
     """
+    from .migrations.v9 import reject_retired_risk_path
+
+    for selector in overrides:
+        if isinstance(selector, str):
+            reject_retired_risk_path(selector)
     if policy_source is not None and type(policy_source) is not BotPolicy:
         raise TypeError("patch source must be an exact BotPolicy")
     policy = (policy_source if policy_source is not None else
@@ -851,7 +856,12 @@ def apply_bot_config_patch(config, overrides, *, channel="authored", policy_sour
         key in {"bot", "bot.portfolio"} or key.startswith("bot.portfolio.") for key in selected
     ):
         from .authored import validate_authored_config
+        from .risk_memory import validate_loss_gate_replacement
         from .schema import get_expanded_config_prototype
+        if "bot" in selected:
+            # Source documents flatten a bare bot key into leaf patches.
+            # This runtime API receives normalized, atomic selectors.
+            validate_loss_gate_replacement(("bot",), selected["bot"])
         # Portfolio/root replacements use the canonical authored owner. The
         # side catalog alone cannot authorize unknown account-wide children.
         validate_authored_config(

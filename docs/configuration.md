@@ -225,7 +225,7 @@ refactoring rather than redundant-value removal. See the optional
 Only an explicit `true` enables that side. Omitted flags and absent or empty side objects
 leave the corresponding side disabled, while its other parameters still inherit normally.
 There is no shared activation switch: `bot.global.enabled` is rejected with an error directing
-you to the two side flags. Other nested feature switches, such as `bot.global.unstuck.enabled`,
+you to the two side flags. Other nested feature switches, such as `bot.global.risk.unstuck.enabled`,
 remain inheritable. Enable the intended sides explicitly before live trading, backtesting or
 optimization. A config with both sides disabled remains valid for managing existing positions.
 
@@ -252,16 +252,16 @@ but no longer implicitly suppresses held-position management through manual mode
 
 ### Equity Hard Stop Loss
 
-Local HSL settings inherit from `bot.global.hsl`, with optional `bot.long.hsl` and
-`bot.short.hsl` pins for coin/position_side modes,
-and explicit `bot.portfolio.hsl` for portfolio mode. Supported leaves are `enabled`,
+Local HSL settings inherit from `bot.global.risk.hsl`, with optional `bot.long.risk.hsl` and
+`bot.short.risk.hsl` pins for coin/position_side modes,
+and explicit `bot.portfolio.risk.hsl` for portfolio mode. Supported leaves are `enabled`,
 `drawdown_threshold_fraction`, `drawdown_fraction_ema_span_minutes`, `memory_ema_span_minutes`,
 `cooldown_after_red_minutes`, and `panic_close_order_type`. Coin scope also supports
 `scale_budget_with_excess_allowance`.
 HSL has one implementation; obsolete engine selectors are not runtime options. See the
 [configuration migration rules](#hsl-configuration) before using older settings.
 
-`bot.portfolio.hsl.scope` selects `coin` (default), `position_side`, or `portfolio` signal construction.
+`bot.portfolio.risk.hsl.scope` selects `coin` (default), `position_side`, or `portfolio` signal construction.
 
 For parameter definitions, RED handling, cooldown/restart rules, per-coin overrides, and
 backtest behavior, see [Equity Hard Stop Loss](equity_hard_stop_loss.md) and the
@@ -382,49 +382,27 @@ The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid`
 ### Unstuck Parameters
 
 If a position is stuck, the bot can spend its realized-loss allowance to reduce the position.
-When several positions are eligible, auto-unstuck prioritizes the highest
-[signed entry distance](ai/numeric_conventions.md#quantities). Positive means the current price
-has moved in favor of the position.
+Auto-unstuck uses `bot.<side>.risk.unstuck`. When the controller is enabled,
+an eligible held position must exceed the exposure trigger and have positive
+unstuck allowance. The optional EMA check tests the configured band using
+floating-point minute spans and `ema_distance_fraction`. It leaves the close
+quote and order type to the existing execution policy.
 
-These settings live under `bot.<side>.unstuck`. Effective WEL includes the resolved excess
-allowance: `effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_fraction)`.
+- **loss_allowance_fraction** multiplies applicable TWEL. With raw balance `B`,
+  shared remembered drawdown `D`, and the scaled fraction `p`, the remaining
+  allowance is `max(0, p * (B + D) - D)`. Per-coin overrides can pin the fraction.
+  The resulting allowance still uses the shared account memory.
+- **exposure_trigger_ratio** is the strict eligibility threshold and the minimum
+  projected post-fill exposure for an unstuck proposal. Sizing includes net
+  realized PnL and the resulting balance. Rust rounds down to the exposure
+  bound and skips orders when even the minimum size would breach it.
+- **ema_gating_enabled** controls EMA readiness and the price-band check.
+  When false, allowance, exposure, market readiness and order sizing still apply.
 
-- **unstuck.close_fraction**:
-  - Fraction of the effective exposure budget used to size each close, not a fraction of the current position.
-  - Before quantity rounding and other constraints, `close_qty_abs = balance * effective_wel * close_fraction / (close_price * c_mult)`.
-  - Rust applies quantity-step rounding, exchange minimums, remaining-position sizing and loss-allowance scaling. There is no additional cap to stop precisely at `unstuck.exposure_trigger_ratio`.
-- **unstuck.ema_distance_fraction**:
-  - Offset for the EMA eligibility trigger, not the submitted order price:
-    - Long: current price must reach `upper_EMA_band * (1 + ema_distance_fraction)`, rounded up to the price tick.
-    - Short: current price must reach `lower_EMA_band * (1 - ema_distance_fraction)`, rounded down to the price tick.
-  - Once eligible, the close uses current price rounded up for longs or down for shorts.
-- **unstuck.ema_gating_enabled**:
-  - Fixed boolean toggle for the auto-unstuck EMA trigger. Default is `true`.
-  - When `false`, auto-unstuck skips the EMA trigger/readiness check but still requires loss allowance, exposure threshold, close sizing, and valid market/exchange inputs.
-- **unstuck.loss_allowance_fraction**:
-  - Sets a realized-loss budget weighted by the side's `total_wallet_exposure_limit_ratio`.
-  - Let `D` be the account-wide net-realized drawdown remembered using
-    `bot.portfolio.unstuck.memory_ema_span_minutes`. With raw balance `B` and
-    `p = loss_allowance_fraction * total_wallet_exposure_limit_ratio`, the remaining
-    allowance is `max(0, p * (B + D) - D)`.
-  - With a raw balance of `$9,800`, remembered drawdown of `$200`, loss allowance fraction
-    of `0.02`, and total wallet exposure limit ratio of `1.5`, the remaining allowance is `$100`.
-  - This is a pacing budget: exchange minimum sizing may exceed it. See the [loss-allowance contract](risk_management.md#auto-unstuck-loss-allowance-contract).
-  - Per-coin overrides may set `bot.<side>.unstuck.loss_allowance_fraction`; the selected coin+side then uses that fraction in the same account-wide formula.
-- **unstuck.exposure_trigger_ratio**:
-  - Exposure eligibility trigger: `wallet_exposure / effective_wel > threshold`. Equality does not qualify.
-  - Wallet exposure uses the position's average entry price: `abs(position_size) * position_price * c_mult / balance`.
-  - This is not a target remaining exposure or a floor on the close. An eligible position can finish below the threshold after a close sized by `close_fraction`.
-  - For an illustrative long at 100% of effective WEL, `threshold = 0.90` and `close_fraction = 0.12` would leave about 88% if close price equals entry price and balance is unchanged, before rounding and other constraints. The order is not reduced to leave exactly 90%.
-  - When close price differs from entry price, the exposure reduction also differs from `close_fraction`; see the [sizing formulas](config.bot.md#auto-unstucking).
-
-One non-panic protective reducer (TWEL/WEL auto-reduce or auto-unstuck) may coexist with ordinary
-grid, trailing, or EMA-anchor closes for the same position. Passivbot reserves the reducer quantity
-first and caps ordinary closes to the remaining position quantity. Panic close remains exclusive,
-and competing protective reducers do not stack: Passivbot keeps the largest loss-admissible
-absolute reduction after final position/minimum sizing rather than summing active safety intents,
-trying the next-largest intent when the realized-loss gate blocks a larger non-panic close.
-Final reducer quantities compete largest-first across the shared batch loss allowance.
+Rust evaluates protective reducers at their admissible quantities and selects
+at most one per position, then reserves position capacity for that reducer
+before sizing regular closes. Panic remains exclusive. Lossy candidates share
+the available account allowance across sides when the loss gate is enabled.
 
 ### Filter Parameters
 
@@ -473,22 +451,21 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
         risk.position_exposure_enforcer.threshold_ratio,
         entry_cooldown.base_duration_minutes,
         risk.we_excess_allowance_fraction,
-        hsl.cooldown_after_red_minutes,
-        hsl.drawdown_fraction_ema_span_minutes,
-        hsl.enabled,
-        hsl.panic_close_order_type,
-        hsl.drawdown_threshold_fraction,
-        unstuck.close_fraction,
-        unstuck.ema_distance_fraction,
-        unstuck.ema_gating_enabled,
-        unstuck.enabled,
-        unstuck.loss_allowance_fraction,
-        unstuck.exposure_trigger_ratio,
+        risk.hsl.cooldown_after_red_minutes,
+        risk.hsl.drawdown_fraction_ema_span_minutes,
+        risk.hsl.enabled,
+        risk.hsl.panic_close_order_type,
+        risk.hsl.drawdown_threshold_fraction,
+        risk.unstuck.ema_distance_fraction,
+        risk.unstuck.ema_gating_enabled,
+        risk.unstuck.enabled,
+        risk.unstuck.loss_allowance_fraction,
+        risk.unstuck.exposure_trigger_ratio,
         wallet_exposure_limit_ratio
       ]
       ```
-      The `hsl.*` entries are eligible only when the main config's global
-      `bot.portfolio.hsl.scope` is `"coin"`. The signal mode is not itself overridable.
+      The `risk.hsl.*` entries are eligible only when the main config's global
+      `bot.portfolio.risk.hsl.scope` is `"coin"`. The signal mode is not itself overridable.
     - `config.live`:
     ```
     [live.modes.long, live.modes.short, live.account.leverage]
@@ -714,12 +691,12 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - Candlestick management is handled by the CandlestickManager with on-disk caching and TTL-based refresh. Legacy settings `ohlcvs_1m_rolling_window_days` and `ohlcvs_1m_update_after_minutes` are no longer used.
 - **live.fills.fills_recent_overlap_minutes**: Time overlap used for routine incremental live fill refreshes once the fill cache is warm. Default is `10.0`, which keeps ordinary minute-by-minute fill checks narrow to reduce private REST load.
 - **live.fills.fills_confirmation_overlap_minutes**: Time overlap used when fills are explicitly required to confirm an account-critical state change, such as a suspected fill or pending staged confirmation. Default is `60.0`, preserving the wider safety window for confirmation refreshes.
-- Risk memory controls are consumer-owned: `bot.<side>.hsl.memory_ema_span_minutes`
-  (or `bot.portfolio.hsl.memory_ema_span_minutes` in portfolio scope),
-  `bot.portfolio.unstuck.memory_ema_span_minutes`, and `bot.portfolio.loss_gate.memory_ema_span_minutes`.
-  HSL ratio smoothing separately uses `drawdown_fraction_ema_span_minutes`. All are EMA spans,
-  not half-lives or rolling cutoffs; fractional minutes are retained. Migration does not infer
-  equivalence from an old rolling duration.
+- HSL uses its policy's `memory_ema_span_minutes` under `bot.<side>.risk.hsl`
+  or `bot.portfolio.risk.hsl`. Unstuck and the loss gate share
+  `bot.portfolio.risk.loss_realization.memory_ema_span_minutes`, which defaults
+  to 85,511.137 minutes. Set 43,200 explicitly to retain the development gate's
+  previous default decay. HSL smoothing uses `drawdown_fraction_ema_span_minutes`.
+  All spans retain fractional minutes.
 - **live.startup.risk_bootstrap_max_lookback_minutes**: Live-only reconstruction cap, default/maximum `129600.0` minutes (90 days). Live targets five slow spans and retains the required active cooldown horizon, capped here, with unknown/truncated history reported. Enabled cooldowns exceeding the cap fail live capability validation. This is acquisition policy, not exponential forgetting. Ordinary CPU/GPU backtesting advances forward without historical rescans.
 - **position_exposure_enforcer.threshold_ratio**: Per-position multiplier that triggers the position exposure enforcer. When a bot-managed position’s exposure exceeds `wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_fraction) * position_exposure_enforcer.threshold_ratio`, the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming or `1.0` for a hard cap; use `position_exposure_enforcer.enabled = false` to disable.
 - **entry_cooldown.base_duration_minutes**: Time-based cooldown after the last position-increasing fill for that coin+position_side. Full simultaneous entry ladders are emitted only when the effective cooldown is zero and entry retracement is disabled. Any positive value enforces a cooldown of that many minutes and limits staged position-adding entries to one order, including fractional values such as `0.05` for roughly three seconds. Backtests evaluate entries on one-minute steps, so any positive sub-minute cooldown prevents a same-minute replacement/add and effectively waits until the next backtest decision minute; live trading enforces the actual millisecond duration between intra-minute checks.
@@ -743,11 +720,16 @@ Operational controls use eight groups. Shared strategy and selection policy live
 - **total_exposure_enforcer.policy**: TWEL auto-reduce candidate policy. `reduce_overweight` trims managed positions whose WE is above `total_wallet_exposure_limit_ratio * total_exposure_enforcer.threshold_ratio / effective_n_positions`, where live `effective_n_positions` follows the current dynamic tradable-slot count and falls back to the current held-position count when no symbols are entry-eligible. `reduce_portfolio` can trim any managed open position on that side. Both policies prefer profitable/breakeven reductions before shallow adverse-loss reductions and stop once projected TWE reaches the repair target. Default: `reduce_overweight`.
 - **total_exposure_enforcer.threshold_ratio**: Fraction of the configured `total_wallet_exposure_limit_ratio` used by the unconditional entry cap and TWEL auto-reduce. Values below `1.0` cap entries below raw TWEL; values above `1.0` keep the entry cap at raw TWEL while delaying auto-reduce until the thresholded repair target is exceeded.
 - **risk.we_excess_allowance_fraction**: Per-symbol allowance above the configured wallet exposure limit that per-position logic tolerates before trimming. The effective allowance is capped at `max(0, total_wallet_exposure_limit_ratio / wallet_exposure_limit_ratio - 1)`, so it cannot expand a single symbol above the side's configured total exposure limit. Useful for smoothing reductions; leave at `0.0` for a hard cap.
-- **bot.portfolio.loss_gate.max_drawdown_fraction**: Global realized-loss gate for close orders. With raw balance B, independent gate net-realized drawdown D, and fraction r, its remaining allowance is `max(0, r * (B + D) - D)` in the [shared Rust arithmetic](v9_risk_model.md). TWEL does not multiply r. A projected loss exceeding the remaining allowance is blocked. Applies to all close order types (including WEL/TWEL auto-reduce and unstuck) except panic closes.
-  - Default: `1.0` (disabled).
-  - `0.0`: block all lossy closes; negative or nonfinite values are invalid.
-  - `>= 1.0`: disable the gate.
-  - Example: with raw balance `$10,000`, remembered realized loss D=`$200` and r=`0.05`, remaining allowance is `$310`. Ordered net fills and elapsed-minute decay change D; deposits and UPNL do not.
+- **bot.portfolio.risk.loss_realization.loss_gate.enabled** controls portfolio
+  admission for lossy closes across both sides. Default `false`. Panic orders
+  bypass admission, and their fills update realized memory.
+- **bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction**
+  is required when enabled and must be finite in `[0, 1)` whenever authored.
+  With raw balance `B`, shared drawdown `D`, and cap `r`, headroom is
+  `max(0, r * (B + D) - D)`. Zero blocks lossy non-panic closes. With positive
+  headroom, Rust can trim a proposed close to the first legal lot that reaches
+  the allowance. One lot or a venue minimum can overshoot and exhaust the batch
+  budget. See the [risk model](v9_risk_model.md).
 - **live.fills.fallback_fee_fraction**: Fallback fee fraction of absolute quote notional used when a live fill has no usable quote-currency fee after reported-fee parsing and non-quote fee conversion. Default `0.0002` (0.02%). Set `0.0` to make the fallback fee exactly zero, so net realized PnL equals gross realized PnL for fallback-priced fills.
 - **live.fills.max_abs_fee_fraction**: Absolute fee/notional sanity threshold for live fill accounting. Default `0.001` (0.1%). Reported or converted fees outside this range are replaced by `fallback_fee_fraction`.
 - **live.fills.fee_conversion_max_age_milliseconds**: Maximum timestamp distance allowed when using ticker data to convert a non-quote fee token to quote currency. Default `86400000` (24 hours).
@@ -867,7 +849,7 @@ In this example:
 
 HSL bounds use `optimize.bounds.<side>.hsl` in coin and position_side modes, with
 `drawdown_threshold_fraction`, `drawdown_fraction_ema_span_minutes`, `memory_ema_span_minutes`, and
-`cooldown_after_red_minutes` leaves. Portfolio HSL uses `optimize.bounds.portfolio.hsl`.
+`cooldown_after_red_minutes` leaves. Portfolio HSL uses `optimize.bounds.portfolio.risk.hsl`.
 Independent slow spans use their canonical consumer-owned bound blocks. There is no
 restart-policy field. Use independent ordinary account-equity definitions for cross-version
 economic comparison; HSL signal metrics are model-dependent and all fitness is recomputed
@@ -885,7 +867,7 @@ after migration.
   - **"lossless_close_trailing"**: Ensures trailing closes are profitable by enforcing `strategy.trailing_martingale.close.threshold_base_fraction` > `strategy.trailing_martingale.close.retracement_base_fraction`. This prevents retracement from triggering before reaching the minimum profit threshold.
   - **"forward_tp_grid"**, **"backward_tp_grid"**: Legacy v7 override names. They are not part of the V8 `trailing_martingale` close contract because `close_grid_markup_start` / `close_grid_markup_end` no longer define a linear TP grid. These retired overrides are rejected.
   - **"mirror_short_from_long"**: Mirrors `bot.short` from `bot.long` for the shared side groups (`risk`, `forager`, `hsl`, `unstuck`) plus the active strategy selected by `bot.portfolio.strategy_kind`. This is useful when optimizing a mirrored long/short strategy while only searching the long-side parameter space.
-- **fixed_params**: List of dotted config-path selectors to freeze at the current config value for the whole run. A selector matching one effective target of a shared coordinate freezes that entire coordinate; independent side variation requires explicit side bounds. Selectors match full path segments by prefix or suffix, not partial substrings. The leading `bot.` may be omitted for side-local paths, so `long.strategy` freezes `bot.long.strategy.<active_strategy>.*` and leaves `bot.long.risk`, `bot.long.forager`, and `bot.long.unstuck` tunable. A leaf selector such as `we_excess_allowance_fraction` matches every optimizer bound whose config path ends with that parameter name. A `*` path segment is a one-segment wildcard. `--fine_tune_params` uses the same selector contract for the inverse operation.
+- **fixed_params**: List of dotted config-path selectors to freeze at the current config value for the whole run. A selector matching one effective target of a shared coordinate freezes that entire coordinate; independent side variation requires explicit side bounds. Selectors match full path segments by prefix or suffix, not partial substrings. The leading `bot.` may be omitted for side-local paths, so `long.strategy` freezes `bot.long.strategy.<active_strategy>.*` and leaves `bot.long.risk` and `bot.long.forager` tunable. A leaf selector such as `we_excess_allowance_fraction` matches every optimizer bound whose config path ends with that parameter name. A `*` path segment is a one-segment wildcard. `--fine_tune_params` uses the same selector contract for the inverse operation.
 - **fixed_runtime_overrides**: Runtime-only overrides applied during optimize evaluations without mutating the stored config. Use canonical config paths for evaluation-only settings while retaining the stored proposal.
 - **iters**: Nominal evaluation budget for an optimize session. Default is `2048`.
 - **n_cpus**: Number of CPU cores utilized in parallel.
@@ -1072,8 +1054,8 @@ V9 requires `config_version="v9.0.0"` and the explicit
 v8 file does not convert its policy. Main configs reject retired fields in root, CLI,
 coin/scenario overrides and optimizer policy. There is no engine selector or restart policy.
 
-Use `bot.long.hsl` and `bot.short.hsl` in `coin`/`position_side` modes. `portfolio` requires an
-explicit `bot.portfolio.hsl` block with `enabled`, `drawdown_threshold_fraction`, `drawdown_fraction_ema_span_minutes`,
+Use `bot.long.risk.hsl` and `bot.short.risk.hsl` in `coin`/`position_side` modes. `portfolio` requires an
+explicit `bot.portfolio.risk.hsl` block with `enabled`, `drawdown_threshold_fraction`, `drawdown_fraction_ema_span_minutes`,
 `memory_ema_span_minutes`, `panic_close_order_type` and `cooldown_after_red_minutes`. Side policy is never silently
 promoted to portfolio authority. `scale_budget_with_excess_allowance` defaults to `false`
 and may vary per coin in coin scope.
@@ -1092,12 +1074,13 @@ Once qualified, later signal or budget changes leave the deadline intact. New ac
 exposure starts a new episode. A value of `0` gives no waiting period, and ordinary
 entry checks still apply. See [qualified finite cooldown](equity_hard_stop_loss.md#qualified-finite-cooldown).
 
-Portfolio optimizer bounds use `optimize.bounds.portfolio.hsl`; local HSL bounds use their side
-blocks. Global unstuck and loss-gate span bounds use `optimize.bounds.portfolio.unstuck` and
-`optimize.bounds.portfolio.loss_gate`. Omitted slow-span bounds freeze configured values;
-conversion never widens new dimensions implicitly. Per-coin override support does not create
-per-coin optimizer genes. Schema, policies, inputs and implementation participate in saved-fitness
-identity; incompatible checkpoints fail and migrated numeric seeds require fresh evaluation.
+Portfolio HSL bounds use `optimize.bounds.portfolio.risk.hsl`. Local HSL
+bounds live under the corresponding directional risk policies. An omitted
+`optimize.bounds.portfolio.risk.loss_realization.memory_ema_span_minutes` range
+fixes the effective configured span. The loss-gate cap is a coordinate only
+with explicit bounds and at least one enabled scenario. Each enabled scenario
+requires an authored cap and uses the candidate cap when searched. The flag is
+fixed policy. Prior checkpoints require a fresh search and seed evaluation.
 
 Backtests automatically retain native HSL summaries, transitions and columnar plot traces,
 and render an HSL overview. Set `backtest.hsl_detailed_report=true` only for additional

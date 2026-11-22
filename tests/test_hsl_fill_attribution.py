@@ -37,7 +37,7 @@ def recovered_panic_inputs(side, mode, strategy_kind, outcome="fee_red"):
         bot["enabled"] = direction == side
         bot["universe"].update(minimum_coin_age_days=0.0, filter_by_min_effective_cost=False)
         bot["entry_cooldown"]["base_duration_minutes"] = 10000.0
-        bot["unstuck"]["enabled"] = False
+        bot["risk"]["unstuck"]["enabled"] = False
         bot["risk"].update(
             max_positions=1 if direction == side else 0,
             total_wallet_exposure_limit_ratio=1.0 if direction == side else 0.0,
@@ -45,7 +45,7 @@ def recovered_panic_inputs(side, mode, strategy_kind, outcome="fee_red"):
         )
         bot["risk"]["position_exposure_enforcer"]["enabled"] = False
         bot["risk"]["total_exposure_enforcer"]["enabled"] = False
-        bot["hsl"].update(
+        bot["risk"]["hsl"].update(
             enabled=direction == side and mode != "portfolio",
             drawdown_threshold_fraction=0.049, memory_ema_span_minutes=1440.0,
             drawdown_fraction_ema_span_minutes=1.0, cooldown_after_red_minutes=5.0,
@@ -69,8 +69,8 @@ def recovered_panic_inputs(side, mode, strategy_kind, outcome="fee_red"):
                 retracement_log_range_1h_coefficient=0.0,
             )
     if mode == "portfolio":
-        config["bot"]["portfolio"]["hsl"].update(
-            deepcopy(config["bot"][side]["hsl"]), enabled=True,
+        config["bot"]["portfolio"]["risk"]["hsl"].update(
+            deepcopy(config["bot"][side]["risk"]["hsl"]), enabled=True,
         )
 
     count = 16
@@ -118,7 +118,7 @@ def recovered_batch_inputs(side, mode, strategy_kind):
     config["bot"][side]["risk"].update(
         max_positions=2, total_wallet_exposure_limit_ratio=2.0,
     )
-    policy = config["bot"]["portfolio"]["hsl"] if mode == "portfolio" else config["bot"][side]["hsl"]
+    policy = config["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else config["bot"][side]["risk"]["hsl"]
     # Total loss is 200 at the trigger. The first recovered execution mark
     # reduces it to 150, its fee crosses RED again, and the second recovery
     # turns GREEN. Both submitted orders still have the original attribution.

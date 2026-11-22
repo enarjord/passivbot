@@ -19,7 +19,7 @@ from .field_policies import (
     OVERRIDABLE_STANDALONE_BOT_KEYS,
     get_live_coin_override_paths,
 )
-from .shared_bot import BOT_GROUP_FIELD_MAP, canonicalize_shared_bot_side
+from .shared_bot import BOT_GROUP_FIELD_MAP, FLAT_BOT_KEY_TO_GROUP_PATH, canonicalize_shared_bot_side
 from .strategy import (
     DEFAULT_STRATEGY_KIND,
     TRAILING_GRID_V7_FLAT_ONLY_KEYS,
@@ -88,14 +88,9 @@ def _flat_bot_side_modification_policy(
 ) -> dict[str, bool]:
     active_paths = _active_shared_bot_override_paths(hsl_signal_mode)
     policy = {
-        flat_key: (
-            f"{group_name}.{local_key}" in active_paths
-            or any(
-                path.startswith(f"{group_name}.{local_key}.") for path in active_paths
-            )
-        )
-        for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
-        for local_key, flat_key in field_map.items()
+        native: any(path == public or path.startswith(public + ".") for path in active_paths)
+        for native, parts in FLAT_BOT_KEY_TO_GROUP_PATH.items()
+        for public in (".".join(parts),)
     }
     policy.update({key: True for key in OVERRIDABLE_STANDALONE_BOT_KEYS})
     return policy
@@ -172,15 +167,7 @@ def _allowed_bot_side_modifications(*, hsl_signal_mode: str = "coin") -> dict:
         for strategy_kind in get_supported_strategy_kinds()
         for keys in (get_strategy_param_keys(strategy_kind),)
     }
-    for group_name in BOT_GROUP_FIELD_MAP:
-        relative_paths = tuple(
-            path.removeprefix(f"{group_name}.")
-            for path in active_paths
-            if path.startswith(f"{group_name}.")
-        )
-        if relative_paths:
-            grouped_allowed = _allow_dotted_paths(relative_paths)
-            side[group_name] = grouped_allowed
+    side.update(_allow_dotted_paths(tuple(sorted(active_paths))))
     return side
 
 
@@ -287,19 +274,19 @@ def _extract_allowed_patch(
             from .hsl import validate_override_paths
 
             validate_override_paths(
-                {"bot": {"portfolio": {"hsl": {"scope": hsl_signal_mode if strict else "coin"}}}},
+                {"bot": {"portfolio": {"risk": {"hsl": {"scope": hsl_signal_mode if strict else "coin"}}}}},
                 {"bot": {pside: side}},
             )
-            hsl_group = side.get("hsl")
+            hsl_group = side.get("risk", {}).get("hsl")
             hsl_flat_keys = set(BOT_GROUP_FIELD_MAP["hsl"].values())
             has_hsl_patch = (isinstance(hsl_group, dict) and bool(hsl_group)) or any(
                 key in side for key in hsl_flat_keys
             )
             if has_hsl_patch and hsl_signal_mode != "coin":
-                path = _format_override_path(coin, ("bot", pside, "hsl"))
+                path = _format_override_path(coin, ("bot", pside, "risk", "hsl"))
                 message = (
                     f"{path} is overridable only when the effective portfolio "
-                    f"bot.portfolio.hsl.scope is 'coin'; got {hsl_signal_mode!r}"
+                    f"bot.portfolio.risk.hsl.scope is 'coin'; got {hsl_signal_mode!r}"
                 )
                 if strict:
                     raise ValueError(message)
@@ -718,7 +705,7 @@ def _validated_file_patch(document, *, config, coin, source, resolved_path):
         patch = _extract_allowed_patch(
             _project_declared_file_defaults(raw, strategy_kind=strategy_kind),
             coin=coin, source=source, strict=False, strategy_kind=strategy_kind,
-            hsl_signal_mode=normalize_hsl_signal_mode(config.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", "coin")),
+            hsl_signal_mode=normalize_hsl_signal_mode(config.get("bot", {}).get("portfolio", {}).get("risk", {}).get("hsl", {}).get("scope", "coin")),
         )
         _validate_patch_leaf_types(config, patch, coin=coin, origin=source)
         return _validate_effective_coin_config(config, patch, coin=coin, origin=source)
@@ -882,7 +869,7 @@ def parse_overrides(
     strategy_kind = normalize_strategy_kind(get_optional_config_value(result, 'bot.portfolio.strategy_kind'))
     live_config = result.get("live", {})
     hsl_signal_mode = normalize_hsl_signal_mode(
-        result["bot"]["portfolio"]["hsl"]["scope"]
+        result["bot"]["portfolio"]["risk"]["hsl"]["scope"]
     )
     isolated_base_validated = False
     for coin, overrides in result["coin_overrides"].items():

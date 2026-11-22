@@ -17,16 +17,16 @@ from released_v8_fixtures import released_v8_policy
 
 def source(mode="coin", enabled=True):
     cfg = generated_template(get_expanded_config_prototype(), mode)
-    block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    block = cfg["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["risk"]["hsl"]
     block["enabled"] = enabled
     return cfg
 
 
 def as_legacy(cfg, version="v8.6.0"):
     """Use frozen v8 authoring with the requested HSL scope and enablement."""
-    mode = cfg["bot"]["portfolio"]["hsl"]["scope"]
-    enabled = {side: cfg["bot"][side]["hsl"]["enabled"] for side in ("long", "short")}
-    portfolio_enabled = cfg["bot"]["portfolio"]["hsl"].get("enabled", False)
+    mode = cfg["bot"]["portfolio"]["risk"]["hsl"]["scope"]
+    enabled = {side: cfg["bot"][side]["risk"]["hsl"]["enabled"] for side in ("long", "short")}
+    portfolio_enabled = cfg["bot"]["portfolio"]["risk"]["hsl"].get("enabled", False)
     legacy = released_v8_policy()
     legacy["config_version"] = version
     legacy["live"]["hsl_signal_mode"] = {
@@ -61,7 +61,7 @@ def test_explicit_hsl_config_roundtrips_without_legacy_fields(mode):
     result2 = prepared(result)
     assert result2["bot"] == result["bot"]
     assert "hsl_engine" not in result["live"]
-    block = result["bot"]["portfolio"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    block = result["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["risk"]["hsl"]
     assert "restart_after_red_policy" not in block
     assert block["cooldown_after_red_minutes"] >= 0.0
     assert not (
@@ -75,7 +75,7 @@ def test_missing_selector_uses_sole_engine_without_authorizing_restart():
     cfg["live"].pop("hsl_engine", None)
     result = prepared(cfg)
     assert "hsl_engine" not in result["live"]
-    assert "tier_ratios" not in result["bot"]["long"]["hsl"]
+    assert "tier_ratios" not in result["bot"]["long"]["risk"]["hsl"]
 
 
 def test_explicit_legacy_selector_is_rejected_before_runtime():
@@ -89,7 +89,7 @@ def test_explicit_legacy_selector_is_rejected_before_runtime():
 @pytest.mark.parametrize("policy", [None, "always", "never", "threshold", [], {}])
 def test_current_hsl_rejects_every_authored_restart_selector(mode, policy):
     cfg = source(mode)
-    block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    block = cfg["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["risk"]["hsl"]
     block["restart_after_red_policy"] = policy
     with pytest.raises(ValueError, match="restart_after_red_policy"):
         prepared(cfg)
@@ -98,10 +98,10 @@ def test_current_hsl_rejects_every_authored_restart_selector(mode, policy):
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_cli_enablement_preserves_finite_cooldown_without_restart_selector(mode):
     cfg = prepared(source(mode, enabled=False))
-    path = "bot.portfolio.hsl" if mode == "portfolio" else "bot.long.hsl"
+    path = "bot.portfolio.risk.hsl" if mode == "portfolio" else "bot.long.risk.hsl"
     update_config_with_args(cfg, Namespace(**{f"{path}.enabled": True}), verbose=False)
     result = prepared(cfg)
-    block = result["bot"]["portfolio"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    block = result["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["risk"]["hsl"]
     assert block["enabled"]
     assert block["cooldown_after_red_minutes"] >= 0.0
     assert "restart_after_red_policy" not in block
@@ -111,25 +111,25 @@ def test_cli_enablement_preserves_finite_cooldown_without_restart_selector(mode)
 
 def test_portfolio_missing_portfolio_block_is_not_hydrated_even_with_equal_sides():
     cfg = source("portfolio", enabled=False)
-    cfg["bot"]["portfolio"]["hsl"] = {"scope": "portfolio"}
-    cfg["bot"]["short"]["hsl"] = deepcopy(cfg["bot"]["long"]["hsl"])
-    with pytest.raises(ValueError, match="bot.portfolio.hsl missing required fields"):
+    cfg["bot"]["portfolio"]["risk"]["hsl"] = {"scope": "portfolio"}
+    cfg["bot"]["short"]["risk"]["hsl"] = deepcopy(cfg["bot"]["long"]["risk"]["hsl"])
+    with pytest.raises(ValueError, match="bot.portfolio.risk.hsl missing required fields"):
         prepared(cfg)
 
 
 def test_cli_mode_change_rechecks_portfolio_presence():
     cfg = prepared(source("position_side"))
     update_config_with_args(
-        cfg, Namespace(**{"bot.portfolio.hsl.scope": "portfolio"}), verbose=False
+        cfg, Namespace(**{"bot.portfolio.risk.hsl.scope": "portfolio"}), verbose=False
     )
-    with pytest.raises(ValueError, match="explicit bot.portfolio.hsl"):
+    with pytest.raises(ValueError, match="explicit bot.portfolio.risk.hsl"):
         prepared(cfg)
 
 
 @pytest.mark.parametrize("span", [0, -1, 0.99, 1e30, float("inf"), float("nan"), True])
 def test_slow_memory_rejects_invalid_or_nondecaying_spans(span):
     cfg = source()
-    cfg["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = span
+    cfg["bot"]["long"]["risk"]["hsl"]["memory_ema_span_minutes"] = span
     error = TypeError if type(span) is bool else ValueError
     with pytest.raises(error, match="memory_ema_span_minutes"):
         prepared(cfg)
@@ -138,11 +138,11 @@ def test_slow_memory_rejects_invalid_or_nondecaying_spans(span):
 @pytest.mark.parametrize("span", [1.0, 1.5, 43200.0, 200000.0])
 def test_independent_slow_and_fast_spans_preserve_fractional_minutes(span):
     cfg = source()
-    cfg["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = span
-    cfg["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 2.5
+    cfg["bot"]["long"]["risk"]["hsl"]["memory_ema_span_minutes"] = span
+    cfg["bot"]["long"]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 2.5
     result = prepared(cfg)
-    assert result["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == span
-    assert result["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == 2.5
+    assert result["bot"]["long"]["risk"]["hsl"]["memory_ema_span_minutes"] == span
+    assert result["bot"]["long"]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] == 2.5
 
 
 @pytest.mark.parametrize("cap", [0.0, -1.0, 0.99, 129600.01, float("inf"), float("nan"), True])
@@ -170,7 +170,7 @@ def test_removed_intervention_policy_is_rejected_at_v9_boundary(policy):
 def test_removed_optimizer_paths_are_rejected_before_pruning(section, field):
     cfg = source()
     key = (
-        f"bot.long.hsl.{field}"
+        f"bot.long.risk.hsl.{field}"
         if section == "fixed_runtime_overrides"
         else f"long_hsl_{field}"
     )
@@ -191,9 +191,9 @@ def test_removed_metric_is_rejected_in_keys_and_values(section, tier):
 def test_portfolio_optimizer_paths_target_portfolio_only():
     cfg = prepared(source("portfolio"))
     keys = dict(get_optimization_key_paths(cfg))
-    assert keys["bot.portfolio.hsl.drawdown_threshold_fraction"] == ("bot", "portfolio", "hsl", "drawdown_threshold_fraction")
-    assert keys["bot.portfolio.hsl.drawdown_fraction_ema_span_minutes"] == ("bot", "portfolio", "hsl", "drawdown_fraction_ema_span_minutes")
-    assert not any(k.startswith(("bot.long.hsl.", "bot.short.hsl.")) for k in keys)
+    assert keys["bot.portfolio.risk.hsl.drawdown_threshold_fraction"] == ("bot", "portfolio", "risk", "hsl", "drawdown_threshold_fraction")
+    assert keys["bot.portfolio.risk.hsl.drawdown_fraction_ema_span_minutes"] == ("bot", "portfolio", "risk", "hsl", "drawdown_fraction_ema_span_minutes")
+    assert not any(k.startswith(("bot.long.risk.hsl.", "bot.short.risk.hsl.")) for k in keys)
     assert "hsl_drawdown_threshold_fraction" in flatten_optimize_bounds(
         cfg["optimize"]["bounds"], strategy_kind=cfg['bot']["portfolio"]['strategy_kind']
     )
@@ -203,9 +203,9 @@ def test_portfolio_optimizer_paths_target_portfolio_only():
 def test_portfolio_rejects_inactive_side_optimizer_paths(section):
     cfg = source("portfolio")
     if section == "bounds":
-        cfg["optimize"][section]["long"]["hsl"] = {"drawdown_threshold_fraction": [0.1, 0.2]}
+        cfg["optimize"][section]["long"]["risk"]["hsl"] = {"drawdown_threshold_fraction": [0.1, 0.2]}
     else:
-        cfg["optimize"][section]["bot.short.hsl.drawdown_threshold_fraction"] = 0.2
+        cfg["optimize"][section]["bot.short.risk.hsl.drawdown_threshold_fraction"] = 0.2
     with pytest.raises(ValueError, match="inactive in portfolio"):
         prepared(cfg)
 
@@ -214,16 +214,16 @@ def test_enabling_coin_override_inherits_finite_policy():
     from config.overrides import parse_overrides
 
     cfg = source(enabled=False)
-    cfg["coin_overrides"] = {"TEST": {"bot": {"long": {"hsl": {"enabled": True}}}}}
+    cfg["coin_overrides"] = {"TEST": {"bot": {"long": {"risk": {"hsl": {"enabled": True}}}}}}
     result = parse_overrides(prepared(cfg), verbose=False)
-    assert result["coin_overrides"]["TEST"]["bot"]["long"]["hsl"]["enabled"]
-    assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
+    assert result["coin_overrides"]["TEST"]["bot"]["long"]["risk"]["hsl"]["enabled"]
+    assert "restart_after_red_policy" not in result["bot"]["long"]["risk"]["hsl"]
 
 
 @pytest.mark.parametrize("mode", ["position_side", "portfolio"])
 def test_inactive_coin_hsl_override_is_not_silently_ignored(mode):
     cfg = source(mode)
-    cfg["coin_overrides"] = {"TEST": {"bot": {"long": {"hsl": {"drawdown_threshold_fraction": 0.2}}}}}
+    cfg["coin_overrides"] = {"TEST": {"bot": {"long": {"risk": {"hsl": {"drawdown_threshold_fraction": 0.2}}}}}}
     with pytest.raises(ValueError, match="inactive in portfolio|overridable only.*scope"):
         prepared(cfg)
 
@@ -267,7 +267,7 @@ def test_live_constructor_rejects_unknown_engine_before_credentials(monkeypatch)
 
 @pytest.mark.parametrize(
     "path",
-    ["bot.long.hsl.drawdown_threshold_fraction", "bot.short.hsl.no_restart_drawdown_threshold"],
+    ["bot.long.risk.hsl.drawdown_threshold_fraction", "bot.short.risk.hsl.no_restart_drawdown_threshold"],
 )
 def test_cli_cannot_target_inactive_or_removed_hsl_settings(path):
     cfg = prepared(source("portfolio"))
@@ -280,10 +280,10 @@ def test_hsl_coin_override_parsing_keeps_explicit_threshold():
 
     cfg = source()
     cfg["coin_overrides"] = {
-        "TEST": {"bot": {"long": {"hsl": {"drawdown_threshold_fraction": 0.12}}}}
+        "TEST": {"bot": {"long": {"risk": {"hsl": {"drawdown_threshold_fraction": 0.12}}}}}
     }
     result = parse_overrides(prepared(cfg), verbose=False)
-    assert result["coin_overrides"]["TEST"]["bot"]["long"]["hsl"] == {
+    assert result["coin_overrides"]["TEST"]["bot"]["long"]["risk"]["hsl"] == {
         "drawdown_threshold_fraction": 0.12
     }
 
@@ -295,18 +295,18 @@ def test_scenario_rechecks_effective_hsl_contract(change):
     cfg = source("portfolio" if change == "inactive" else "coin", enabled=False)
     cfg = prepared(cfg)
     overrides = {
-        "enable": {"bot.long.hsl.enabled": True},
-        "mode": {"bot.portfolio.hsl.scope": "portfolio"},
-        "removed": {"bot.long.hsl.no_restart_drawdown_threshold": 0.3},
-        "inactive": {"bot.long.hsl.drawdown_threshold_fraction": 0.3},
+        "enable": {"bot.long.risk.hsl.enabled": True},
+        "mode": {"bot.portfolio.risk.hsl.scope": "portfolio"},
+        "removed": {"bot.long.risk.hsl.no_restart_drawdown_threshold": 0.3},
+        "inactive": {"bot.long.risk.hsl.drawdown_threshold_fraction": 0.3},
     }[change]
     scenario = SuiteScenario(
         "test", None, None, ["TEST"], [], exchanges=["binance"], overrides=overrides
     )
     if change == "enable":
         result, *_ = apply_scenario(cfg, scenario, ["TEST"], [], ["binance"], {"TEST"}, quiet=True)
-        assert result["bot"]["long"]["hsl"]["enabled"]
-        assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
+        assert result["bot"]["long"]["risk"]["hsl"]["enabled"]
+        assert "restart_after_red_policy" not in result["bot"]["long"]["risk"]["hsl"]
     else:
         reason = "missing required fields" if change == "mode" else "removed|inactive"
         with pytest.raises(ValueError, match=reason):
@@ -317,11 +317,11 @@ def test_optimizer_finalization_rechecks_fixed_enablement():
     from optimization.warmup import _finalize_optimizer_vector_config
 
     cfg = source(enabled=False)
-    cfg["optimize"]["fixed_runtime_overrides"] = {"bot.long.hsl.enabled": True}
+    cfg["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.hsl.enabled": True}
     cfg = prepared(cfg)
     _finalize_optimizer_vector_config(cfg)
-    assert cfg["bot"]["long"]["hsl"]["enabled"]
-    assert "restart_after_red_policy" not in cfg["bot"]["long"]["hsl"]
+    assert cfg["bot"]["long"]["risk"]["hsl"]["enabled"]
+    assert "restart_after_red_policy" not in cfg["bot"]["long"]["risk"]["hsl"]
 
 
 def test_legacy_saved_fitness_is_incompatible_with_sole_engine():
@@ -353,7 +353,7 @@ def test_hsl_numeric_bounds_rejected_before_candidate_generation(field, bounds, 
         if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
-    target["hsl"][field] = bounds
+    target["risk"]["hsl"][field] = bounds
     with pytest.raises(ValueError, match="optimize.bounds"):
         prepared(cfg)
 
@@ -383,7 +383,7 @@ async def test_live_entrypoint_accepts_hsl_without_external_setup(monkeypatch, m
 
     def stop_after_config(config, **kwargs):
         assert "hsl_engine" not in config["live"]
-        assert config["bot"]["portfolio"]["hsl"]["scope"] == mode
+        assert config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == mode
         raise OfflineBoundary()
 
     def forbidden(*args, **kwargs):
@@ -518,7 +518,7 @@ def test_old_disabled_hsl_requires_explicit_migration_too():
         del cfg["bot"][side]["hsl"]["restart_after_red_policy"]
     result = migrate(cfg, memory_span_minutes=43200.0).config
     assert prepared(result)["config_version"] == "v9.0.0"
-    assert "restart_after_red_policy" not in result["bot"]["long"]["hsl"]
+    assert "restart_after_red_policy" not in result["bot"]["long"]["risk"]["hsl"]
 
 
 @pytest.mark.parametrize("location", ["root", "scenario"])
@@ -597,7 +597,7 @@ def test_old_legacy_coin_flag_file_requires_migration(tmp_path, policy, location
     if location == "root":
         converted = migrate(cfg, base_config_path=base_path, memory_span_minutes=43200.0, acknowledge_never_removal=True).config
         assert prepared(converted)["config_version"] == "v9.0.0"
-        block = parse_overrides(converted, verbose=False)["coin_overrides"]["TEST"]["bot"]["long"]["hsl"]
+        block = parse_overrides(converted, verbose=False)["coin_overrides"]["TEST"]["bot"]["long"]["risk"]["hsl"]
         assert block["enabled"]
         assert "restart_after_red_policy" not in block
 
@@ -663,7 +663,7 @@ def test_external_suite_loader_gates_old_base_and_resolves_current_files(tmp_pat
     cfg = source(enabled=False)
     if version != "v9.0.0":
         as_legacy(cfg, version)
-    hsl = {"bot": {"long": {"hsl": {"enabled": True, "cooldown_after_red_minutes": 2.5}}}}
+    hsl = {"bot": {"long": {"risk": {"hsl": {"enabled": True, "cooldown_after_red_minutes": 2.5}}}}}
     (tmp_path / "coin.json").write_text(json.dumps(hsl))
     patches = {
         "inline": hsl,
@@ -750,8 +750,8 @@ async def test_cli_current_external_suite_reaches_preparation(
                     {
                         "label": "external",
                         "overrides": {
-                            "bot.long.hsl.enabled": True,
-                            "bot.long.hsl.cooldown_after_red_minutes": 2.5,
+                            "bot.long.risk.hsl.enabled": True,
+                            "bot.long.risk.hsl.cooldown_after_red_minutes": 2.5,
                         },
                     }
                 ]
@@ -790,14 +790,14 @@ def test_disabled_legacy_hsl_requires_migration_and_removes_restart_selector(mod
     result = migrate(cfg, memory_span_minutes=43200.0).config
     assert cfg == original
     assert "hsl_engine" not in result["live"]
-    path = "bot.portfolio.hsl" if mode == "portfolio" else "bot.long.hsl"
-    block = result["bot"]["portfolio"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    path = "bot.portfolio.risk.hsl" if mode == "portfolio" else "bot.long.risk.hsl"
+    block = result["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["risk"]["hsl"]
     assert "restart_after_red_policy" not in block
     assert block["enabled"] is False
     result = prepared(result)
     update_config_with_args(result, Namespace(**{f"{path}.enabled": True}))
     result = prepared(result)
-    block = result["bot"]["portfolio"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["hsl"]
+    block = result["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else result["bot"]["long"]["risk"]["hsl"]
     assert block["enabled"] and block["cooldown_after_red_minutes"] >= 0.0
 
 
@@ -809,7 +809,7 @@ def test_legacy_hsl_guard_uses_cli_modified_config(enabled_before, enabled_after
     cfg["live"]["hsl_engine"] = "legacy"
     if wrapped:
         cfg = {"config": cfg}
-    update_config_with_args(cfg, Namespace(**{"bot.long.hsl.enabled": enabled_after}))
+    update_config_with_args(cfg, Namespace(**{"bot.long.risk.hsl.enabled": enabled_after}))
     with pytest.raises(ValueError, match="migrate-config-v9"):
         prepared(cfg)
 
@@ -836,7 +836,7 @@ def test_disabled_legacy_restart_choices_cannot_survive_in_patches(location, tmp
                      base_config_path=str(tmp_path / "base.json")).config
     if location in {"coin", "file"}:
         result = parse_overrides(result, verbose=False)
-        assert result["coin_overrides"]["TEST"]["bot"]["long"]["hsl"].get("restart_after_red_policy") is None
+        assert result["coin_overrides"]["TEST"]["bot"]["long"]["risk"]["hsl"].get("restart_after_red_policy") is None
     elif location == "fixed":
         assert result["optimize"]["fixed_runtime_overrides"].get("bot.long.hsl.restart_after_red_policy") is None
     else:
@@ -854,16 +854,16 @@ def test_coin_override_validation_keeps_omitted_adaptive_bounds_fixed(prepare_fi
             "max_duration_minutes": None,
             "weights_minutes": {"adverse_directionality": 0.0, "exposure_ratio": 0.0},
         }}},
-        "coin_overrides": {"BTC": {"bot": {"long": {"hsl": {"enabled": True}}}}},
+        "coin_overrides": {"BTC": {"bot": {"long": {"risk": {"hsl": {"enabled": True}}}}}},
     }
     # parse_overrides requires the parent strategy, HSL scope, and version even
     # when the caller supplies an otherwise sparse authored document.
-    config["bot"]["portfolio"] = {"strategy_kind": "trailing_martingale", "hsl": {"scope": "coin"}}
+    config["bot"]["portfolio"] = {"strategy_kind": "trailing_martingale", "risk": {"hsl": {"scope": "coin"}}}
     if prepare_first:
         config = prepare_config(config, verbose=False)
     original = deepcopy(config)
 
     resolved = parse_overrides(config, verbose=False)
 
-    assert resolved["coin_overrides"]["BTC"]["bot"]["long"]["hsl"]["enabled"] is True
+    assert resolved["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["hsl"]["enabled"] is True
     assert config == original

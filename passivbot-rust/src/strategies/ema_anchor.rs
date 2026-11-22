@@ -902,6 +902,7 @@ mod tests {
             runtime_budget: base_runtime_budget(1.0),
             position: &position,
             trailing: &trailing,
+            close_grid_from_current_snapshot: false,
             next_candle: None,
             peek: None,
         };
@@ -1077,6 +1078,7 @@ mod tests {
             runtime_budget: base_runtime_budget(0.0),
             position: &position,
             trailing: &trailing,
+            close_grid_from_current_snapshot: false,
             next_candle: None,
             peek: None,
         };
@@ -1151,6 +1153,7 @@ mod tests {
             runtime_budget: base_runtime_budget(1.0),
             position: &flat_position,
             trailing: &trailing,
+            close_grid_from_current_snapshot: false,
             next_candle: None,
             peek: None,
         };
@@ -1164,6 +1167,7 @@ mod tests {
             runtime_budget: base_runtime_budget(1.0),
             position: &long_position,
             trailing: &trailing,
+            close_grid_from_current_snapshot: false,
             next_candle: None,
             peek: None,
         };
@@ -1177,6 +1181,7 @@ mod tests {
             runtime_budget: base_runtime_budget(1.0),
             position: &short_position,
             trailing: &trailing,
+            close_grid_from_current_snapshot: false,
             next_candle: None,
             peek: None,
         };

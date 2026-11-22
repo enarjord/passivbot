@@ -152,6 +152,7 @@ async def test_live_create_counts_admitted_connector_outcome(monkeypatch, guard_
 
     guard, bot, clock, events = guard_setup
     bot._create_failure_guard = guard
+    bot._orchestrator_uses_realized_pnl = lambda: False
     bot._build_order_params = lambda order: {}
     bot._request_authoritative_confirmation = lambda surfaces: None
     bot._emit_execution_connector_call_started_event = lambda **_: None

@@ -10,9 +10,9 @@ Allowed fields are intentionally limited:
 
 - **Bot params** (per side): per-coin wallet exposure limits; all `entry_cooldown` leaves (listed below);
   selected risk fields (position-exposure enforcer settings and
-  `we_excess_allowance_fraction`); selected unstuck fields (`close_fraction`, `ema_distance_fraction`,
+  `we_excess_allowance_fraction`); selected `risk.unstuck` fields (`ema_distance_fraction`,
   `ema_gating_enabled`, `ema_span_0_minutes`, `ema_span_1_minutes`, `enabled`, `loss_allowance_fraction`, and `exposure_trigger_ratio`); and
-  every HSL field when the global `bot.portfolio.hsl.scope` is `"coin"`; and
+  every HSL field when the global `bot.portfolio.risk.hsl.scope` is `"coin"`; and
   nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
   allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
 - **Live flags**: `live.modes.long`, `live.modes.short`, `live.account.leverage`.
@@ -24,7 +24,7 @@ filtered out. Author strategy changes under the current
 `bot.<side>.strategy.<strategy_kind>` path.
 
 `bot.<side>.risk.we_excess_allowance_fraction` can vary per coin. Excess allowance is
-always bounded by side TWEL. `bot.<side>.hsl.scale_budget_with_excess_allowance`
+always bounded by side TWEL. `bot.<side>.risk.hsl.scale_budget_with_excess_allowance`
 may vary per coin in coin scope, using that coin's effective allowance when enabled.
 
 The complete cooldown override group is:
@@ -42,19 +42,19 @@ Forager scoring weights and the RMS span remain global, not per-coin overrides.
 
 The complete conditional HSL override group is:
 
-- `hsl.enabled`
-- `hsl.scale_budget_with_excess_allowance`
-- `hsl.drawdown_threshold_fraction`
-- `hsl.memory_ema_span_minutes`
-- `hsl.drawdown_fraction_ema_span_minutes`
-- `hsl.cooldown_after_red_minutes`
-- `hsl.panic_close_order_type`
+- `risk.hsl.enabled`
+- `risk.hsl.scale_budget_with_excess_allowance`
+- `risk.hsl.drawdown_threshold_fraction`
+- `risk.hsl.memory_ema_span_minutes`
+- `risk.hsl.drawdown_fraction_ema_span_minutes`
+- `risk.hsl.cooldown_after_red_minutes`
+- `risk.hsl.panic_close_order_type`
 
 These fields are per `coin+side` only when the main config selects
-`bot.portfolio.hsl.scope = "coin"`. The signal mode itself remains global and is not overridable.
+`bot.portfolio.risk.hsl.scope = "coin"`. The signal mode itself remains global and is not overridable.
 An inline HSL patch in `position_side` or `portfolio` mode is rejected. HSL values in a complete override
 file are warned about and ignored in those modes, while other eligible fields in that file still
-apply. A `bot.portfolio.hsl.scope` value inside an override file or inline patch cannot authorize the
+apply. A `bot.portfolio.risk.hsl.scope` value inside an override file or inline patch cannot authorize the
 HSL patch; the main config's effective global mode always decides.
 
 ## How overrides are loaded
@@ -87,19 +87,21 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
       "bot": {
         "long": {
           "strategy": {"trailing_martingale": {"entry": {"threshold_base_fraction": 0.05}}},
-          "unstuck": {"ema_gating_enabled": false, "loss_allowance_fraction": 0.005},
           "entry_cooldown": {
             "base_duration_minutes": 0.05,
             "min_duration_minutes": 0.0,
             "max_duration_minutes": 60.0,
             "weights_minutes": {"exposure_ratio": 10.0, "adverse_directionality": 20.0}
           },
-          "hsl": {
-            "enabled": true,
-            "drawdown_threshold_fraction": 0.08,
-            "drawdown_fraction_ema_span_minutes": 10.0,
-            "cooldown_after_red_minutes": 60.0,
-            "panic_close_order_type": "market"
+          "risk": {
+            "unstuck": {"ema_gating_enabled": false, "loss_allowance_fraction": 0.005},
+            "hsl": {
+              "enabled": true,
+              "drawdown_threshold_fraction": 0.08,
+              "drawdown_fraction_ema_span_minutes": 10.0,
+              "cooldown_after_red_minutes": 60.0,
+              "panic_close_order_type": "market"
+            }
           },
           "wallet_exposure_limit_ratio": 0.18
         },
@@ -307,4 +309,4 @@ excluded from discovery, but other JSON/HJSON files in that directory are treate
 - Wrong types: strings such as `"false"`, nulls, and non-finite numbers are rejected rather than
   coerced into trading parameters.
 - Conditional HSL: setting HSL fields in a coin patch while the main config uses `position_side` or
-  `portfolio` mode is invalid; changing `bot.portfolio.hsl.scope` inside the patch does not change that.
+  `portfolio` mode is invalid; changing `bot.portfolio.risk.hsl.scope` inside the patch does not change that.

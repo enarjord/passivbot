@@ -65,6 +65,7 @@ def _empty_orchestrator_output(input_json: str) -> str:
                 "warnings": [],
                 "symbol_states": symbol_states,
                 "loss_gate_blocks": [],
+                "close_allocations": [],
                 "min_effective_cost_blocks": [],
                 "forager_selections": [],
             },
@@ -98,6 +99,7 @@ def _single_symbol_orchestrator_output(
     }
     if include_loss_gate_blocks:
         diagnostics_payload.setdefault("loss_gate_blocks", [])
+    diagnostics_payload.setdefault("close_allocations", [])
     diagnostics_payload.setdefault("min_effective_cost_blocks", [])
     diagnostics_payload.setdefault("forager_selections", [])
     return json.dumps(
@@ -308,10 +310,11 @@ def _make_mock_pbr():
 @pytest.fixture(autouse=True)
 def mock_pbr(monkeypatch):
     stub_module = _make_mock_pbr()
+    stub_module.get_core_metric_catalog = native_pbr.get_core_metric_catalog
     stub_module.get_strategy_spec = native_pbr.get_strategy_spec
     stub_module.get_strategy_kinds = native_pbr.get_strategy_kinds
     stub_module.realized_memory_v9 = native_pbr.realized_memory_v9
-    stub_module.realized_memories_v9 = native_pbr.realized_memories_v9
+    stub_module.calc_loss_gate_headroom_v9 = native_pbr.calc_loss_gate_headroom_v9
     monkeypatch.setitem(sys.modules, "passivbot_rust", stub_module)
 
     class _DummyLockException(Exception):
@@ -362,9 +365,9 @@ def _dummy_config():
         cfg["bot"][side]["enabled"] = True
         cfg["bot"][side]["universe"]["minimum_coin_age_days"] = 0
     for side in ("long", "short"):
-        cfg["bot"][side]["unstuck"].update(
+        cfg["bot"][side]["risk"]["unstuck"].update(
             loss_allowance_fraction=0.01, exposure_trigger_ratio=0.5,
-            close_fraction=0.1, ema_distance_fraction=0.0,
+            ema_distance_fraction=0.0,
         )
         strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]
         strategy["entry"]["ema_span_0_minutes"] = 1.0
@@ -472,7 +475,6 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 },
                 "risk_wel_enforcer_threshold_ratio": 0.0,
                 "unstuck_exposure_trigger_ratio": 0.0,
-                "unstuck_close_fraction": 0.0,
                 "unstuck_ema_distance_fraction": 0.0,
             }
             self._bot_value_defaults = {
@@ -2455,7 +2457,9 @@ async def test_matching_trailing_fill_confirms_while_unrelated_pnl_is_pending():
     cfg = _dummy_config()
     # PnL enrichment blocks authoritative fills when an enabled risk consumer
     # needs it; trailing confirmation itself can still use the matching fill.
-    cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.1
+    cfg["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"].update(
+        enabled=True, max_realized_drawdown_fraction=0.1,
+    )
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     old_fill = _DummyFillEvent(
@@ -3243,13 +3247,14 @@ def _make_order(
 @pytest.mark.asyncio
 async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
     cfg = _dummy_config()
-    cfg["live"]["loss_gate_max_drawdown_fraction"] = 0.02
+    cfg["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"].update(
+        enabled=True, max_realized_drawdown_fraction=0.02,
+    )
     bot = _make_dummy_bot(cfg)
     bot._bp_defaults.update(
         {
             "unstuck_enabled": True,
             "unstuck_loss_allowance_fraction": 0.01,
-            "unstuck_close_fraction": 0.1,
             "unstuck_exposure_trigger_ratio": 0.5,
         }
     )
@@ -3268,9 +3273,9 @@ async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
 
     def replay_realized_memory(input_json):
         memory_calls.append(json.loads(input_json))
-        return native_pbr.realized_memories_v9(input_json)
+        return native_pbr.realized_memory_v9(input_json)
 
-    monkeypatch.setattr(pbr, "realized_memories_v9", replay_realized_memory)
+    monkeypatch.setattr(pbr, "realized_memory_v9", replay_realized_memory)
 
     # Pretend an unstuck order is already live on the exchange.
     bot.open_orders[symbol] = [
@@ -3332,13 +3337,12 @@ async def test_existing_unstuck_order_does_not_block_rust_emission(monkeypatch):
     assert payload["global"]["auto_unstuck_allowed"] is True
     assert len(memory_calls) == 1
     assert [row["net"] for row in memory_calls[0]["fills"]] == [-2.5]
-    assert payload["global"]["unstuck_realized_pnl_drawdown"] == 2.5
-    assert payload["global"]["loss_gate_realized_pnl_drawdown"] == 0.0
-    assert "realized_pnl_drawdown" not in payload["global"]
-    assert memory_calls[0]["unstuck"]["enabled"] is True
-    assert memory_calls[0]["loss_gate"]["enabled"] is False
-    # Rust derives allowance from its continuous realized-loss memory, rather
-    # than an existing order. The independently disabled gate consumes no fill.
+    assert payload["global"]["realized_pnl_drawdown"] == 2.5
+    assert payload["global"]["loss_gate_enabled"] is True
+    assert payload["global"]["loss_gate_max_drawdown_fraction"] == 0.02
+    assert memory_calls[0]["memory_ema_span_minutes"] > 0.0
+    # One native fold supplies both policy consumers; an existing order does
+    # not determine either allowance.
     assert "realized_pnl_cumsum_max" not in payload["global"]
     assert "realized_pnl_cumsum_last" not in payload["global"]
     assert "unstuck_allowance_long" not in payload["global"]

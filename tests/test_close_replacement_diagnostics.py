@@ -27,6 +27,7 @@ def scenario(monkeypatch):
         positions={_SYMBOL: {"long": {"size": 2.0}}},
         _authoritative_pending_confirmations={},
         _canonical_open_order_reduce_only=lambda row: row["reduce_only"],
+        _loss_gate_enabled=lambda: False,
         _health_orders_cancelled=0,
         debug_mode=False,
         state_change_detected_by_symbol=set(),
@@ -464,11 +465,21 @@ async def test_prompt_replacement_and_broken_log_handler_do_not_emit_a_recovery(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "connector_barrier,resting_loss,ideal_loss,expect_barrier",
+    [
+        (True, False, False, True),
+        (False, True, True, True),
+        (False, False, True, False),
+        (False, True, False, False),
+    ],
+)
 async def test_real_plan_records_cancel_first_blocker_without_submitting_a_create(
-    scenario, monkeypatch, caplog
+    scenario, monkeypatch, caplog, connector_barrier, resting_loss, ideal_loss, expect_barrier
 ):
     bot, old, new, _ = scenario
     actions = []
+    remaining_creates = []
 
     async def cancel(orders):
         actions.append(("cancel", list(orders)))
@@ -478,17 +489,29 @@ async def test_real_plan_records_cancel_first_blocker_without_submitting_a_creat
         actions.append(("create", list(orders)))
         return []
 
-    async def keep_market_snapshot(_bot, orders, **_kwargs):
-        return orders
+    async def observe_creates_before_quote_filter(_bot, orders, **_kwargs):
+        remaining_creates.extend(orders)
+        return []
 
     bot.execute_cancellations = cancel
     bot.execute_cancellations_parent = lambda orders: executor.execute_cancellations_parent(bot, orders)
     bot.execute_orders_parent = create
+    bot._loss_gate_enabled = lambda: not connector_barrier
+    bot.order_was_recently_updated = lambda _: 0
+    bot._order_requires_exchange_config_before_create = lambda _: False
     bot.get_raw_balance = lambda: 100.0
     bot._authoritative_full_confirmation_surfaces = lambda: _SURFACES
     monkeypatch.setattr(passivbot, "utc_ms", lambda: 1000)
-    monkeypatch.setattr(executor, "connector_supports_order_churn_gate", lambda _: True)
-    monkeypatch.setattr(Passivbot, "_filter_fresh_market_snapshot_creations", keep_market_snapshot)
+    monkeypatch.setattr(
+        executor, "connector_supports_order_churn_gate", lambda _: connector_barrier
+    )
+    monkeypatch.setattr(
+        executor.realized_close_admission, "spends_headroom",
+        lambda _bot, _order, *, resting=False: resting_loss if resting else ideal_loss,
+    )
+    monkeypatch.setattr(
+        Passivbot, "_filter_fresh_market_snapshot_creations", observe_creates_before_quote_filter
+    )
     monkeypatch.setattr(Passivbot, "_shutdown_requested", lambda *_args: False)
     monkeypatch.setattr(Passivbot, "_track_order_wave_confirmation", lambda *_args: None)
     monkeypatch.setattr(Passivbot, "_log_order_wave_summary", lambda *_args: None)
@@ -497,7 +520,8 @@ async def test_real_plan_records_cancel_first_blocker_without_submitting_a_creat
     _observe(bot, monkeypatch, now_ms=61_000)
 
     assert actions == [("cancel", [old])]
-    assert "last_create_defer=account_cancel_first_barrier" in caplog.text
+    assert remaining_creates == ([] if expect_barrier else [new])
+    assert ("last_create_defer=account_cancel_first_barrier" in caplog.text) == expect_barrier
 
 
 @pytest.mark.asyncio

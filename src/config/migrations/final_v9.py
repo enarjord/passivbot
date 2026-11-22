@@ -37,17 +37,18 @@ def released_shared_bot_paths():
     from config.shared_bot import FLAT_BOT_KEY_TO_GROUP_PATH
 
     return {
-        **FLAT_BOT_KEY_TO_GROUP_PATH,
+        **{
+            key: path[1:] if path[:2] in {("risk", "hsl"), ("risk", "unstuck")} else path
+            for key, path in FLAT_BOT_KEY_TO_GROUP_PATH.items()
+        },
         **_RELEASED_SHARED_FLAT_PATHS,
     }
 
 
 def canonicalize_released_shared_bot_side(values):
     """Group flat released inputs only inside the explicit v8 converter."""
-    from config.shared_bot import canonicalize_shared_bot_side
-
     if isinstance(values, dict):
-        for flat, path in _RELEASED_SHARED_FLAT_PATHS.items():
+        for flat, path in released_shared_bot_paths().items():
             if flat not in values:
                 continue
             target = values
@@ -59,7 +60,6 @@ def canonicalize_released_shared_bot_side(values):
             if path[-1] in target and target[path[-1]] != value:
                 raise ValueError(f"{flat} conflicts with {'.'.join(path)}")
             target[path[-1]] = value
-    canonicalize_shared_bot_side(values)
 
 
 def _is_retired_metric(name):
@@ -1073,7 +1073,7 @@ def finalize_v8_layout(source, *, span, changes, schema_version, acknowledge_sea
                     if dotted in converted and converted[dotted] != value:
                         raise ValueError(f"{path}.{key} conflicts with {dotted}")
                     converted[dotted] = deepcopy(value)
-                record(f"{path}.{key}", value, converted, "split shared slow memory into independent spans")
+                record(f"{path}.{key}", value, converted, "preserved the authored EMA choice for equity and realized memory")
                 continue
             if key in {f"live.{field}" for field in COIN_SOURCE_FIELDS}:
                 field = key.split(".")[-1]
@@ -1162,7 +1162,7 @@ def finalize_v8_layout(source, *, span, changes, schema_version, acknowledge_sea
             put(result, target, shared, "live.lookback_ema_span_minutes")
         record("live.lookback_ema_span_minutes", shared,
                {".".join(path): shared for path in memory_paths(scope)},
-               "split shared slow memory into independent spans")
+               "preserved the authored EMA choice for equity and realized memory")
     bot = result.setdefault("bot", {})
     if "hsl" in bot:
         old = bot.pop("hsl")
@@ -1251,8 +1251,16 @@ def finalize_v8_layout(source, *, span, changes, schema_version, acknowledge_sea
         from .control_sentinels import migrate_control_sentinels
 
         migrate_control_sentinels(result, record=record)
+        from .released_v8_risk import released_risk_path
+
         for side in ("long", "short"):
-            canonicalize_released_shared_bot_side(result.get("bot", {}).get(side))
+            values = result.get("bot", {}).get(side, {})
+            for flat, path in released_shared_bot_paths().items():
+                if flat in values and flat != "unstuck_close_pct":
+                    destination = released_risk_path(".".join(("bot", side, *path)))
+                    record(f"bot.{side}.{flat}", values[flat], {destination: values[flat]},
+                           "converted the released flat coin setting")
+            canonicalize_released_shared_bot_side(values)
         rewrite_released_public_names(result, record=record, strategy_kind=released_kind)
         return result
     # All released-layout structural transforms run only inside this converter.

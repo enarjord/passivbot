@@ -61,7 +61,7 @@ def apply_recommended_bounds(source, *, base_config_path=""):
     template = get_template_config()
     validate_authored_config(source, template)
     result = strip_config_metadata(source)
-    mode = result.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope", "coin")
+    mode = result.get("bot", {}).get("portfolio", {}).get("risk", {}).get("hsl", {}).get("scope", "coin")
     profile = generated_template(get_expanded_config_prototype(), mode)
     result.setdefault("optimize", {})["bounds"] = deepcopy(profile["optimize"]["bounds"])
     effective_bot = resolve_bot_policy(source.get("bot", {}), get_side_field_catalog()).effective_view()

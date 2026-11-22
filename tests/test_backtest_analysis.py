@@ -150,12 +150,12 @@ def test_post_process_exports_full_equity_precision_and_status_without_detailed_
 
 def test_backtest_hsl_scope_requires_canonical_global_config():
     assert (
-        bt._resolve_backtest_hsl_signal_mode({"bot": {"portfolio": {'hsl': {'scope': 'coin'}}}})
+        bt._resolve_backtest_hsl_signal_mode({"bot": {"portfolio": {"risk": {"hsl": {"scope": "coin"}}}}})
         == "coin"
     )
 
-    with pytest.raises(KeyError, match="bot.portfolio.hsl.scope"):
-        bt._resolve_backtest_hsl_signal_mode({"bot": {"portfolio": {'hsl': {}}}})
+    with pytest.raises(KeyError, match=r"bot\.portfolio\.risk\.hsl\.scope"):
+        bt._resolve_backtest_hsl_signal_mode({"bot": {"portfolio": {"risk": {"hsl": {}}}}})
 
 def test_create_forager_balance_figures_adds_strategy_equity_drawdown():
     idx = pd.date_range("2025-01-01", periods=4, freq="1h")

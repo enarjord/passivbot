@@ -11,7 +11,7 @@ from config.field_registry import LIVE_OPERATIONAL_PATHS, live_field_path
 from config.shared_bot import BOT_GROUP_FIELD_MAP, get_grouped_bot_value
 from config.risk_memory import (
     normalize_memory_ema_span_minutes, normalize_risk_bootstrap_max_lookback_minutes,
-    risk_bootstrap_horizon_minutes,
+    require_loss_realization_policy, risk_bootstrap_horizon_minutes,
 )
 from live.smoke_report import _user_safe_display_path
 
@@ -54,11 +54,11 @@ DIFF_SETTING_PATHS = (
     ("identity", "live.account.user", ("live", "account", "user")),
     ("identity", "live.exchange", ("live", "exchange")),
     ("identity", "backtest.exchanges", ("backtest", "exchanges")),
-    ("hsl", "bot.portfolio.hsl.scope", ("bot", "portfolio", "hsl", "scope")),
-    ("hsl", "bot.portfolio.hsl.enabled", ("bot", "portfolio", "hsl", "enabled")),
-    ("hsl", "bot.global.hsl.enabled", ("bot", "global", "hsl", "enabled")),
-    ("hsl", "bot.long.hsl.enabled", ("bot", "long", "hsl", "enabled")),
-    ("hsl", "bot.short.hsl.enabled", ("bot", "short", "hsl", "enabled")),
+    ("hsl", "bot.portfolio.risk.hsl.scope", ("bot", "portfolio", "risk", "hsl", "scope")),
+    ("hsl", "bot.portfolio.risk.hsl.enabled", ("bot", "portfolio", "risk", "hsl", "enabled")),
+    ("hsl", "bot.global.risk.hsl.enabled", ("bot", "global", "risk", "hsl", "enabled")),
+    ("hsl", "bot.long.risk.hsl.enabled", ("bot", "long", "risk", "hsl", "enabled")),
+    ("hsl", "bot.short.risk.hsl.enabled", ("bot", "short", "risk", "hsl", "enabled")),
     ("forager", "bot.global.risk.max_positions", ("bot", "global", "risk", "max_positions")),
     (
         "forager",
@@ -321,25 +321,26 @@ def _effective_bot_config(config: dict[str, Any]) -> dict[str, Any]:
 
     # The portfolio is not part of the directional catalog. Keep its existing
     # authored shape gate before the HSL owner reads the scope/container.
-    validate_authored_config({"bot": {"portfolio": {
-        "hsl": effective["bot"]["portfolio"].get("hsl"),
-    }}}, get_template_config())
+    validate_authored_config({"bot": {"portfolio": {"risk": {
+        "hsl": effective["bot"]["portfolio"]["risk"]["hsl"],
+    }}}}, get_template_config())
+    require_loss_realization_policy(effective)
     margin_path = "bot.global.forager.score_hysteresis_margin"
     validate_forager_score_hysteresis_margin(
         require_config_value(effective, margin_path), path=margin_path,
     )
     forager_score_hysteresis(effective)
     mode = _mode(effective)
-    effective["bot"]["portfolio"]["hsl"]["scope"] = mode
-    validate_portfolio_policy_scope(effective["bot"]["portfolio"]["hsl"], mode)
+    effective["bot"]["portfolio"]["risk"]["hsl"]["scope"] = mode
+    validate_portfolio_policy_scope(effective["bot"]["portfolio"]["risk"]["hsl"], mode)
     for side in SIDES:
-        block = effective["bot"][side]["hsl"]
-        normalize_block(block, {}, f"bot.{side}.hsl", active=mode != "portfolio", verbose=False)
-        validate_budget_scaling_scope(block, mode, f"bot.{side}.hsl")
+        block = effective["bot"][side]["risk"]["hsl"]
+        normalize_block(block, {}, f"bot.{side}.risk.hsl", active=mode != "portfolio", verbose=False)
+        validate_budget_scaling_scope(block, mode, f"bot.{side}.risk.hsl")
     if mode == "portfolio":
-        block = effective["bot"]["portfolio"]["hsl"]
-        normalize_block(block, {}, "bot.portfolio.hsl", portfolio=True, verbose=False)
-        validate_budget_scaling_scope(block, mode, "bot.portfolio.hsl")
+        block = effective["bot"]["portfolio"]["risk"]["hsl"]
+        normalize_block(block, {}, "bot.portfolio.risk.hsl", portfolio=True, verbose=False)
+        validate_budget_scaling_scope(block, mode, "bot.portfolio.risk.hsl")
     return effective
 
 
@@ -347,7 +348,7 @@ def _hsl_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
     from config.hsl import FIELDS
 
     values = {
-        key: side_config.get("hsl", {}).get(key)
+        key: side_config.get("risk", {}).get("hsl", {}).get(key)
         for key in FIELDS
     }
     return {"present": any(value is not None for value in values.values()), **values}
@@ -359,7 +360,7 @@ def _hsl_policy_reports(config, *, resolved=False):
     bot = config.get("bot")
     bot = bot if isinstance(bot, dict) else {}
     if _effective_hsl_signal_mode(config) == "portfolio":
-        return {"portfolio": _hsl_side_report({"hsl": bot.get("portfolio", {}).get("hsl", {})})}
+        return {"portfolio": _hsl_side_report(bot["portfolio"])}
     return {side: _hsl_side_report(_bot_side_config(config, side)) for side in SIDES}
 
 
@@ -595,7 +596,7 @@ def _balance_hysteresis_report(
 
 
 def _effective_hsl_signal_mode(config: dict[str, Any]) -> str:
-    raw = _path_value(config, ("bot", "portfolio", "hsl", "scope"))
+    raw = _path_value(config, ("bot", "portfolio", "risk", "hsl", "scope"))
     return DEFAULT_HSL_SIGNAL_MODE if raw is _MISSING else str(raw)
 
 
@@ -755,13 +756,8 @@ def _cache_readiness_report(
     lookback_status = "present"
     for key, path, validator in (
         (
-            "unstuck_memory_ema_span_minutes",
-            ("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
-            normalize_memory_ema_span_minutes,
-        ),
-        (
-            "loss_gate_memory_ema_span_minutes",
-            ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes"),
+            "realized_loss_memory_ema_span_minutes",
+            ("bot", "portfolio", "risk", "loss_realization", "memory_ema_span_minutes"),
             normalize_memory_ema_span_minutes,
         ),
         (
@@ -842,7 +838,7 @@ def _cache_readiness_report(
                 (
                     "HSL account-level history replay is unsafe with an active "
                     "balance override; runtime will fail before replay for "
-                    f"bot.portfolio.hsl.scope={signal_mode!r}"
+                    f"bot.portfolio.risk.hsl.scope={signal_mode!r}"
                 ),
             )
         if lookback_status in {
@@ -1242,7 +1238,7 @@ def build_live_config_preflight_report(
                 (
                     "HSL signal modes 'portfolio' and 'position_side' reconstruct "
                     "account-level equity history and are unsafe with an active "
-                    "balance override; use bot.portfolio.hsl.scope='coin', remove the "
+                    "balance override; use bot.portfolio.risk.hsl.scope='coin', remove the "
                     "balance override, or disable HSL before live trading"
                 ),
                 path=(
@@ -1260,7 +1256,7 @@ def build_live_config_preflight_report(
         "identity": identity_report,
         "hsl": {
             "signal_mode": _display_value(
-                _path_value(parsed, ("bot", "portfolio", "hsl", "scope"))
+                _path_value(parsed, ("bot", "portfolio", "risk", "hsl", "scope"))
             ).get("value"),
             "effective_signal_mode": hsl_signal_mode,
             "balance_override": balance_override_report,

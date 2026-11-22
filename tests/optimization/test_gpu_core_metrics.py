@@ -181,7 +181,7 @@ def test_forced_delist_loss_is_not_an_hsl_execution_episode(strategy):
 
     config, _, markets, _, timestamps = _fixture("long", 1, "initial")
     config["bot"]["portfolio"]["strategy_kind"] = strategy
-    config["bot"]["long"]["hsl"].update(enabled=True, drawdown_threshold_fraction=.9)
+    config["bot"]["long"]["risk"]["hsl"].update(enabled=True, drawdown_threshold_fraction=.9)
     config["bot"]["long"]["strategy"]["ema_anchor"].update(
         base_qty_fraction=.5, ema_span_0_minutes=2., ema_span_1_minutes=3.,
         offset_fraction=.01, inventory_offset_exposure_coefficient=0.,

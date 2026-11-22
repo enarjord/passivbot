@@ -459,7 +459,7 @@ def test_recommended_preset_preserves_strategy_hsl_and_positive_optional_weight(
     source["optimize"]["bounds"] = {}
     prescribed = apply_recommended_bounds(source)
     assert prescribed["bot"]["portfolio"]["strategy_kind"] == strategy
-    assert prescribed["bot"]["portfolio"]["hsl"]["scope"] == scope
+    assert prescribed["bot"]["portfolio"]["risk"]["hsl"]["scope"] == scope
     assert flattened(prescribed)["long_forager_score_weights_rms_directionality"] == [0.0, 1.0]
     assert gene_bounds(prepare_config(prescribed, verbose=False)) == gene_bounds(prescribed)
 
@@ -560,7 +560,7 @@ def test_frozen_range_materializer_overlays_only_missing_canonical_fields():
 
 @pytest.mark.parametrize("transform,source_parts,target_parts,configured,domain", [
     ("couple_unstuck_ema_spans", ("strategy", "trailing_martingale", "entry", "ema_span_0_minutes"),
-     ("long", "unstuck", "ema_span_0_minutes"), 42.5, [100.0, 200.0]),
+     ("long", "risk", "unstuck", "ema_span_0_minutes"), 42.5, [100.0, 200.0]),
     ("mirror_short_from_long", ("risk", "total_wallet_exposure_limit_ratio"),
      ("short", "risk", "total_wallet_exposure_limit_ratio"), 0.0, [0.5, 1.5]),
     ("lossless_close_trailing", ("strategy", "trailing_martingale", "close", "retracement_base_fraction"),

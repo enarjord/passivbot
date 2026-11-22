@@ -123,7 +123,10 @@ def _raw_rust_input(
         "market_orders_allowed": False,
         "market_order_near_touch_fraction": 0.001,
         "panic_close_market": False,
+        "loss_gate_enabled": False,
         "loss_gate_max_drawdown_fraction": 0.1,
+        "realized_pnl_drawdown": 0.0,
+        "limit_orders_post_only": False,
         "global_bot_params": {
             "long": {
                 "n_positions": long_n_positions,
@@ -152,10 +155,12 @@ def _raw_rust_input(
             )
     return {
         "timestamp_ms": timestamp_ms,
+        "balance_raw": 1000.0,
         "global": global_input,
         "symbols": [
             {
                 "symbol_idx": 0,
+                "symbol": SYMBOL,
                 "order_book": {"bid": bid, "ask": ask},
                 "exchange": {
                     "qty_step": qty_step,
@@ -163,6 +168,8 @@ def _raw_rust_input(
                     "min_qty": min_qty,
                     "min_cost": min_cost,
                     "c_mult": c_mult,
+                    "maker_fee_fraction": 0.0,
+                    "taker_fee_fraction": 0.0,
                 },
                 "tradable": tradable,
                 "long": {
@@ -187,7 +194,6 @@ def _raw_rust_input(
                         "risk_wel_enforcer_enabled": True,
                         "risk_wel_enforcer_threshold_ratio": 1.0,
                         "unstuck_enabled": True,
-                        "unstuck_close_fraction": 0.1,
                         "unstuck_loss_allowance_fraction": 0.1,
                         "unstuck_exposure_trigger_ratio": 0.1,
                     },
@@ -214,7 +220,6 @@ def _raw_rust_input(
                         "risk_wel_enforcer_enabled": True,
                         "risk_wel_enforcer_threshold_ratio": 1.0,
                         "unstuck_enabled": True,
-                        "unstuck_close_fraction": 0.1,
                         "unstuck_loss_allowance_fraction": 0.1,
                         "unstuck_exposure_trigger_ratio": 0.1,
                     },
@@ -224,7 +229,31 @@ def _raw_rust_input(
     }
 
 
-def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
+def _raw_admitted_unstuck_allocation(order: dict) -> dict:
+    """Accepted break-even or profitable unstuck close in the zero-fee fixture."""
+    return {
+        "symbol_idx": order["symbol_idx"],
+        "pside": order["pside"],
+        "order_type": order["order_type"],
+        "execution_type": order["execution_type"],
+        "execution_price": order["price"],
+        "proposed_qty": order["qty"],
+        "final_qty": order["qty"],
+        "price": order["price"],
+        "estimated_loss": 0.0,
+        "proposed_loss": 0.0,
+        "headroom_before": 100.0,
+        "headroom_after": 100.0,
+        "overshoot": 0.0,
+        "binding_cap": "unstuck",
+        "reason": "admitted",
+        "outcome": "admitted",
+        "loss_gate_enabled": False,
+        "loss_gate_max_drawdown_fraction": 0.1,
+    }
+
+
+def _raw_rust_output(orders=None, *, symbol_states=None, close_allocations=()) -> dict:
     if orders is None:
         orders = []
     if symbol_states is None:
@@ -251,6 +280,7 @@ def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
             "warnings": [],
             "symbol_states": symbol_states,
             "loss_gate_blocks": [],
+            "close_allocations": list(close_allocations),
             "min_effective_cost_blocks": [],
             "forager_selections": [],
         },
@@ -296,10 +326,11 @@ def _raw_loss_gate_block(**overrides) -> dict:
         "qty": -1.0,
         "price": 100.0,
         "projected_pnl": -110.0,
-        "balance_before": 1_000.0,
-        "projected_balance_after": 890.0,
+        "balance_before": 900.0,
+        "projected_balance_after": 790.0,
         "balance_peak": 1_000.0,
         "balance_floor": 900.0,
+        "loss_gate_enabled": True,
         "loss_gate_max_drawdown_fraction": 0.1,
     }
     block.update(overrides)
@@ -820,7 +851,7 @@ def test_raw_rust_output_accepts_close_wave_equal_to_submitted_position():
     ]
 
     assert reconciler.validate_rust_orchestrator_output(
-        _raw_rust_output(orders),
+        _raw_rust_output(orders, close_allocations=[_raw_admitted_unstuck_allocation(orders[1])]),
         {0: SYMBOL},
         _raw_rust_input(
             long_pos_size=1.0,
@@ -950,7 +981,7 @@ def test_raw_rust_output_accepts_risk_critical_priority_for_protective_order():
     )
 
     assert reconciler.validate_rust_orchestrator_output(
-        _raw_rust_output([order]),
+        _raw_rust_output([order], close_allocations=[_raw_admitted_unstuck_allocation(order)]),
         {0: SYMBOL},
         _raw_rust_input(),
     ) == [order]
@@ -976,7 +1007,6 @@ def test_raw_rust_output_rejects_unstuck_when_submitted_gate_is_false():
     [
         ("close_unstuck_long", "symbol", "unstuck_enabled", False),
         ("close_unstuck_long", "symbol", "unstuck_loss_allowance_fraction", 0.0),
-        ("close_unstuck_long", "symbol", "unstuck_close_fraction", 0.0),
         ("close_unstuck_long", "symbol", "unstuck_exposure_trigger_ratio", 0.0),
         (
             "close_auto_reduce_wel_long",
@@ -2954,7 +2984,7 @@ def test_raw_rust_output_rejects_malformed_loss_gate_diagnostics(
 
     with pytest.raises(FatalBotException, match=error):
         reconciler.validate_rust_orchestrator_output(
-            out, {0: SYMBOL}, _raw_rust_input()
+            out, {0: SYMBOL}, _raw_rust_input(loss_gate_enabled=True)
         )
 
 
@@ -2970,7 +3000,7 @@ def test_raw_rust_output_rejects_incomplete_loss_gate_block():
 
     with pytest.raises(FatalBotException, match="invalid qty"):
         reconciler.validate_rust_orchestrator_output(
-            out, {0: SYMBOL}, _raw_rust_input()
+            out, {0: SYMBOL}, _raw_rust_input(loss_gate_enabled=True)
         )
 
 
@@ -2979,7 +3009,7 @@ def test_raw_rust_output_accepts_consistent_loss_gate_block():
     out["diagnostics"]["loss_gate_blocks"] = [_raw_loss_gate_block()]
 
     assert reconciler.validate_rust_orchestrator_output(
-        out, {0: SYMBOL}, _raw_rust_input()
+        out, {0: SYMBOL}, _raw_rust_input(loss_gate_enabled=True)
     ) == []
 
 
@@ -3024,7 +3054,7 @@ def test_raw_rust_output_checks_loss_gate_block_minimum_at_execution_price(
         reconciler.validate_rust_orchestrator_output(
             out,
             {0: SYMBOL},
-            _raw_rust_input(long_pos_size=10.0, **input_overrides),
+            _raw_rust_input(loss_gate_enabled=True, long_pos_size=10.0, **input_overrides),
         )
 
 
@@ -3038,7 +3068,7 @@ def test_raw_rust_output_rejects_loss_gate_block_with_off_step_price():
         reconciler.validate_rust_orchestrator_output(
             out,
             {0: SYMBOL},
-            _raw_rust_input(price_step=0.01),
+            _raw_rust_input(loss_gate_enabled=True, price_step=0.01),
         )
 
 
@@ -3058,7 +3088,7 @@ def test_raw_rust_output_rejects_loss_gate_block_with_invalid_close_quantity(
 
     with pytest.raises(FatalBotException, match=error):
         reconciler.validate_rust_orchestrator_output(
-            out, {0: SYMBOL}, _raw_rust_input()
+            out, {0: SYMBOL}, _raw_rust_input(loss_gate_enabled=True)
         )
 
 
@@ -3084,7 +3114,7 @@ def test_raw_rust_output_rejects_loss_gate_block_for_disabled_reducer(
     disabled_gate,
     error,
 ):
-    orchestrator_input = _raw_rust_input()
+    orchestrator_input = _raw_rust_input(loss_gate_enabled=True)
     if disabled_gate == "unstuck_family":
         orchestrator_input["symbols"][0]["long"]["bot_params"][
             "unstuck_enabled"
@@ -3118,7 +3148,7 @@ def test_raw_rust_output_rejects_loss_gate_block_for_flat_side():
 
     with pytest.raises(FatalBotException, match="requires a submitted position"):
         reconciler.validate_rust_orchestrator_output(
-            out, {0: SYMBOL}, _raw_rust_input(long_pos_size=0.0)
+            out, {0: SYMBOL}, _raw_rust_input(loss_gate_enabled=True, long_pos_size=0.0)
         )
 
 
@@ -3134,7 +3164,7 @@ def test_raw_rust_output_rejects_loss_gate_block_for_non_gateable_mode(long_mode
         reconciler.validate_rust_orchestrator_output(
             out,
             {0: SYMBOL},
-            _raw_rust_input(long_mode=long_mode),
+            _raw_rust_input(loss_gate_enabled=True, long_mode=long_mode),
         )
 
 
@@ -3144,7 +3174,7 @@ def test_raw_rust_output_keeps_reducer_loss_gate_block_at_zero_entry_capacity():
     out["diagnostics"]["loss_gate_blocks"] = [_raw_loss_gate_block()]
 
     assert reconciler.validate_rust_orchestrator_output(
-        out, {0: SYMBOL}, _raw_rust_input(long_total_wallet_exposure_limit_ratio=0.0),
+        out, {0: SYMBOL}, _raw_rust_input(loss_gate_enabled=True, long_total_wallet_exposure_limit_ratio=0.0),
     ) == []
 
 
@@ -3158,32 +3188,30 @@ def test_raw_rust_output_rejects_loss_gate_block_from_another_strategy():
         reconciler.validate_rust_orchestrator_output(
             out,
             {0: SYMBOL},
-            _raw_rust_input(strategy_kind="trailing_martingale"),
+            _raw_rust_input(loss_gate_enabled=True, strategy_kind="trailing_martingale"),
         )
 
 
 @pytest.mark.parametrize(
-    ("submitted_loss_gate_max_drawdown_fraction", "block_max_realized_loss_pct", "error"),
+    ("enabled", "cap", "error"),
     [
-        (1.0, 0.1, "submitted realized-loss gate is disabled"),
-        (0.2, 0.1, "inconsistent with submitted policy"),
+        (False, 0.1, "gate is disabled"),
+        (True, 0.2, "inconsistent with submitted policy"),
     ],
 )
 def test_raw_rust_output_rejects_loss_gate_block_inconsistent_with_submitted_policy(
-    submitted_loss_gate_max_drawdown_fraction, block_max_realized_loss_pct, error
+    enabled, cap, error
 ):
     out = _raw_rust_output()
     out["diagnostics"]["loss_gate_blocks"] = [
-        _raw_loss_gate_block(loss_gate_max_drawdown_fraction=block_max_realized_loss_pct)
+        _raw_loss_gate_block()
     ]
 
     with pytest.raises(FatalBotException, match=error):
         reconciler.validate_rust_orchestrator_output(
             out,
             {0: SYMBOL},
-            _raw_rust_input(
-                loss_gate_max_drawdown_fraction=submitted_loss_gate_max_drawdown_fraction
-            ),
+            _raw_rust_input(loss_gate_enabled=enabled, loss_gate_max_drawdown_fraction=cap),
         )
 
 
@@ -3197,12 +3225,9 @@ def test_raw_rust_output_rejects_loss_gate_block_inconsistent_with_submitted_pol
         ),
         ({"qty": 1.0}, "qty sign disagrees"),
         ({"projected_pnl": 0.0}, "negative projected_pnl"),
-        ({"projected_balance_after": 891.0}, "inconsistent projected balance"),
+        ({"projected_balance_after": 791.0}, "inconsistent projected balance"),
         ({"balance_floor": 899.0}, "inconsistent balance floor"),
-        (
-            {"projected_pnl": -100.0, "projected_balance_after": 900.0},
-            "does not cross balance floor",
-        ),
+        ({"balance_before": 899.0}, "invalid balance state"),
     ],
 )
 def test_raw_rust_output_rejects_impossible_loss_gate_block(overrides, error):
@@ -3213,7 +3238,7 @@ def test_raw_rust_output_rejects_impossible_loss_gate_block(overrides, error):
 
     with pytest.raises(FatalBotException, match=error):
         reconciler.validate_rust_orchestrator_output(
-            out, {0: SYMBOL}, _raw_rust_input()
+            out, {0: SYMBOL}, _raw_rust_input(loss_gate_enabled=True)
         )
 
 
@@ -3342,7 +3367,7 @@ def test_raw_rust_output_rejects_malformed_consumed_diagnostics(diagnostics, err
 
     with pytest.raises(FatalBotException, match=error):
         reconciler.validate_rust_orchestrator_output(
-            out, {0: SYMBOL}, _raw_rust_input(long_pos_size=0.0)
+            out, {0: SYMBOL}, _raw_rust_input(loss_gate_enabled=True, long_pos_size=0.0)
         )
 
 

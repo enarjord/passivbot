@@ -2606,6 +2606,13 @@ def _emit_rust_orchestrator_returned_event_unchecked(
         data["diagnostic_keys"] = (
             sorted(diagnostics) if isinstance(diagnostics, dict) else []
         )
+        close_rows = diagnostics.get("close_allocations", []) if isinstance(diagnostics, dict) else []
+        if close_rows and live_event_debug_profile_enabled(bot, "rust"):
+            data["close_allocation_count"] = len(close_rows)
+            data["close_allocation_sample"] = [
+                {**row, "symbol": (idx_to_symbol or {}).get(row["symbol_idx"])}
+                for row in close_rows[:32]
+            ]
         if output_order_sample is None and live_event_debug_profile_enabled(
             bot, "rust"
         ):
@@ -4711,7 +4718,8 @@ def emit_realized_loss_gate_blocked_event(
     projected_pnl: float,
     projected_balance: float,
     balance_floor: float,
-    loss_gate_max_drawdown_fraction: float,
+    loss_gate_enabled: bool,
+    loss_gate_max_drawdown_fraction: float | None,
 ) -> None:
     try:
         bot._emit_live_event(
@@ -4731,6 +4739,7 @@ def emit_realized_loss_gate_blocked_event(
                 "projected_pnl": _safe_float(projected_pnl),
                 "projected_balance_after": _safe_float(projected_balance),
                 "balance_floor": _safe_float(balance_floor),
+                "loss_gate_enabled": loss_gate_enabled,
                 "loss_gate_max_drawdown_fraction": _safe_float(loss_gate_max_drawdown_fraction),
             },
         )

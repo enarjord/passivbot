@@ -36,7 +36,14 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
         cfg["coin_overrides"] = {
             "AAA": {
                 "bot": {
-                    "long": {"hsl": {"drawdown_threshold_fraction": 0.025, "drawdown_fraction_ema_span_minutes": 2.75}}
+                    "long": {
+                        "risk": {
+                            "hsl": {
+                                "drawdown_threshold_fraction": 0.025,
+                                "drawdown_fraction_ema_span_minutes": 2.75,
+                            },
+                        },
+                    },
                 }
             }
         }
@@ -249,7 +256,7 @@ def test_retired_unified_report_mode_requires_fresh_v9_replay():
 @pytest.mark.parametrize("mode", ["coin", "position_side", "portfolio"])
 def test_zero_cooldown_red_is_visible_between_same_timestamp_transitions(mode):
     cfg, markets, _ = inputs(mode)
-    policy = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["hsl"]
+    policy = cfg["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"]["long"]["risk"]["hsl"]
     policy["cooldown_after_red_minutes"] = 0
     data = run(payload(mode, cfg=cfg, mss=markets))[3]
     report = data["hsl"]

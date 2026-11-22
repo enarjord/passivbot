@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 
 from passivbot_exceptions import RestartBotException, FatalBotException
-from live import close_replacement_diagnostics, hsl_live, position_fill_sync
+from live import close_replacement_diagnostics, hsl_live, position_fill_sync, realized_close_admission
 from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, ReasonCodes
 from live.events import run_diagnostic_step
@@ -649,10 +649,21 @@ async def execute_order_plan(
                 bot, order_wave, to_cancel, to_create, _utc_ms()
             ),
         )
+    close_cancels = [
+        order for order in to_cancel
+        if _order_is_reduce_only(order) and not _order_is_panic(order)
+    ]
+    account_close_barrier = (
+        configure_creations and bool(close_cancels) and bot._loss_gate_enabled()
+        and any(
+            realized_close_admission.spends_headroom(bot, order, resting=True)
+            for order in close_cancels
+        )
+    )
+    connector_cancel_barrier = connector_supports_order_churn_gate(bot)
     cancel_first_barrier = (
-        bool(to_cancel)
-        and not bot.debug_mode
-        and connector_supports_order_churn_gate(bot)
+        bool(to_cancel) and not bot.debug_mode
+        and (account_close_barrier or connector_cancel_barrier)
     )
     protective_batch = (
         hsl_live.active_protective_batch(bot) if not configure_creations else None
@@ -829,9 +840,15 @@ async def execute_order_plan(
             scope = _cancel_first_scope(bot, order)
             return (
                 ordinary_cancel_wave is not None
-                or has_unscoped_cancel
-                or scope is None
-                or scope in cancel_scopes
+                or (
+                    account_close_barrier
+                    and _order_is_reduce_only(order)
+                    and realized_close_admission.spends_headroom(bot, order)
+                )
+                or (
+                    connector_cancel_barrier
+                    and (has_unscoped_cancel or scope is None or scope in cancel_scopes)
+                )
             )
 
         barrier_deferred = [
@@ -1147,7 +1164,9 @@ async def execute_order_plan(
         before_capacity = len(to_create_mod)
         if market_panics:
             to_create_mod.sort(key=lambda order: not bot._is_market_execution_order(order))
-        to_create_mod = _apply_creation_batch_capacity(bot, to_create_mod)
+        to_create_mod = _apply_creation_batch_capacity(
+            bot, realized_close_admission.prioritize(bot, to_create_mod)
+        )
         if order_wave is not None:
             order_wave["deferred_create"] += max(
                 0, before_capacity - len(to_create_mod)
@@ -1279,6 +1298,7 @@ def record_create_connector_admission(bot, order: dict) -> None:
     guard = getattr(bot, "_create_failure_guard", None)
     if guard is not None:
         guard.submitted(order)
+    realized_close_admission.submitted(bot, order)
     passivbot_cls._record_emitted_order_custom_id(bot, order, status="submitted")
     passivbot_cls._record_order_churn_allowance_attempts(bot, 1, action_kind="create")
     passivbot_cls._emit_execution_order_event(

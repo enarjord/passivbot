@@ -44,7 +44,7 @@ def test_explicit_inline_values_equal_to_global_are_retained():
     threshold = template["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "threshold_base_fraction"
     ]
-    enabled = template["bot"]["long"]["unstuck"]["enabled"]
+    enabled = template["bot"]["long"]["risk"]["unstuck"]["enabled"]
     parsed = _parse(
         {
             "BTC": {
@@ -55,7 +55,7 @@ def test_explicit_inline_values_equal_to_global_are_retained():
                                 "entry": {"threshold_base_fraction": threshold}
                             }
                         },
-                        "unstuck": {"enabled": enabled},
+                        "risk": {"unstuck": {"enabled": enabled}},
                     }
                 }
             }
@@ -67,7 +67,7 @@ def test_explicit_inline_values_equal_to_global_are_retained():
         override["strategy"]["trailing_martingale"]["entry"]["threshold_base_fraction"]
         == threshold
     )
-    assert override["unstuck"]["enabled"] is enabled
+    assert override["risk"]["unstuck"]["enabled"] is enabled
 
 
 def test_partial_file_extracts_only_explicit_values_and_inline_wins():
@@ -75,15 +75,17 @@ def test_partial_file_extracts_only_explicit_values_and_inline_wins():
         {
             "BTC": {
                 "override_config_path": "unused-by-test.json",
-                "bot": {"long": {"unstuck": {"enabled": False}}},
+                "bot": {"long": {"risk": {"unstuck": {"enabled": False}}}},
             }
         },
         loaded={
             "bot": {
                 "long": {
-                    "unstuck": {
-                        "enabled": True,
-                        "loss_allowance_fraction": 0.02,
+                    "risk": {
+                        "unstuck": {
+                            "enabled": True,
+                            "loss_allowance_fraction": 0.02,
+                        },
                     }
                 }
             }
@@ -94,9 +96,11 @@ def test_partial_file_extracts_only_explicit_values_and_inline_wins():
     assert override == {
         "bot": {
             "long": {
-                "unstuck": {
-                    "enabled": False,
-                    "loss_allowance_fraction": 0.02,
+                "risk": {
+                    "unstuck": {
+                        "enabled": False,
+                        "loss_allowance_fraction": 0.02,
+                    },
                 }
             }
         }
@@ -106,9 +110,9 @@ def test_partial_file_extracts_only_explicit_values_and_inline_wins():
 @pytest.mark.parametrize("value", ["false", None])
 def test_invalid_boolean_override_types_fail(value):
     with pytest.raises(
-        TypeError, match=r"coin_overrides\.BTC\.bot\.long\.unstuck\.enabled must be a boolean"
+        TypeError, match=r"coin_overrides\.BTC\.bot\.long\.risk\.unstuck\.enabled must be a boolean"
     ):
-        _parse({"BTC": {"bot": {"long": {"unstuck": {"enabled": value}}}}})
+        _parse({"BTC": {"bot": {"long": {"risk": {"unstuck": {"enabled": value}}}}}})
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
@@ -159,19 +163,19 @@ def test_unstuck_ema_distance_validation_applies_to_effective_config():
         ValueError,
         match=r"coin_overrides\.BTC produces an invalid config after file and inline precedence resolution",
     ):
-        _parse({"BTC": {"bot": {"long": {"unstuck": {"ema_distance_fraction": -1.0}}}}})
+        _parse({"BTC": {"bot": {"long": {"risk": {"unstuck": {"ema_distance_fraction": -1.0}}}}}})
 
 
 def test_effective_validation_normalization_is_retained_in_patch():
-    parsed = _parse({"BTC": {"bot": {"long": {"unstuck": {"exposure_trigger_ratio": 1e-12}}}}})
+    parsed = _parse({"BTC": {"bot": {"long": {"risk": {"unstuck": {"exposure_trigger_ratio": 1e-12}}}}}})
 
-    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] == 0.0
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["exposure_trigger_ratio"] == 0.0
 
 
 def test_runtime_compilation_must_follow_override_parsing():
     source = get_template_config()
     source["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.25}}}}
+        "BTC": {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.25}}}}}
     }
     runtime_config = prepare_config(
         source,
@@ -191,7 +195,7 @@ def test_runtime_compilation_must_follow_override_parsing():
         target="live",
     )
     parsed = parse_overrides(canonical_config, verbose=False)
-    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["loss_allowance_fraction"] == 0.25
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.25
 
 
 def test_retired_volume_filter_fails_before_runtime_compilation():
@@ -204,12 +208,12 @@ def test_retired_volume_filter_fails_before_runtime_compilation():
 
 
 def test_runtime_compilation_after_parsing_preserves_normalized_patch():
-    parsed = _parse({"BTC": {"bot": {"long": {"unstuck": {"exposure_trigger_ratio": 1e-12}}}}})
+    parsed = _parse({"BTC": {"bot": {"long": {"risk": {"unstuck": {"exposure_trigger_ratio": 1e-12}}}}}})
 
     runtime_config = compile_runtime_config(parsed, runtime="live")
 
     assert (
-        runtime_config["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["exposure_trigger_ratio"]
+        runtime_config["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["exposure_trigger_ratio"]
         == 0.0
     )
 
@@ -221,14 +225,16 @@ def test_exported_runtime_config_round_trips_canonical_coin_policy(tmp_path):
                 "strategy": {
                     "trailing_martingale": {"entry": {"initial_qty_fraction": 0.02}}
                 },
-                "unstuck": {"enabled": False, "ema_distance_fraction": 0.012},
-                "hsl": {"drawdown_threshold_fraction": 0.19},
+                "risk": {
+                    "unstuck": {"enabled": False, "ema_distance_fraction": 0.012},
+                    "hsl": {"drawdown_threshold_fraction": 0.19},
+                },
                 "wallet_exposure_limit_ratio": 0.125,
             }
         }
     }
     source = get_template_config()
-    source["bot"]["portfolio"]["hsl"]["scope"] = "coin"
+    source["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "coin"
     source["coin_overrides"] = {"BTC": patch}
     prepared = prepare_config(source, verbose=False)
     compiled = compile_runtime_config(prepared, runtime="live")
@@ -360,7 +366,7 @@ def test_wallet_exposure_limit_ratio_from_partial_file_is_retained_and_validated
 
 def test_parse_overrides_is_idempotent():
     parsed_once = _parse(
-        {"BTC": {"bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.02}}}}}
+        {"BTC": {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.02}}}}}}
     )
     parsed_twice = parse_overrides(
         parsed_once,
@@ -375,7 +381,7 @@ def test_programmatic_override_added_after_prepare_is_retained():
     prepared = _prepared_config({})
     assert prepared["_raw"]["coin_overrides"] == {}
     prepared["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.027}}}}
+        "BTC": {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.027}}}}}
     }
 
     parsed = parse_overrides(
@@ -386,14 +392,14 @@ def test_programmatic_override_added_after_prepare_is_retained():
     )
 
     assert (
-        parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["loss_allowance_fraction"]
+        parsed["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["loss_allowance_fraction"]
         == 0.027
     )
 
 
 def test_canonical_grouped_patch_has_live_and_backtest_consumer_parity():
     parsed = _parse(
-        {"BTC": {"bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.031}}}}}
+        {"BTC": {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.031}}}}}}
     )
     override_side = parsed["coin_overrides"]["BTC"]["bot"]["long"]
     merged = merge_runtime_bot_side(
@@ -444,16 +450,7 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                                     "threshold_ratio"
                                 ],
                             },
-                        },
-                        "unstuck": {
-                            "close_fraction": side["unstuck"]["close_fraction"],
-                            "ema_distance_fraction": side["unstuck"]["ema_distance_fraction"],
-                            "ema_gating_enabled": side["unstuck"]["ema_gating_enabled"],
-                            "enabled": side["unstuck"]["enabled"],
-                            "loss_allowance_fraction": side["unstuck"]["loss_allowance_fraction"],
-                            "exposure_trigger_ratio": side["unstuck"][
-                                "exposure_trigger_ratio"
-                            ],
+                            "unstuck": deepcopy(side["risk"]["unstuck"]),
                         },
                         "wallet_exposure_limit_ratio": 0.1,
                     }

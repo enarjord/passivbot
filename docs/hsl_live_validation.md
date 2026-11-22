@@ -11,9 +11,9 @@ launch command and intervention scope.
    and compatible configuration separately for rollback. Keep account identifiers, credentials and operational artifacts
    outside the public repository.
 2. Validate the config with `passivbot tool live-config-preflight configs/private/live.json`.
-   In coin or position-side scope, HSL parameters inherit from `bot.global.hsl` with optional
-   side overrides under `bot.long.hsl` and `bot.short.hsl`. Portfolio scope uses the explicit
-   `bot.portfolio.hsl` policy. Confirm the slow and fast EMA spans, bounded bootstrap horizon,
+   In coin or position-side scope, HSL parameters inherit from `bot.global.risk.hsl` with optional
+   side overrides under `bot.long.risk.hsl` and `bot.short.risk.hsl`. Portfolio scope uses the explicit
+   `bot.portfolio.risk.hsl` policy. Confirm the slow and fast EMA spans, bounded bootstrap horizon,
    independent realized-loss-gate memory span if enabled, and raw balance or coin-slot budget.
    `cooldown_after_red_minutes` starts when the scope becomes flat if the assessment immediately
    before the final fill or after final accounting is RED.

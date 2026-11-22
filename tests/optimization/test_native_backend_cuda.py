@@ -124,16 +124,16 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
         config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
         set_bound("long_entry_ema_span_0_minutes", [2.0, 20.0])
         for side in ("long", "short"):
-            config["bot"][side]["unstuck"].update(enabled=True, ema_gating_enabled=True)
+            config["bot"][side]["risk"]["unstuck"].update(enabled=False, ema_gating_enabled=True)
         config["coin_overrides"] = {
-            "COIN01": {"bot": {"long": {"unstuck": {"close_fraction": 0.05}}}},
+            "COIN01": {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.05}}}}},
             "COIN02": {"bot": {"long": {"strategy": {"trailing_martingale": {
                 "entry": {"ema_span_0_minutes": 7.5},
             }}}}},
         }
     if scaled_hsl:
         for side in ("long", "short"):
-            config["bot"][side]["hsl"].update(
+            config["bot"][side]["risk"]["hsl"].update(
                 enabled=True, scale_budget_with_excess_allowance=True,
             )
             config["bot"][side]["risk"]["we_excess_allowance_fraction"] = 0.44
@@ -362,16 +362,16 @@ async def test_native_optimizer_cli_runs_cuda_and_resumes_without_cpu(monkeypatc
             assert math.isfinite(tail) and tail >= 0
     if scaled_hsl:
         for row in load_results(archive):
-            assert all(row["provenance"][CONTRACT_KEY]["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
+            assert all(row["provenance"][CONTRACT_KEY]["bot"][side]["risk"]["hsl"]["scale_budget_with_excess_allowance"]
                        for side in ("long", "short"))
-            assert all(row["config"]["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
+            assert all(row["config"]["bot"][side]["risk"]["hsl"]["scale_budget_with_excess_allowance"]
                        for side in ("long", "short"))
-        assert state[CONTRACT_KEY]["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"]
+        assert state[CONTRACT_KEY]["bot"]["long"]["risk"]["hsl"]["scale_budget_with_excess_allowance"]
         members = list((directory / "pareto").glob("*.json"))
         assert members
         for member in members:
             exported = json.loads(member.read_text())
-            assert all(exported["config"]["bot"][side]["hsl"]["scale_budget_with_excess_allowance"]
+            assert all(exported["config"]["bot"][side]["risk"]["hsl"]["scale_budget_with_excess_allowance"]
                        for side in ("long", "short"))
     if screening:
         with (directory / "checkpoint.pkl").open("rb") as source:

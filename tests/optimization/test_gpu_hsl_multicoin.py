@@ -49,6 +49,7 @@ def make_proxy(
     for side in ("long", "short"):
         bot = config["bot"][side]
         bot["enabled"] = side in sides
+        bot["risk"]["unstuck"]["enabled"] = False
         bot["universe"]["minimum_coin_age_days"] = 0.0
         # The short fixture exercises HSL without adaptive cooldown or RMS history.
         bot["entry_cooldown"].update(
@@ -59,7 +60,7 @@ def make_proxy(
         )
         bot["forager"]["score_weights"]["rms_directionality"] = 0.0
         config['bot'][side]['risk'].update({'max_positions': 1 if side in sides else 0, 'total_wallet_exposure_limit_ratio': 2 if side in sides else 0, 'position_exposure_enforcer': {**config['bot'][side]['risk']['position_exposure_enforcer'], 'enabled': False}})
-        config["bot"][side]["hsl"].update(
+        config["bot"][side]["risk"]["hsl"].update(
             enabled=enabled and mode != "portfolio",
             drawdown_threshold_fraction=0.02,
             drawdown_fraction_ema_span_minutes=2.5,
@@ -67,17 +68,16 @@ def make_proxy(
             cooldown_after_red_minutes=5,
         )
     if mode == "portfolio":
-        config["bot"]["portfolio"]["hsl"].update(
+        config["bot"]["portfolio"]["risk"]["hsl"].update(
             enabled=enabled,
             drawdown_threshold_fraction=0.02,
             drawdown_fraction_ema_span_minutes=2.5,
             memory_ema_span_minutes=memory_span,
             cooldown_after_red_minutes=5,
         )
-    config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = memory_span
-    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = memory_span
+    config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] = memory_span
     if override:
-        config["coin_overrides"] = {"AAA": {"bot": {override_side: {"hsl": override}}}}
+        config["coin_overrides"] = {"AAA": {"bot": {override_side: {"risk": {"hsl": override}}}}}
     config = prepare_config(config, verbose=False, target="canonical", runtime=None)
     config["backtest"]["coins"] = {"binance": coins}
     candles, timestamps = _synthetic_hlcvs(minutes, len(coins), 43)

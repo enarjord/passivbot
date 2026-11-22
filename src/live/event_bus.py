@@ -243,6 +243,7 @@ class EventTypes:
     POSITION_CHANGED = "position.changed"
     BALANCE_CHANGED = "balance.changed"
     RISK_MODE_CHANGED = "risk.mode_changed"
+    REALIZED_CLOSE_RECOVERY = "risk.realized_close_recovery"
     HSL_TRANSITION = "hsl.transition"
     HSL_STATUS = "hsl.status"
     HSL_RAW_RED_PENDING = "hsl.raw_red_pending"
@@ -404,6 +405,19 @@ class ReasonCodes:
     CREATE_FAILURE_STREAK = "create_failure_streak"
     ORDER_WRITE_SIGNER_REJECTED = "order_write_signer_rejected"
     REALIZED_LOSS_GATE_BLOCKED = "realized_loss_gate_blocked"
+    REALIZED_CLOSE_ADMISSION_DEFERRED = "realized_close_admission_deferred"
+    REALIZED_CLOSE_ORDER_EVIDENCE_UNAVAILABLE = "realized_close_order_evidence_unavailable"
+    REALIZED_CLOSE_LOOKUP_UNAVAILABLE = "realized_close_lookup_unavailable"
+    REALIZED_CLOSE_LOOKUP_UNSUPPORTED = "realized_close_lookup_unsupported"
+    REALIZED_CLOSE_DUPLICATE_EXCHANGE_ORDER_ID = "realized_close_duplicate_exchange_order_id"
+    REALIZED_CLOSE_CONFLICTING_FILL_IDENTITY = "realized_close_conflicting_fill_identity"
+    REALIZED_CLOSE_AMBIGUOUS_FILL_IDENTITY = "realized_close_ambiguous_fill_identity"
+    REALIZED_CLOSE_CONFLICTING_FILL_QUANTITY = "realized_close_conflicting_fill_quantity"
+    REALIZED_CLOSE_UNKNOWN_REDUCE_ONLY = "realized_close_unknown_reduce_only"
+    REALIZED_CLOSE_MISSING_REMAINING_QTY = "realized_close_missing_remaining_qty"
+    REALIZED_CLOSE_DUPLICATE_CLIENT_ORDER_ID = "realized_close_duplicate_client_order_id"
+    REALIZED_CLOSE_CONFLICTING_RESTING_SIDE = "realized_close_conflicting_resting_side"
+    REALIZED_CLOSE_UNKNOWN_RESTING_EXECUTION_TYPE = "realized_close_unknown_resting_execution_type"
     TRAILING_STATUS = "trailing_status"
     UNSTUCK_SELECTION = "unstuck_selection"
     UNSTUCK_STATUS = "unstuck_status"
@@ -578,6 +592,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.POSITION_CHANGED,
     EventTypes.BALANCE_CHANGED,
     EventTypes.RISK_MODE_CHANGED,
+    EventTypes.REALIZED_CLOSE_RECOVERY,
     EventTypes.HSL_TRANSITION,
     EventTypes.HSL_STATUS,
     EventTypes.HSL_RED_TRIGGERED,
@@ -1412,6 +1427,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.POSITION_CHANGED: EventRoute(console=True, text=True),
     EventTypes.BALANCE_CHANGED: EventRoute(console=True, text=True),
     EventTypes.RISK_MODE_CHANGED: EventRoute(console=True, text=True),
+    EventTypes.REALIZED_CLOSE_RECOVERY: EventRoute(console=True, text=True),
     EventTypes.HSL_TRANSITION: EventRoute(console=True, text=True),
     EventTypes.HSL_STATUS: EventRoute(console=True, text=True),
     EventTypes.HSL_RAW_RED_PENDING: EventRoute(console=False, text=False),
@@ -1544,6 +1560,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.EMA_UNAVAILABLE: "ema",
     EventTypes.EMA_RMS_READ_FAILED: "ema",
     EventTypes.RISK_MODE_CHANGED: "risk",
+    EventTypes.REALIZED_CLOSE_RECOVERY: "risk",
     EventTypes.HSL_TRANSITION: "risk",
     EventTypes.HSL_STATUS: "risk",
     EventTypes.TRAILING_STATUS: "trailing",
@@ -1874,6 +1891,9 @@ def _console_realized_loss_gate_summary(event: LiveEvent) -> list[str]:
     balance_floor = _data_float(data, "balance_floor")
     if balance_floor:
         parts.append(f"floor={balance_floor}")
+    enabled = data.get("loss_gate_enabled")
+    if type(enabled) is bool:
+        parts.append(f"enabled={str(enabled).lower()}")
     max_loss = _data_number(data, "loss_gate_max_drawdown_fraction")
     if max_loss is not None:
         parts.append(f"max_loss={max_loss * 100.0:.4f}%")

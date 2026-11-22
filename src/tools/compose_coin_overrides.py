@@ -400,11 +400,11 @@ def _validate_shared_policies(sources: list[ConfigSource]) -> None:
             + ", ".join(sorted(strategy_kinds))
         )
     signal_modes = {
-        str(item.config["bot"]["portfolio"]["hsl"]["scope"]) for item in sources
+        str(item.config["bot"]["portfolio"]["risk"]["hsl"]["scope"]) for item in sources
     }
     if len(signal_modes) != 1:
         raise ValueError(
-            "master and all single-coin configs must use the same bot.portfolio.hsl.scope; found "
+            "master and all single-coin configs must use the same bot.portfolio.risk.hsl.scope; found "
             + ", ".join(sorted(signal_modes))
         )
 
@@ -427,7 +427,10 @@ def _set_path(config: dict, path: tuple[str, ...], value: Any) -> None:
 
 
 def _bound_lower(config: dict, side: str, group: str, key: str) -> float | int:
-    raw = _get_path(config, ("optimize", "bounds", side, group, *key.split(".")))
+    from config.shared_bot import shared_bot_group_path
+
+    path = ("optimize", "bounds", side, *shared_bot_group_path(group), *key.split("."))
+    raw = _get_path(config, path)
     if isinstance(raw, (list, tuple)) and raw:
         candidates = raw[:2] if len(raw) >= 2 else raw
         if all(
@@ -438,13 +441,15 @@ def _bound_lower(config: dict, side: str, group: str, key: str) -> float | int:
     if isinstance(raw, (int, float)) and not isinstance(raw, bool):
         return raw
     raise ValueError(
-        f"optimize.bounds.{side}.{group}.{key} must contain a numeric lower bound"
+        f"{'.'.join(path)} must contain a numeric lower bound"
     )
 
 
 def _canonical_disabled_group(master: dict, side: str, group: str) -> dict:
-    result = deepcopy(get_expanded_config_prototype()["bot"][side][group])
-    bounds = master["optimize"]["bounds"][side].get(group, {})
+    from config.shared_bot import get_bot_group
+
+    result = deepcopy(get_bot_group(get_expanded_config_prototype()["bot"][side], group))
+    bounds = get_bot_group(master["optimize"]["bounds"][side], group)
     for key in bounds:
         if key in result:
             result[key] = _bound_lower(master, side, group, key)
@@ -458,55 +463,55 @@ def canonicalize_inactive_features(configs: list[ConfigSource]) -> list[str]:
     schema = get_expanded_config_prototype()
     for side in POSITION_SIDES:
         hsl_disabled = [
-            not bool(item.config["bot"][side]["hsl"]["enabled"]) for item in configs
+            not bool(item.config["bot"][side]["risk"]["hsl"]["enabled"]) for item in configs
         ]
         if all(hsl_disabled):
             canonical = _canonical_disabled_group(master, side, "hsl")
             for item in configs:
-                item.config["bot"][side]["hsl"] = deepcopy(canonical)
-            actions.append(f"bot.{side}.hsl (disabled in every input)")
+                item.config["bot"][side]["risk"]["hsl"] = deepcopy(canonical)
+            actions.append(f"bot.{side}.risk.hsl (disabled in every input)")
         else:
-            master_hsl = master["bot"][side]["hsl"]
+            master_hsl = master["bot"][side]["risk"]["hsl"]
             for item, disabled in zip(configs, hsl_disabled):
                 if disabled:
-                    item.config["bot"][side]["hsl"] = {
+                    item.config["bot"][side]["risk"]["hsl"] = {
                         **deepcopy(master_hsl),
                         "enabled": False,
                     }
 
         unstuck_disabled = [
-            not bool(item.config["bot"][side]["unstuck"]["enabled"]) for item in configs
+            not bool(item.config["bot"][side]["risk"]["unstuck"]["enabled"]) for item in configs
         ]
         unstuck_all_disabled = all(unstuck_disabled)
         if unstuck_all_disabled:
             canonical = _canonical_disabled_group(master, side, "unstuck")
             for item in configs:
-                item.config["bot"][side]["unstuck"] = deepcopy(canonical)
-            actions.append(f"bot.{side}.unstuck (disabled in every input)")
+                item.config["bot"][side]["risk"]["unstuck"] = deepcopy(canonical)
+            actions.append(f"bot.{side}.risk.unstuck (disabled in every input)")
         else:
-            master_unstuck = master["bot"][side]["unstuck"]
+            master_unstuck = master["bot"][side]["risk"]["unstuck"]
             for item, disabled in zip(configs, unstuck_disabled):
                 if disabled:
-                    item.config["bot"][side]["unstuck"] = {
+                    item.config["bot"][side]["risk"]["unstuck"] = {
                         **deepcopy(master_unstuck),
                         "enabled": False,
                     }
             ema_gating_disabled = [
-                not bool(item.config["bot"][side]["unstuck"]["ema_gating_enabled"])
+                not bool(item.config["bot"][side]["risk"]["unstuck"]["ema_gating_enabled"])
                 for item in configs
             ]
             if all(ema_gating_disabled):
                 lower = _bound_lower(master, side, "unstuck", "ema_distance_fraction")
                 for item in configs:
-                    item.config["bot"][side]["unstuck"]["ema_distance_fraction"] = lower
+                    item.config["bot"][side]["risk"]["unstuck"]["ema_distance_fraction"] = lower
                 actions.append(
-                    f"bot.{side}.unstuck.ema_distance_fraction (EMA gating disabled in every input)"
+                    f"bot.{side}.risk.unstuck.ema_distance_fraction (EMA gating disabled in every input)"
                 )
             else:
-                master_ema_dist = master["bot"][side]["unstuck"]["ema_distance_fraction"]
+                master_ema_dist = master["bot"][side]["risk"]["unstuck"]["ema_distance_fraction"]
                 for item, disabled in zip(configs, ema_gating_disabled):
                     if disabled:
-                        item.config["bot"][side]["unstuck"]["ema_distance_fraction"] = master_ema_dist
+                        item.config["bot"][side]["risk"]["unstuck"]["ema_distance_fraction"] = master_ema_dist
 
         wel_enforcer_disabled = [
             not bool(
@@ -617,7 +622,7 @@ def compose_configs(
     configs, master_source = deepcopy((configs, master_source))
     sources = [master_source, *(item for item in configs if item.path != master_source.path)]
     _validate_shared_policies(sources)
-    policy = get_allowed_modifications(hsl_signal_mode=master_source.config["bot"]["portfolio"]["hsl"]["scope"])
+    policy = get_allowed_modifications(hsl_signal_mode=master_source.config["bot"]["portfolio"]["risk"]["hsl"]["scope"])
     selected_paths = None
     selectors = []
     if override_params is not None:

@@ -189,8 +189,8 @@ def test_population_obeys_bounds_steps_and_side_class(frozen):
     for config in entry["configs"]:
         assert config["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 0
         assert config["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] > 0
-        assert not config["bot"]["short"]["hsl"]["enabled"]
-        assert not config["bot"]["short"]["unstuck"]["enabled"]
+        assert not config["bot"]["short"]["risk"]["hsl"]["enabled"]
+        assert not config["bot"]["short"]["risk"]["unstuck"]["enabled"]
         assert config["bot"]["short"]["entry_cooldown"]["base_duration_minutes"] == 0
 
 
@@ -208,9 +208,9 @@ def test_frozen_hsl_population_reconstructs_valid_search_bounds(tmp_path, real_r
     hsl_paths = [tuple(spec["path"]) for spec in entry["bounds"] if "hsl" in spec["path"]]
     assert hsl_paths
     if scope == "portfolio":
-        assert all(path[:3] == ("bot", "portfolio", "hsl") for path in hsl_paths)
+        assert all(path[:4] == ("bot", "portfolio", "risk", "hsl") for path in hsl_paths)
     else:
-        assert {path[:3] for path in hsl_paths} == {("bot", side, "hsl") for side in ("long", "short")}
+        assert {path[:4] for path in hsl_paths} == {("bot", side, "risk", "hsl") for side in ("long", "short")}
     for candidate in entry["configs"]:
         search = deepcopy(candidate)
         search["optimize"]["bounds"] = {}
@@ -223,7 +223,10 @@ def test_frozen_hsl_population_reconstructs_valid_search_bounds(tmp_path, real_r
         shape = build_optimization_shape(search)
         assert shape.key_paths == tuple((spec["key"], tuple(spec["path"])) for spec in entry["bounds"])
         if scope == "portfolio":
-            assert all("hsl" not in search["optimize"]["bounds"].get(side, {}) for side in ("long", "short"))
+            assert all(
+                "hsl" not in search["optimize"]["bounds"].get(side, {}).get("risk", {})
+                for side in ("long", "short")
+            )
 
 
 @pytest.mark.parametrize("strategy", ["trailing_martingale", "ema_anchor"])
@@ -251,12 +254,12 @@ def test_explicit_portfolio_bounds_are_preserved_and_inactive_side_bounds_reject
 
     options = dict(profile="standard", patterns=["ema_anchor/both/forager/hsl_portfolio/*"],
                    candidates=3, bars=128)
-    explicit = {"portfolio": {"hsl": {"drawdown_threshold_fraction": [0.11, 0.19, 0.01]}}}
+    explicit = {"portfolio": {"risk": {"hsl": {"drawdown_threshold_fraction": [0.11, 0.19, 0.01]}}}}
     original = deepcopy(explicit)
     manifest = freeze(tmp_path / "explicit", bounds_config=explicit, **options)
     assert explicit == original
     specs = manifest["entries"][0]["bounds"]
-    assert specs == [dict(key="hsl_drawdown_threshold_fraction", path=["bot", "portfolio", "hsl", "drawdown_threshold_fraction"],
+    assert specs == [dict(key="hsl_drawdown_threshold_fraction", path=["bot", "portfolio", "risk", "hsl", "drawdown_threshold_fraction"],
                           low=0.11, high=0.19, step=0.01)]
     invalid = get_expanded_config_prototype()["optimize"]["bounds"]
     original = deepcopy(invalid)
@@ -951,20 +954,23 @@ def test_hsl_features_preserve_independent_memories_and_fixed_default_genes(scop
     case = Case("trailing_martingale", features=(f"hsl_{scope}", "hsl_slow_memory", "hsl_market",
                                                 "hsl_scaled", "hsl_zero_cooldown", "loss_gate"))
     apply_features(config, case, config["backtest"]["coins"]["binance"], markets, 128)
-    policies = [config["bot"]["portfolio"]["hsl"]] if scope == "portfolio" else [config["bot"][s]["hsl"] for s in ("long", "short")]
+    if scope == "portfolio":
+        policies = [config["bot"]["portfolio"]["risk"]["hsl"]]
+    else:
+        policies = [config["bot"][side]["risk"]["hsl"] for side in ("long", "short")]
     for policy in policies:
         assert policy["memory_ema_span_minutes"] == 10.5
         assert policy["panic_close_order_type"] == "market"
         assert policy["scale_budget_with_excess_allowance"] is True
         assert policy["cooldown_after_red_minutes"] == 0.0
-    assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 1440.0
-    assert config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 1440.0
-    assert config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == .001
+    realized_loss = config["bot"]["portfolio"]["risk"]["loss_realization"]
+    assert realized_loss["memory_ema_span_minutes"] == 1440.0
+    assert realized_loss["loss_gate"] == {"enabled": True, "max_realized_drawdown_fraction": 0.001}
     population, _vectors, bounds = sampled_population(config, case, 3, 7)
     for spec in bounds:
         if spec["path"][-1] in {"memory_ema_span_minutes", "max_positions"}:
             assert spec["low"] == spec["high"] == get_path(config, spec["path"])
-        if spec["path"][:3] == ("bot", "portfolio", "hsl") and spec["path"][-1] == "drawdown_threshold_fraction":
+        if spec["path"][:4] == ("bot", "portfolio", "risk", "hsl") and spec["path"][-1] == "drawdown_threshold_fraction":
             assert (spec["low"] < spec["high"]) == (scope == "portfolio")
     assert all(candidate["bot"]["long"]["risk"]["max_positions"] == 2 for candidate in population)
 

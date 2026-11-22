@@ -22,11 +22,11 @@ def test_native_ema_current_ranking_matches_cpu(mode, sides):
             max_positions=1 if active else 0,
             total_wallet_exposure_limit_ratio=2 if active else 0,
         )
-        inputs[0]["bot"][side]["hsl"].update(
+        inputs[0]["bot"][side]["risk"]["hsl"].update(
             drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=2.5, cooldown_after_red_minutes=5,
         )
     if mode == "portfolio":
-        inputs[0]["bot"]["portfolio"]["hsl"].update(
+        inputs[0]["bot"]["portfolio"]["risk"]["hsl"].update(
             drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=2.5, cooldown_after_red_minutes=5,
         )
     metrics = ("cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day",

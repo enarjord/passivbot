@@ -15,6 +15,7 @@ from time import monotonic
 
 from config.migrations.v9 import (
     MigrationResult, V9_SCHEMA_VERSION, _hsl_enablement_facts, _require_gate_ack,
+    _realized_gate_migration_contexts,
     _migration_source_version, _require_v8_0_inline_coin_override, migrate_v8_to_v9,
 )
 from config.risk_memory import normalize_lookback_ema_span_minutes
@@ -196,10 +197,16 @@ def _materialized_coin_patch(overrides, effective):
         if "override_config_path" in parts[2:]:
             parts = parts[:2]
         from config.migrations.final_v9 import released_runtime_selector
+        from config.migrations.released_v8_risk import released_risk_path
 
-        # A referenced coin file has already completed sparse conversion,
-        # while a file-free released coin patch still uses its source paths.
-        candidates = (parts, released_runtime_selector(".".join(parts)).split("."))
+        # A referenced coin file has already completed sparse conversion.
+        # File-free released patches may still use their original spellings.
+        released = released_runtime_selector(".".join(parts))
+        final = released_risk_path(released)
+        candidates = (parts, released.split("."), final.split("."))
+        retired_size = released.endswith(".unstuck.close_fraction")
+        if retired_size and overrides[key] == 0:
+            candidates += (final.split(".")[:-1] + ["enabled"],)
         for candidate in candidates:
             value = effective
             for part in candidate:
@@ -209,10 +216,11 @@ def _materialized_coin_patch(overrides, effective):
             else:
                 break
         else:
-            raise ValueError(
-                f"{key} is missing after released coin-file materialization"
-            )
-        result[".".join(parts)] = deepcopy(value)
+            if retired_size and type(overrides[key]) in (int, float) and overrides[key] > 0:
+                continue  # Sparse file conversion already reported the discarded size.
+            raise ValueError(f"{key} is missing after released coin-file materialization")
+        destination = candidate if retired_size and candidate[-1] == "enabled" else parts
+        result[".".join(destination)] = deepcopy(value)
     return result
 
 
@@ -328,13 +336,25 @@ def _materialize_files(source, *, source_schema_version, base_config_path, span,
         # scenario/optimizer calls discard the materialized result, so deferring
         # inline null validation to the final root pass would miss those modes.
         # Keep raw inline leaves for that final pass's authored change paths.
-        migrate_v8_to_v9(
+        inline_result = migrate_v8_to_v9(
             {"config_version": result["config_version"], "bot": {}, **inline}, memory_span_minutes=span,
             acknowledge_never_removal=acknowledge,
             _null_policy_enablement=enablement,
             _coin_patch=True, best_effort=best_effort,
-            _guess_log_prefix=None,
+            _guess_log_prefix=f"{_change_prefix}coin_overrides.{coin}." if _emit_guesses else None,
         )
+        for side in ("long", "short"):
+            size_path = f"bot.{side}.unstuck.close_fraction"
+            file_size = next((item["old"] for item in file_result.changes if item["path"] == size_path), None)
+            inline_size = next((item["old"] for item in inline_result.changes if item["path"] == size_path), None)
+            inline_policy = inline_result.config.get("bot", {}).get(side, {}).get("risk", {}).get("unstuck", {})
+            file_side = loaded.get("bot", {}).get(side, {})
+            explicit_file_disable = file_side.get("unstuck", {}).get("enabled", file_side.get("unstuck_enabled")) is False
+            if file_size == 0 and inline_size and "enabled" not in inline_policy and not explicit_file_disable:
+                raise ValueError(
+                    f"coin_overrides.{coin}.{size_path} overrides a disabled v8 coin-file size. "
+                    "Choose the explicit unstuck.enabled policy and remove the size override."
+                )
         migrated = file_result.config
         changes.extend({**item, "path": f"{_change_prefix}coin_overrides.{coin}.override_config_path::{item['path']}"}
                        for item in file_result.changes)
@@ -351,101 +371,12 @@ def _materialize_files(source, *, source_schema_version, base_config_path, span,
                     old=deepcopy(universe["minimum_coin_age_days"]), new=None,
                     reason="ignored shared age policy in a released coin file; side universe admission is not coin overridable",
                 ))
-        inline = deepcopy(inline)
-        inline.pop("override_config_path")
-        from config.migrations.operational_live import move_operational_live
-
-        def record_operational(path, old, new, reason):
-            changes.append(
-                dict(
-                    path=f"{_change_prefix}coin_overrides.{coin}.{path}",
-                    old=deepcopy(old),
-                    new=deepcopy(new),
-                    reason=reason,
-                )
-            )
-
-        move_operational_live(inline, record=record_operational)
-        # Resolve structural aliases independently on each authored patch before
-        # merging. Otherwise a canonicalized file value can beat the higher-
-        # precedence inline legacy value during later hydration. Keep raw HSL
-        # authorization leaves for the explicit v9 migration pass below.
-        from config.migrations.entry_cooldown import migrate_entry_cooldown_tree
-        from config.migrations.entry_ema import migrate_entry_ema_tree
-        from config.migrations.final_v9 import (
-            released_shared_bot_paths,
-            canonicalize_released_shared_bot_side as canonicalize_shared_bot_side,
+        inline = {key: value for key, value in inline_result.config.items()
+                  if key not in {"config_version", "override_config_path"} and value}
+        changes.extend(
+            {**item, "path": f"{_change_prefix}coin_overrides.{coin}.{item['path']}"}
+            for item in inline_result.changes if item["path"] != "config_version"
         )
-        FLAT_BOT_KEY_TO_GROUP_PATH = released_shared_bot_paths()
-
-        migrate_entry_cooldown_tree(inline, path=f"coin_overrides.{coin}")
-        migrate_entry_ema_tree(inline, path=f"coin_overrides.{coin}")
-        for side in ("long", "short"):
-            values = inline.get("bot", {}).get(side)
-            if not isinstance(values, dict):
-                continue
-            for flat, path in FLAT_BOT_KEY_TO_GROUP_PATH.items():
-                if flat in values:
-                    changes.append(dict(
-                        path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.{flat}",
-                        old=deepcopy(values[flat]),
-                        new={".".join(path): deepcopy(values[flat])},
-                        reason="explicit released-v8 shared field conversion before file/inline merge",
-                    ))
-            canonicalize_shared_bot_side(values)
-            risk = values.get("risk", {})
-            for owner in ("position_exposure_enforcer", "total_exposure_enforcer"):
-                block = risk.get(owner)
-                if isinstance(block, dict) and "threshold" in block:
-                    value = block.pop("threshold")
-                    if "threshold_ratio" in block and block["threshold_ratio"] != value:
-                        raise ValueError(f"coin_overrides.{coin}.bot.{side}.risk.{owner}.threshold conflicts with threshold_ratio")
-                    block["threshold_ratio"] = deepcopy(value)
-                    changes.append(dict(
-                        path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.risk.{owner}.threshold",
-                        old=deepcopy(value), new={"threshold_ratio": deepcopy(value)},
-                        reason="explicit released-v8 ratio rename before file/inline merge",
-                    ))
-            for owner, leaf in (
-                ("position_exposure_enforcer", "enabled"),
-                ("position_exposure_enforcer", "threshold"),
-                ("total_exposure_enforcer", "enabled"),
-                ("total_exposure_enforcer", "threshold"),
-                ("total_exposure_enforcer", "policy"),
-            ):
-                old = f"{owner}_{leaf}"
-                if old not in risk:
-                    continue
-                value = risk.pop(old)
-                block = risk.setdefault(owner, {})
-                target = "threshold_ratio" if leaf == "threshold" else leaf
-                if not isinstance(block, dict) or (target in block and block[target] != value):
-                    raise ValueError(f"coin_overrides.{coin}.bot.{side}.risk.{old} conflicts with {owner}.{target}")
-                block[target] = deepcopy(value)
-                changes.append(dict(
-                    path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.risk.{old}",
-                    old=deepcopy(value), new={f"{owner}.{target}": deepcopy(value)},
-                    reason="explicit released-v8 enforcer conversion before file/inline merge",
-                ))
-            for group, old, new in (
-                ("hsl", "red_threshold", "drawdown_threshold_fraction"),
-                ("unstuck", "ema_dist", "ema_distance_fraction"),
-            ):
-                block = values.get(group, {})
-                if old not in block:
-                    continue
-                value = block.pop(old)
-                if new in block and block[new] != value:
-                    raise ValueError(f"coin_overrides.{coin}.bot.{side}.{group}.{old} conflicts with {new}")
-                block[new] = value
-                changes.append(dict(
-                    path=f"{_change_prefix}coin_overrides.{coin}.bot.{side}.{group}.{old}",
-                    old=deepcopy(value), new={new: deepcopy(value)},
-                    reason="explicit released-v8 quantity rename before file/inline merge",
-                ))
-        from config.migrations.released_public_names import rewrite_released_public_names
-
-        rewrite_released_public_names(inline, record=record_operational)
         result["coin_overrides"][coin] = nested_update(patch, inline)
     return result
 
@@ -462,13 +393,13 @@ def _optimizer_root_enablement(config, enable_overrides, facts):
 
     projection = {
         "bot": {"portfolio": {"strategy_kind": config.get("live", {}).get("strategy_kind", "trailing_martingale")},
-                **{side: {"hsl": {"enabled": facts.get(("bot", side, "hsl", "enabled"), ())}}
+                **{side: {"risk": {"hsl": {"enabled": facts.get(("bot", side, "hsl", "enabled"), ())}}}
                    for side in ("long", "short")}},
     }
     projection = optimizer_overrides(enable_overrides, projection, None)
     resolved = dict(facts)
     for side in ("long", "short"):
-        resolved[("bot", side, "hsl", "enabled")] = projection["bot"][side]["hsl"]["enabled"]
+        resolved[("bot", side, "hsl", "enabled")] = projection["bot"][side]["risk"]["hsl"]["enabled"]
     return resolved
 
 
@@ -509,6 +440,8 @@ def migrate(source, *, memory_span_minutes=None, memory_span_choices=None,
         live = payload.get("live", {})
         memory_span_minutes = live.get("lookback_ema_span_minutes")
         if memory_span_minutes is None:
+            if _realized_gate_migration_contexts(payload, require_span=False):
+                raise ValueError("active realized-loss gate requires an explicit --lookback-ema-span-minutes choice")
             memory_span_minutes = infer_memory_span(
                 live.get("pnls_max_lookback_days"), "live.pnls_max_lookback_days", inferred_changes,
                 missing="pnls_max_lookback_days" not in live,
@@ -744,12 +677,12 @@ def main(argv=None):
         help="Explicitly adopt finite cooldown in place of v8 permanent-stop policy.",
     )
     parser.add_argument("--acknowledge-realized-loss-gate-memory-change", action="store_true",
-                        help="Explicitly adopt independent decaying realized memory for every active gate context.")
+                        help="Explicitly adopt shared decaying realized memory for every active gate context.")
     parser.add_argument("--acknowledge-search-backend-change", action="store_true")
     parser.add_argument("--metric-replacement", action="append", default=[], metavar="OLD=NEW")
     parser.add_argument("--acknowledge-metric-formula-change", action="store_true")
     parser.add_argument("--best-effort", action="store_true",
-                        help="Infer close metric replacements and memory policy; remove unsupported objectives/limits with warnings. Review and backtest the result.")
+                        help="Infer metric replacements and memory policy for inactive gates. Active gates require an explicit span and acknowledgment. Review the result and backtest it.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--diff", action="store_true")
     parser.add_argument("--report", type=Path)

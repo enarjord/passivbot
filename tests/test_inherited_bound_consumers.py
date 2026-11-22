@@ -13,7 +13,7 @@ from test_bot_inheritance import catalog
 
 def prepared(source=None, bounds=None):
     source = {} if source is None else deepcopy(source)
-    source["portfolio"] = {"strategy_kind": "trailing_martingale", "hsl": {"scope": "coin"}}
+    source["portfolio"] = {"risk": {"hsl": {"scope": "coin"}}, "strategy_kind": "trailing_martingale"}
     config = {"optimize": {"bounds": {} if bounds is None else deepcopy(bounds), "fixed_params": []}}
     install_bot_policy(config, resolve_bot_policy(source, catalog()))
     prepare_bound_plan(config)

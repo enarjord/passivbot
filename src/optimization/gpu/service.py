@@ -50,6 +50,7 @@ from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     GLOBAL_RISK_PARAM_KEYS,
+    RESERVED_RISK_PARAM_KEYS,
     HSL_COIN_OVERRIDE_PATHS,
     MPS_MULTICOIN_MAX_COINS,
     MPS_TM_MULTICOIN_CHUNK_BARS,
@@ -512,9 +513,9 @@ def _gpu_proxy_execution_checkpoint_contract(
         "inception_timestamps_ms",
         "dynamic_wel_by_tradability",
         "hedge_mode",
+        "loss_gate_enabled",
         "loss_gate_max_drawdown_fraction",
-        "unstuck_memory_ema_span_minutes",
-        "loss_gate_memory_ema_span_minutes",
+        "realized_loss_memory_ema_span_minutes",
         "market_order_slippage_fraction",
         "market_orders_allowed",
         "market_order_near_touch_fraction",
@@ -530,7 +531,7 @@ def _gpu_proxy_execution_checkpoint_contract(
         "taker_fee_fraction",
     )
     contract = {
-        "version": 11,
+        "version": 12,
         "core_metric_definition_version": CORE_METRIC_DEFINITION_VERSION,
         "forager_hysteresis_abi": FORAGER_HYSTERESIS_ABI,
         "age_admission_abi": 1,
@@ -969,12 +970,12 @@ def _candidate_parameter_matrix(
                 continue
             source_key = coupled_sources.get(key, key)
             target = side_index * len(param_keys) + column
-            if source_key in overrides:
+            if source_key in RESERVED_RISK_PARAM_KEYS:
+                matrix[:, target] = 0.0
+            elif source_key in overrides:
                 matrix[:, target] = float(overrides[source_key])
             else:
-                candidate_key = (source_key if source_key in {
-                    "unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes",
-                } else f"{side}_{source_key}")
+                candidate_key = (source_key if source_key in GLOBAL_RISK_PARAM_KEYS else f"{side}_{source_key}")
                 matrix[:, target] = [
                     float(
                         candidate[candidate_key]
@@ -1348,7 +1349,7 @@ class SharedAccountReplay:
             per_side_coin_overrides[side] = overrides
             per_side_override_contracts[side] = contract
         self.core_hsl_policy_pins = {
-            side: [patch.get("bot", {}).get(side, {}).get("hsl", {}).get("enabled")
+            side: [patch.get("bot", {}).get(side, {}).get("risk", {}).get("hsl", {}).get("enabled")
                    for patch in per_side_override_contracts[side]["exact_overrides"]]
             for side in self.sides
         }
@@ -1529,9 +1530,8 @@ class SharedAccountReplay:
         common_runner_kwargs = {
             "side_activation": validate_side_activation(backtest_params["side_activation"]),
             "forager_score_hysteresis": self.forager_score_hysteresis,
-            "loss_gate_max_drawdown_fraction": float(
-                backtest_params.get("loss_gate_max_drawdown_fraction", 1.0)
-            ),
+            "loss_gate_enabled": backtest_params["loss_gate_enabled"],
+            "loss_gate_max_drawdown_fraction": backtest_params["loss_gate_max_drawdown_fraction"],
             "collect_coin_fill_counts": False,
             "filter_by_min_effective_cost": validate_minimum_cost_filters(
                 backtest_params["filter_by_min_effective_cost"]
@@ -1550,7 +1550,6 @@ class SharedAccountReplay:
         if selection is not None:
             self.checkpoint_contract["organillo"] = selection.identity
             common_runner_kwargs["selection"] = selection
-        # Realized consumers have independent request-owned memory spans.
         common_runner_kwargs["interrupt_check"] = self.interrupt_check
         common_runner_kwargs["factual_hsl"] = factual_hsl
         common_runner_kwargs["exposure_rms_enabled"] = bool(self.needed_metrics & UTILIZATION_METRICS)

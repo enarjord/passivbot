@@ -28,7 +28,7 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
                               market_order_slippage_fraction=0.,
                               maker_fee_override_fraction=0., taker_fee_override_fraction=0.)
     for direction in ("long", "short"):
-        policy = config["bot"][direction]["hsl"]
+        policy = config["bot"][direction]["risk"]["hsl"]
         policy.update(enabled=direction == side and mode != "portfolio",
                       drawdown_threshold_fraction=.01, drawdown_fraction_ema_span_minutes=1.,
                       cooldown_after_red_minutes=5.,
@@ -43,8 +43,8 @@ def _recovered_panic_inputs(side, mode, strategy_kind="trailing_martingale"):
         )
     if mode == "portfolio":
         # Preserve the portfolio scope selector while copying the fixture policy.
-        config["bot"]["portfolio"]["hsl"].update(
-            deepcopy(config["bot"][side]["hsl"]), enabled=True)
+        config["bot"]["portfolio"]["risk"]["hsl"].update(
+            deepcopy(config["bot"][side]["risk"]["hsl"]), enabled=True)
     count = 16
     candles = np.full((count, 1, 4), 100., dtype=np.float64)
     candles[:, :, 3] = 1.

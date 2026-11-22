@@ -34,7 +34,7 @@ async def test_aggregate_red_flattens_before_next_account_refresh(
     )
     config = generated_template(mutable_runtime_fixture(canonical), mode)
     policy_group = "portfolio" if mode == "portfolio" else "long"
-    config["bot"][policy_group]["hsl"].update(
+    config["bot"][policy_group]["risk"]["hsl"].update(
         enabled=True,
         drawdown_threshold_fraction=0.95,
         drawdown_fraction_ema_span_minutes=1.0,
@@ -113,7 +113,7 @@ async def test_aggregate_red_flattens_before_next_account_refresh(
             # Discovery of the second external fill invalidates the account
             # read that observed it. Confirm the same complete facts again.
             assert await bot.refresh_protective_authoritative_state(require_balance=True)
-            bot.config["bot"][policy_group]["hsl"]["drawdown_threshold_fraction"] = 0.06
+            bot.config["bot"][policy_group]["risk"]["hsl"]["drawdown_threshold_fraction"] = 0.06
             bot.cca.get_current_step()["prices"].update(
                 {symbol: 80.0 for symbol in symbols}
             )

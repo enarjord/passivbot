@@ -22,6 +22,9 @@ DEPRECATED_OPTIMIZE_BOUND_ALIASES = {}
 
 
 def canonical_optimizer_key(key: str) -> str:
+    from .migrations.v9 import reject_retired_risk_path
+
+    reject_retired_risk_path(key)
     return DEPRECATED_OPTIMIZE_BOUND_ALIASES.get(key, key)
 
 
@@ -59,7 +62,7 @@ def iter_optimizer_key_paths(
 
 def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
     if canonical_key.startswith("hsl_"):
-        if config.get("bot", {}).get("portfolio", {}).get("hsl", {}).get("scope") == "portfolio":
+        if config.get("bot", {}).get("portfolio", {}).get("risk", {}).get("hsl", {}).get("scope") == "portfolio":
             field = {
                 "drawdown_threshold_fraction": "drawdown_threshold_fraction",
                 "drawdown_fraction_ema_span_minutes": "drawdown_fraction_ema_span_minutes",
@@ -67,7 +70,7 @@ def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
                 "cooldown_minutes_after_red": "cooldown_after_red_minutes",
             }.get(canonical_key.removeprefix("hsl_"))
             if field is not None:
-                return ("bot", "portfolio", "hsl", field)
+                return ("bot", "portfolio", "risk", "hsl", field)
         return None
     if strategy_path_map is None:
         strategy_path_map = _strategy_path_map_for_config(config)
@@ -85,7 +88,7 @@ def _resolve_optimizer_key_path(config, canonical_key, strategy_path_map):
         field = ("drawdown_fraction_ema_span_minutes"
                  if flat_key == "hsl_drawdown_fraction_ema_span_minutes"
                  else "memory_ema_span_minutes")
-        return ("bot", pside, "hsl", field)
+        return ("bot", pside, "risk", "hsl", field)
     bot_side = config.get("bot", {}).get(pside, {})
     if flat_key == "hsl_ema_span_minutes":
         return None
@@ -136,7 +139,7 @@ def resolve_dotted_config_path(
     if raw_parts[0] in BOT_POSITION_SIDES or (
         raw_parts[0] == "*"
         and len(raw_parts) >= 2
-        and raw_parts[1] in ("strategy", "entry_cooldown", "risk", "forager", "hsl", "unstuck")
+        and raw_parts[1] in ("strategy", "entry_cooldown", "risk", "forager")
     ):
         parts = ("bot", *raw_parts)
     else:
@@ -180,6 +183,10 @@ def require_existing_config_path(
 
     final_key = resolved[-1]
     full_path = ".".join(resolved)
+    from .risk_memory import LOSS_GATE_CAP_PATH
+
+    if isinstance(target, dict) and resolved == LOSS_GATE_CAP_PATH:
+        return resolved  # An omitted optional authored cap is still a declared field.
     if not isinstance(target, dict) or final_key not in target:
         raise KeyError(
             f"Unknown override path {selector_or_path!r}: missing {full_path}"
@@ -223,6 +230,8 @@ def resolve_bound_selectors(
     selectors: Iterable[str],
     flat_bounds: dict,
 ) -> dict[str, tuple[str, ...]]:
+    from .migrations.v9 import reject_retired_risk_path
+
     resolved: dict[str, tuple[str, ...]] = {}
     bound_paths = {
         key: path
@@ -231,6 +240,7 @@ def resolve_bound_selectors(
         and (path := resolve_optimizer_key_path(config, key)) is not None
     }
     for selector in selectors:
+        reject_retired_risk_path(str(selector))
         selector_path = resolve_dotted_config_path(config, str(selector))
         if selector_path is None:
             continue

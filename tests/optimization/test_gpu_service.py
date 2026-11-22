@@ -65,7 +65,7 @@ build_tm_coin_parameters = partial(build_coin_override_parameters, strategy_kind
 def _complete_hsl_payload(payload):
     from copy import deepcopy
 
-    defaults = native_hsl_policy(get_template_config()["bot"]["global"]["hsl"])
+    defaults = native_hsl_policy(get_template_config()["bot"]["global"]["risk"]["hsl"])
     params = getattr(payload, "backtest_params", {})
     payload.backtest_params = params
     params.setdefault("coins", ["BTC", "ETH"][: len(payload.bot_params_list)])
@@ -73,8 +73,9 @@ def _complete_hsl_payload(payload):
     params.setdefault("minimum_coin_age_days", [0.0, 0.0])
     params.setdefault("side_activation", {"long": True, "short": True})
     params.setdefault("forager_score_hysteresis", {"long": 0.0, "short": 0.0})
-    params.setdefault("unstuck_memory_ema_span_minutes", 1440.0)
-    params.setdefault("loss_gate_memory_ema_span_minutes", 1440.0)
+    params.setdefault("realized_loss_memory_ema_span_minutes", 1440.0)
+    params.setdefault("loss_gate_enabled", False)
+    params.setdefault("loss_gate_max_drawdown_fraction", None)
     old = params.get("equity_hard_stop_loss", {})
     if "mode" in old:
         return
@@ -108,7 +109,7 @@ def test_hsl_payload_fixture_uses_native_threshold_names_and_retains_explicit_pi
     _complete_hsl_payload(payload)
     native = payload.backtest_params["equity_hard_stop_loss"]
     assert native["coins"]["BTC"][0]["drawdown_threshold_fraction"] == 0.27
-    default_threshold = get_template_config()["bot"]["global"]["hsl"]["drawdown_threshold_fraction"]
+    default_threshold = get_template_config()["bot"]["global"]["risk"]["hsl"]["drawdown_threshold_fraction"]
     assert native["coins"]["BTC"][1]["drawdown_threshold_fraction"] == default_threshold
     assert native["portfolio"]["drawdown_threshold_fraction"] == default_threshold
     for policy in [*native["coins"]["BTC"], *native["sides"], native["portfolio"]]:
@@ -122,9 +123,12 @@ def test_proxy_constructors_reject_exact_only_metrics_before_setup(
     torch = pytest.importorskip("torch")
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
 
+    config = get_expanded_config_prototype()
+    for side in ("long", "short"):
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
     with pytest.raises(ValueError, match="GPU core metrics are not implemented"):
         proxy_cls(
-            config=get_template_config(),
+            config=config,
             hlcvs=None,
             mss={},
             btc=None,
@@ -164,9 +168,9 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         "filter_by_min_effective_cost": {"long": False, "short": False},
         "dynamic_wel_by_tradability": True,
         "hedge_mode": False,
-        "loss_gate_max_drawdown_fraction": 1.0,
-        "unstuck_memory_ema_span_minutes": 43200.0,
-        "loss_gate_memory_ema_span_minutes": 43200.0,
+        "loss_gate_enabled": False,
+        "loss_gate_max_drawdown_fraction": None,
+        "realized_loss_memory_ema_span_minutes": 43200.0,
         "market_order_slippage_fraction": 0.0005,
         "market_orders_allowed": False,
         "market_order_near_touch_fraction": 0.001,
@@ -723,10 +727,8 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     for side in ("long", "short"):
         config["bot"][side]["enabled"] = True
         config['bot'][side]['risk'].update({'max_positions': 2, 'total_wallet_exposure_limit_ratio': 1.0, 'position_exposure_enforcer': {'enabled': strategy_kind == 'trailing_martingale', 'threshold_ratio': 0.7}, 'total_exposure_enforcer': {'enabled': True, 'policy': 'reduce_portfolio', 'threshold_ratio': 0.8}})
-        # Construction must retain the fused shared-account path when both
-        # directional surfaces participate in global auto-unstuck selection.
-        config["bot"][side]["unstuck"]["enabled"] = True
-        config["bot"][side]["hsl"]["enabled"] = True
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
+        config["bot"][side]["risk"]["hsl"]["enabled"] = True
         for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
             strategy = config["bot"][side]["strategy"][strategy_kind]
             span = (
@@ -734,7 +736,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
                 if strategy_kind == "trailing_martingale"
                 else strategy
             )[key]
-            config["bot"][side]["unstuck"][key] = span
+            config["bot"][side]["risk"]["unstuck"][key] = span
             strategy_bounds = config["optimize"]["bounds"][side]["strategy"][
                 strategy_kind
             ]
@@ -746,7 +748,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
                 span,
                 span,
             ]
-            config["optimize"]["bounds"][side]["unstuck"][key] = [span, span]
+            config["optimize"]["bounds"][side]["risk"]["unstuck"][key] = [span, span]
         flat = flatten_shared_bot_side(config["bot"][side])
 
     def bot_payload(side, coin):
@@ -810,7 +812,8 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             "first_timestamp_ms": 0,
             "equity_floor_fraction": 0.05,
             "filter_by_min_effective_cost": {"long": True, "short": True},
-            "loss_gate_max_drawdown_fraction": 1.0,
+            "loss_gate_enabled": False,
+        "loss_gate_max_drawdown_fraction": None,
             "market_order_slippage_fraction": 0.0,
             "hedge_mode": config['bot']["portfolio"]['hedge_mode'],
         },
@@ -1152,7 +1155,6 @@ def test_single_coin_unstuck_packs_exact_rust_inputs():
             "unstuck_ema_span_1_minutes": 211.75,
             "unstuck_enabled": True,
             "unstuck_ema_gating_enabled": False,
-            "unstuck_close_fraction": 0.125,
             "unstuck_ema_distance_fraction": -0.01,
             "unstuck_loss_allowance_fraction": 0.02,
             "unstuck_exposure_trigger_ratio": 0.85,
@@ -1162,7 +1164,6 @@ def test_single_coin_unstuck_packs_exact_rust_inputs():
         "unstuck_ema_span_1_minutes": 211.75,
         "unstuck_enabled": 1.0,
         "unstuck_ema_gating_enabled": 0.0,
-        "unstuck_close_fraction": 0.125,
         "unstuck_ema_distance_fraction": -0.01,
         "unstuck_loss_allowance_fraction": 0.02,
         "unstuck_exposure_trigger_ratio": 0.85,
@@ -1425,8 +1426,7 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                     "unstuck_ema_span_1_minutes": 211.75,
                     "unstuck_enabled": True,
                     "unstuck_ema_gating_enabled": False,
-                    "unstuck_close_fraction": 0.125,
-                    "unstuck_ema_distance_fraction": -0.01,
+                            "unstuck_ema_distance_fraction": -0.01,
                     "unstuck_loss_allowance_fraction": 0.02,
                     "unstuck_exposure_trigger_ratio": 0.85,
                 }
@@ -1444,19 +1444,19 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                         },
                         "entry_cooldown": {"base_duration_minutes": 15.0},
                         "risk": {
+                            "unstuck": {
+                                "ema_span_0_minutes": 17.25,
+                                "ema_span_1_minutes": 211.75,
+                                "enabled": True,
+                                "ema_gating_enabled": False,
+                                "ema_distance_fraction": -0.01,
+                                "loss_allowance_fraction": 0.02,
+                                "exposure_trigger_ratio": 0.85,
+                            },
                             "we_excess_allowance_fraction": 0.25,
                         },
                         "wallet_exposure_limit_ratio": 0.4,
-                        "unstuck": {
-                            "ema_span_0_minutes": 17.25,
-                            "ema_span_1_minutes": 211.75,
-                            "enabled": True,
-                            "ema_gating_enabled": False,
-                            "close_fraction": 0.125,
-                            "ema_distance_fraction": -0.01,
-                            "loss_allowance_fraction": 0.02,
-                            "exposure_trigger_ratio": 0.85,
-                        },
+
                     }
                 }
             }
@@ -1483,7 +1483,7 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
     assert matrix[1, 11] == pytest.approx(0.4)
     assert matrix[1, 12] == pytest.approx(0.25)
     assert matrix[1, 13:19].tolist() == pytest.approx(
-        [1.0, 0.0, 0.125, -0.01, 0.02, 0.85]
+        [1.0, 0.0, np.nan, -0.01, 0.02, 0.85], nan_ok=True
     )
     start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
     assert np.isnan(matrix[1, 19:start]).all()
@@ -1810,7 +1810,7 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
         "cooldown_after_red_minutes": 12.5,
         "panic_close_order_type": "market",
     }
-    config = {"coin_overrides": {"ETH": {"bot": {"long": {"hsl": hsl_patch}}}}}
+    config = {"coin_overrides": {"ETH": {"bot": {"long": {"risk": {"hsl": hsl_patch}}}}}}
 
     matrix, contract = build_ema_coin_parameters(
         config=config,
@@ -1855,7 +1855,7 @@ def test_multicoin_coin_overrides_reject_invalid_hsl_panic_order_type():
     _complete_hsl_payload(payload)
     config = {
         "coin_overrides": {
-            "ETH": {"bot": {"long": {"hsl": {"panic_close_order_type": "makret"}}}}
+            "ETH": {"bot": {"long": {"risk": {"hsl": {"panic_close_order_type": "makret"}}}}}
         }
     }
 
@@ -1945,8 +1945,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                     "risk_wel_enforcer_threshold_ratio": 0.8,
                     "unstuck_enabled": True,
                     "unstuck_ema_gating_enabled": False,
-                    "unstuck_close_fraction": 0.125,
-                    "unstuck_ema_distance_fraction": -0.01,
+                            "unstuck_ema_distance_fraction": -0.01,
                     "unstuck_loss_allowance_fraction": 0.02,
                     "unstuck_exposure_trigger_ratio": 0.85,
                 }
@@ -1974,6 +1973,13 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                         },
                         "entry_cooldown": {"base_duration_minutes": 15.0},
                         "risk": {
+                            "unstuck": {
+                                "enabled": True,
+                                "ema_gating_enabled": False,
+                                "ema_distance_fraction": -0.01,
+                                "loss_allowance_fraction": 0.02,
+                                "exposure_trigger_ratio": 0.85,
+                            },
                             "we_excess_allowance_fraction": 0.25,
                             "position_exposure_enforcer": {
                                 "enabled": True,
@@ -1981,14 +1987,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                             },
                         },
                         "wallet_exposure_limit_ratio": 0.4,
-                        "unstuck": {
-                            "enabled": True,
-                            "ema_gating_enabled": False,
-                            "close_fraction": 0.125,
-                            "ema_distance_fraction": -0.01,
-                            "loss_allowance_fraction": 0.02,
-                            "exposure_trigger_ratio": 0.85,
-                        },
+
                     }
                 }
             }
@@ -2021,7 +2020,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
     assert matrix[1, 26] == pytest.approx(1.0)
     assert matrix[1, 27] == pytest.approx(0.8)
     assert matrix[1, 28:34].tolist() == pytest.approx(
-        [1.0, 0.0, 0.125, -0.01, 0.02, 0.85]
+        [1.0, 0.0, np.nan, -0.01, 0.02, 0.85], nan_ok=True
     )
     assert np.isnan(
         matrix[
@@ -2202,7 +2201,8 @@ def _suite_batch_proxy():
         )
     }
     proxy.checkpoint_contract = dict(
-        base_params={"long": {"n_positions": 4}}, backtest={"loss_gate_max_drawdown_fraction": 1}
+        base_params={"long": {"n_positions": 4}},
+        backtest={"loss_gate_enabled": False, "loss_gate_max_drawdown_fraction": None}
     )
     proxy.coin_override_contract = {"coins": ["A", "B"]}
     proxy.needed_metrics = {"cagr_fraction_strategy_equity"}
@@ -2303,15 +2303,25 @@ def test_suite_materialization_preserves_parameter_and_metric_defaults():
     assert original == [{"long_ema_span_0_minutes": 64}]
 
 
-@pytest.mark.parametrize("fraction", [0.0, 0.1, 0.99999999, 1.0, 1e308])
-def test_realized_gate_fraction_uses_shared_nearest_f32_graph(fraction):
-    pytest.importorskip("torch")
-    from optimization.gpu.mps_kernel import _encode_loss_gate_max_drawdown_fraction
+def test_gpu_config_rejects_unsupported_risk_policy_before_dispatch():
+    from config.gpu import validate_gpu_backtest_config
 
-    assert _encode_loss_gate_max_drawdown_fraction(fraction) == float(np.float32(min(fraction, 1.0)))
-    if fraction == 0.99999999:
-        # The separately packed configured flag must preserve this active gate.
-        assert fraction < 1.0 and _encode_loss_gate_max_drawdown_fraction(fraction) == 1.0
+    config = get_expanded_config_prototype()
+    for side in ("long", "short"):
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
+    realization = config["bot"]["portfolio"]["risk"]["loss_realization"]
+    validate_gpu_backtest_config(config)
+    realization["loss_gate"]["max_realized_drawdown_fraction"] = 0.0
+    validate_gpu_backtest_config(config)
+    realization["loss_gate"]["enabled"] = True
+    with pytest.raises(ValueError, match="realized-loss close sizing.*CPU"):
+        validate_gpu_backtest_config(config)
+    realization["loss_gate"]["enabled"] = False
+    config["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"risk": {"unstuck": {"enabled": True}}}}}
+    }
+    with pytest.raises(ValueError, match="unstuck exposure sizing.*CPU"):
+        validate_gpu_backtest_config(config)
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])

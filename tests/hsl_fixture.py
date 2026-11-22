@@ -16,13 +16,14 @@ def load_fake_hsl_config():
 
 
 def set_risk_memory_spans(config, span):
-    """Author each independent policy with a common test-fixture value."""
+    """Set the fixture's HSL and shared realized-loss memory spans."""
+    bot = config["bot"]
     for side in ("long", "short"):
-        config["bot"][side]["hsl"]["memory_ema_span_minutes"] = span
-    if config["bot"]["portfolio"]["hsl"]["scope"] == "portfolio":
-        config["bot"]["portfolio"]["hsl"]["memory_ema_span_minutes"] = span
-    config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = span
-    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = span
+        bot[side]["risk"]["hsl"]["memory_ema_span_minutes"] = span
+    portfolio_risk = bot["portfolio"]["risk"]
+    if portfolio_risk["hsl"]["scope"] == "portfolio":
+        portfolio_risk["hsl"]["memory_ema_span_minutes"] = span
+    portfolio_risk["loss_realization"]["memory_ema_span_minutes"] = span
 
 
 def mutable_runtime_fixture(config):
