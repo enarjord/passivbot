@@ -295,10 +295,8 @@ def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
 
 
 def _bitunix_uncovered_close_candidates(bot, orders: list[dict], snapshot) -> set[int]:
-    """Find sole Rust close candidates for confirmed, uncovered hedge positions."""
-    if getattr(bot, "exchange", None) != "bitunix" or not (
-        getattr(bot, "_config_hedge_mode", False) and getattr(bot, "hedge_mode", False)
-    ):
+    """Find sole Rust close candidates in confirmed, uncovered Bitunix scopes."""
+    if getattr(bot, "exchange", None) != "bitunix" or not getattr(bot, "hedge_mode", False):
         return set()
     if snapshot is None or snapshot.account_invalidation_generation != getattr(
         bot, "_account_invalidation_generation", 0
@@ -331,8 +329,9 @@ def _bitunix_uncovered_close_candidates(bot, orders: list[dict], snapshot) -> se
             order.get("reduce_only") is True
             and pside in close_sides
             and order.get("side") == close_sides[pside]
+            and (scope := _cancel_first_scope(bot, order)) is not None
         ):
-            by_scope[order["symbol"], pside].append(order)
+            by_scope[scope].append(order)
     if not by_scope:
         return set()
 
@@ -346,18 +345,20 @@ def _bitunix_uncovered_close_candidates(bot, orders: list[dict], snapshot) -> se
             return set()
         symbol, pside, side = order["symbol"], order.get("position_side"), order.get("side")
         if pside not in close_sides or side not in {"buy", "sell"}:
-            by_scope.pop((symbol, "long"), None)
-            by_scope.pop((symbol, "short"), None)
+            for possible_pside in ("long", "short", ""):
+                by_scope.pop((symbol, possible_pside), None)
         elif side == close_sides[pside]:
-            by_scope.pop((symbol, pside), None)
+            by_scope.pop(_cancel_first_scope(bot, order), None)
 
     candidates = set()
-    for (symbol, pside), closes in by_scope.items():
+    for closes in by_scope.values():
         if len(closes) != 1 or closes[0].get("type") != "limit":
             continue
-        size = bot.positions.get(symbol, {}).get(pside, {}).get("size", 0.0)
+        [close] = closes
+        positions = bot.positions.get(close["symbol"], {})
+        size = positions.get(close["position_side"], {}).get("size", 0.0)
         if math.isfinite(size) and size != 0.0:
-            candidates.add(id(closes[0]))
+            candidates.add(id(close))
     return candidates
 
 

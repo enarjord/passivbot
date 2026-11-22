@@ -779,14 +779,16 @@ async def test_capacity_selects_later_admissible_order_after_churn_deferral(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("deferred_sibling", [False, True])
+@pytest.mark.parametrize("strategy_hedge_mode", [False, True])
 async def test_confirmed_uncovered_bitunix_close_executes_after_replan(
-    execution_shell, deferred_sibling
+    execution_shell, deferred_sibling, strategy_hedge_mode
 ):
     from live.freshness import FreshnessLedger
     from live.planning_snapshot import PlanningSnapshot
 
     bot = _PlanBot()
     bot.exchange = "bitunix"
+    bot._config_hedge_mode = strategy_hedge_mode
     ledger = FreshnessLedger()
     bot._ensure_freshness_ledger = lambda: ledger
     bot._order_churn_gate_state = OrderChurnGateState()

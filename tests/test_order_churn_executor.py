@@ -102,14 +102,18 @@ def test_allowance_blocks_only_far_churn_evidenced_ordinary_orders():
         ("account_invalidated", False),
         ("multiple_close_candidates", False),
         ("missing_market_distance", False),
-        ("one_way", False),
+        ("one_way_empty", True),
+        ("one_way_opposite_side_resting", False),
+        ("one_way_opposing_close_candidate", False),
+        ("venue_one_way", False),
         ("other_connector", False),
     ],
 )
 def test_bitunix_churn_allowance_for_sole_uncovered_close(state, exempt):
     bot = _Bot()
     bot.exchange = "weex" if state == "other_connector" else "bitunix"
-    bot.hedge_mode = bot._config_hedge_mode = state != "one_way"
+    bot.hedge_mode = state != "venue_one_way"
+    bot._config_hedge_mode = not state.startswith("one_way_")
     bot._account_invalidation_generation = 3
     bot._authoritative_pending_confirmations = {}
     bot.values["max_n_creations_per_batch"] = 1
@@ -124,16 +128,16 @@ def test_bitunix_churn_allowance_for_sole_uncovered_close(state, exempt):
     symbol = close["symbol"]
     bot.positions = {symbol: {"long": {"size": 0.0 if state == "flat" else 2.0}}}
     bot.fetched_open_orders = []
-    if state in {"opposite_side_resting", "partially_covered", "unknown_resting_side"}:
+    if state in {"opposite_side_resting", "one_way_opposite_side_resting"}:
+        bot.fetched_open_orders = [
+            {"symbol": symbol, "position_side": "short", "side": "buy", "qty": 0.25}
+        ]
+    elif state in {"partially_covered", "unknown_resting_side"}:
         bot.fetched_open_orders = [
             {
                 "symbol": symbol,
-                "position_side": "short" if state == "opposite_side_resting" else "long",
-                "side": {
-                    "opposite_side_resting": "buy",
-                    "partially_covered": "sell",
-                    "unknown_resting_side": None,
-                }[state],
+                "position_side": "long",
+                "side": "sell" if state == "partially_covered" else None,
                 "qty": 0.25,
             }
         ]
@@ -164,6 +168,10 @@ def test_bitunix_churn_allowance_for_sole_uncovered_close(state, exempt):
         bot._account_invalidation_generation += 1
     elif state == "multiple_close_candidates":
         orders.append(dict(close, name="other_close", price=102.0))
+    elif state == "one_way_opposing_close_candidate":
+        orders.append(
+            dict(close, name="short_close", position_side="short", side="buy")
+        )
     elif state == "missing_market_distance":
         del close["_churn_gate_market_distance"]
 
@@ -174,6 +182,7 @@ def test_bitunix_churn_allowance_for_sole_uncovered_close(state, exempt):
     expected_reason = {
         "confirmed_empty": "uncovered_close_exempt",
         "opposite_side_resting": "uncovered_close_exempt",
+        "one_way_empty": "uncovered_close_exempt",
         "missing_market_distance": "market_distance_unavailable",
     }.get(state, "allowance_exhausted")
     assert close["_churn_gate_reason"] == expected_reason
