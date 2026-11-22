@@ -11,7 +11,9 @@ from live.executor import (
     _apply_creation_batch_capacity,
     _apply_order_churn_admission,
 )
+from live.freshness import FreshnessLedger
 from live.order_churn_gate import OrderChurnGateState
+from live.planning_snapshot import PlanningSnapshot
 
 
 def _order(
@@ -54,6 +56,10 @@ class _Bot:
         return self.values[key]
 
     @staticmethod
+    def _loss_gate_enabled() -> bool:
+        return False
+
+    @staticmethod
     def _is_market_execution_order(order: dict) -> bool:
         return order.get("type") == "market"
 
@@ -85,6 +91,105 @@ def test_allowance_blocks_only_far_churn_evidenced_ordinary_orders():
         "critical",
     ]
     assert far["_churn_gate_reason"] == "allowance_exhausted"
+
+
+@pytest.mark.parametrize(
+    "state, exempt",
+    [
+        ("confirmed_empty", True),
+        ("opposite_side_resting", True),
+        ("partially_covered", False),
+        ("unknown_resting_side", False),
+        ("flat", False),
+        ("awaiting_confirmation", False),
+        ("cohort_changed", False),
+        ("account_invalidated", False),
+        ("multiple_close_candidates", False),
+        ("missing_market_distance", False),
+        ("one_way_empty", True),
+        ("one_way_opposite_side_resting", False),
+        ("one_way_opposing_close_candidate", False),
+        ("venue_one_way", False),
+        ("other_connector", False),
+    ],
+)
+def test_bitunix_churn_allowance_for_sole_uncovered_close(state, exempt):
+    bot = _Bot()
+    bot.exchange = "weex" if state == "other_connector" else "bitunix"
+    bot.hedge_mode = state != "venue_one_way"
+    bot._config_hedge_mode = not state.startswith("one_way_")
+    bot._account_invalidation_generation = 3
+    bot._authoritative_pending_confirmations = {}
+    bot.values["max_n_creations_per_batch"] = 1
+    _fill_allowance(bot)
+    entry = _order("unrelated", churn=False, distance=None)
+    close = dict(
+        _order("replacement"),
+        side="sell",
+        reduce_only=True,
+        pb_order_type="close_grid_long",
+    )
+    symbol = close["symbol"]
+    bot.positions = {symbol: {"long": {"size": 0.0 if state == "flat" else 2.0}}}
+    bot.fetched_open_orders = []
+    if state in {"opposite_side_resting", "one_way_opposite_side_resting"}:
+        bot.fetched_open_orders = [
+            {"symbol": symbol, "position_side": "short", "side": "buy", "qty": 0.25}
+        ]
+    elif state in {"partially_covered", "unknown_resting_side"}:
+        bot.fetched_open_orders = [
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "sell" if state == "partially_covered" else None,
+                "qty": 0.25,
+            }
+        ]
+    ledger = FreshnessLedger()
+    bot._ensure_freshness_ledger = lambda: ledger
+    ledger.begin_epoch()
+    surfaces = {"positions", "open_orders"}
+    for surface in surfaces:
+        ledger.stamp(surface, signature=(), now_ms=1000)
+    snapshot = PlanningSnapshot.capture(
+        ts_ms=1000,
+        exchange=bot.exchange,
+        user="test",
+        ledger=ledger,
+        required_surfaces=surfaces,
+        min_epochs={surface: ledger.epoch for surface in surfaces},
+        symbols=(),
+        market_snapshots={},
+        market_snapshot_max_age_ms=1000,
+        account_invalidation_generation=bot._account_invalidation_generation,
+    )
+    orders = [entry, close]
+    if state == "awaiting_confirmation":
+        bot._authoritative_pending_confirmations["open_orders"] = ledger.epoch + 1
+    elif state == "cohort_changed":
+        ledger.stamp("open_orders", signature=("changed",), now_ms=1001)
+    elif state == "account_invalidated":
+        bot._account_invalidation_generation += 1
+    elif state == "multiple_close_candidates":
+        orders.append(dict(close, name="other_close", price=102.0))
+    elif state == "one_way_opposing_close_candidate":
+        orders.append(
+            dict(close, name="short_close", position_side="short", side="buy")
+        )
+    elif state == "missing_market_distance":
+        del close["_churn_gate_market_distance"]
+
+    admitted = _apply_order_churn_admission(bot, orders, planning_snapshot=snapshot)
+    selected = _apply_creation_batch_capacity(bot, admitted)
+
+    assert selected == ([close] if exempt else [entry])
+    expected_reason = {
+        "confirmed_empty": "uncovered_close_exempt",
+        "opposite_side_resting": "uncovered_close_exempt",
+        "one_way_empty": "uncovered_close_exempt",
+        "missing_market_distance": "market_distance_unavailable",
+    }.get(state, "allowance_exhausted")
+    assert close["_churn_gate_reason"] == expected_reason
 
 
 def test_unsupported_connector_bypasses_policy():
@@ -136,6 +241,24 @@ def test_create_capacity_preserves_risk_priority():
 
     assert [order["name"] for order in admitted] == ["critical", "ordinary"]
     assert another["_churn_gate_reason"] == "batch_capacity"
+
+
+def test_capacity_preserves_native_close_priority_when_loss_gate_enabled():
+    bot = _Bot()
+    bot.values["max_n_creations_per_batch"] = 1
+    bot._loss_gate_enabled = lambda: True
+    preferred = dict(
+        _order("native_priority"), side="sell", reduce_only=True, pb_order_type="close_grid_long"
+    )
+    uncovered = dict(
+        preferred,
+        name="uncovered",
+        symbol="ETH/USDT:USDT",
+        _churn_gate_reason="uncovered_close_exempt",
+    )
+
+    # The caller has already sorted the orders by native close-allocation priority.
+    assert _apply_creation_batch_capacity(bot, [preferred, uncovered]) == [preferred]
 
 
 def test_capacity_after_admission_does_not_starve_later_admissible_order():

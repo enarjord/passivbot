@@ -784,6 +784,89 @@ async def test_capacity_selects_later_admissible_order_after_churn_deferral(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("deferred_sibling", [False, True])
+@pytest.mark.parametrize("strategy_hedge_mode", [False, True])
+async def test_confirmed_uncovered_bitunix_close_executes_after_replan(
+    execution_shell, deferred_sibling, strategy_hedge_mode
+):
+    from live.freshness import FreshnessLedger
+    from live.planning_snapshot import PlanningSnapshot
+
+    bot = _PlanBot()
+    bot.exchange = "bitunix"
+    bot._config_hedge_mode = strategy_hedge_mode
+    ledger = FreshnessLedger()
+    bot._ensure_freshness_ledger = lambda: ledger
+    bot._order_churn_gate_state = OrderChurnGateState()
+    bot._order_churn_gate_state.record_action_attempts(
+        1, now_monotonic=executor.time.monotonic()
+    )
+    bot._authoritative_pending_confirmations = {}
+    bot.live_value = {
+        "max_n_creations_per_batch": 1,
+        "order_replacement_churn_gate_activation_count": 1,
+        "order_replacement_churn_gate_window_minutes": 10.0,
+        "order_replacement_churn_gate_market_distance_fraction": 0.005,
+    }.__getitem__
+    close = dict(
+        _order("replacement"),
+        side="sell",
+        reduce_only=True,
+        pb_order_type="close_grid_long",
+        _churn_evidence=True,
+        _churn_gate_market_distance=0.01,
+    )
+    old = dict(close, id="old", price=98.0)
+    symbol = close["symbol"]
+    bot.positions = {symbol: {"long": {"size": 2.0}}}
+    bot.fetched_open_orders = [old]
+
+    def capture_account():
+        ledger.begin_epoch()
+        signatures = {
+            "positions": ((symbol, "long", 2.0),),
+            "open_orders": tuple(order["id"] for order in bot.fetched_open_orders),
+        }
+        for surface, signature in signatures.items():
+            ledger.stamp(surface, signature, now_ms=1000)
+        bot._current_planning_snapshot = PlanningSnapshot.capture(
+            ts_ms=1000,
+            exchange=bot.exchange,
+            user="test",
+            ledger=ledger,
+            required_surfaces=signatures,
+            min_epochs=dict.fromkeys(signatures, ledger.epoch),
+            symbols=(),
+            market_snapshots={},
+            market_snapshot_max_age_ms=1000,
+        )
+
+    capture_account()
+    await executor.execute_order_plan(bot, [old], [close])
+    assert bot.cancelled == [old]
+    assert bot.created == []
+    assert bot.confirmations == [{"balance", "positions", "open_orders", "fills"}]
+
+    bot.fetched_open_orders = []
+    capture_account()
+    entry = dict(_order("entry"), symbol="ETH/USDT:USDT")
+    plan = [entry, close]
+    if deferred_sibling:
+        sibling = dict(close, name="recent-close", price=103.0)
+        plan.append(sibling)
+        bot.order_was_recently_updated = lambda order: 1000 if order is sibling else 0
+    await executor.execute_order_plan(bot, [], plan)
+
+    if deferred_sibling:
+        assert bot.created == [entry]
+        assert close["_churn_gate_reason"] == "allowance_exhausted"
+    else:
+        assert bot.created == [close]
+        assert close["_churn_gate_reason"] == "uncovered_close_exempt"
+        assert entry["_churn_gate_reason"] == "batch_capacity"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "dirty_stage", ["before_execution", "configuration", "market_refresh"]
 )

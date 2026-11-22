@@ -405,7 +405,9 @@ The account-wide replacement-churn policy emits structured, monitor-only summari
   by account-state normalization do not keep a departed symbol's churn history alive.
 - `order.churn_admission` reports one bounded final-admission aggregation after exchange
   configuration and the final fresh-market check, including rolling create-attempt count, threshold,
-  decision reasons, and sampled market distances.
+  decision reasons, and sampled market distances. The `uncovered_close_exempt`
+  decision identifies the sole reduce-only limit close in a Bitunix cancel-first
+  scope admitted over the economy allowance with confirmed zero resting close coverage.
 - `order.churn_actions_accounted` records logical create attempts debited immediately before the
   connector create call, plus the resulting rolling count. Configuration writes and cancellations
   are excluded from the window; the retained `action_kind` field is therefore `create`.

@@ -266,13 +266,17 @@ def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
         if callable(live_value)
         else len(orders)
     )
-    prioritized_orders = [
-        order
-        for _index, order in sorted(
-            enumerate(orders),
-            key=lambda item: (0 if _order_is_risk_critical(item[1]) else 1, item[0]),
-        )
-    ]
+    # Keep the Rust close allocation order when the caller applied the loss gate.
+    prefer_uncovered = any(
+        order.get("_churn_gate_reason") == "uncovered_close_exempt" for order in orders
+    ) and not bot._loss_gate_enabled()
+    prioritized_orders = sorted(
+        orders,
+        key=lambda order: (
+            not _order_is_risk_critical(order),
+            not prefer_uncovered or order.get("_churn_gate_reason") != "uncovered_close_exempt",
+        ),
+    )
     selected = prioritized_orders[:max_batch]
     deferred = prioritized_orders[max_batch:]
     for order in deferred:
@@ -294,7 +298,81 @@ def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
     return selected
 
 
-def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
+def _bitunix_uncovered_close_candidates(bot, orders: list[dict], snapshot) -> set[int]:
+    """Find sole Rust close candidates in confirmed, uncovered Bitunix scopes."""
+    if getattr(bot, "exchange", None) != "bitunix" or not getattr(bot, "hedge_mode", False):
+        return set()
+    if snapshot is None or snapshot.account_invalidation_generation != getattr(
+        bot, "_account_invalidation_generation", 0
+    ):
+        return set()
+
+    surfaces = {"positions", "open_orders"}
+    stamps = {stamp.name: stamp for stamp in snapshot.surfaces if stamp.name in surfaces}
+    ledger = bot._ensure_freshness_ledger()
+    pending = getattr(bot, "_authoritative_pending_confirmations", {}) or {}
+    if (
+        set(stamps) != surfaces
+        or ledger.epoch != snapshot.epoch
+        or any(ledger.surface_epoch(name) < epoch for name, epoch in pending.items())
+        or any(
+            stamp.updated_ms <= 0
+            or stamp.epoch < max(1, stamp.min_epoch)
+            or ledger.surface_epoch(name) != stamp.epoch
+            or ledger.surface_signature(name) != stamp.signature
+            for name, stamp in stamps.items()
+        )
+    ):
+        return set()
+
+    close_sides = {"long": "sell", "short": "buy"}
+    by_scope = defaultdict(list)
+    for order in orders:
+        pside = order.get("position_side")
+        if (
+            order.get("reduce_only") is True
+            and pside in close_sides
+            and order.get("side") == close_sides[pside]
+            and (scope := _cancel_first_scope(bot, order)) is not None
+        ):
+            by_scope[scope].append(order)
+    if not by_scope:
+        return set()
+
+    # Use the committed exchange snapshot rather than the local order list,
+    # which can include optimistic changes from recent cancel/create responses.
+    resting_orders = getattr(bot, "fetched_open_orders", None)
+    if not isinstance(resting_orders, list):
+        return set()
+    for order in resting_orders:
+        if not isinstance(order, dict) or not order.get("symbol"):
+            return set()
+        symbol, pside, side = order["symbol"], order.get("position_side"), order.get("side")
+        if pside not in close_sides or side not in {"buy", "sell"}:
+            for possible_pside in ("long", "short", ""):
+                by_scope.pop((symbol, possible_pside), None)
+        elif side == close_sides[pside]:
+            by_scope.pop(_cancel_first_scope(bot, order), None)
+
+    candidates = set()
+    for closes in by_scope.values():
+        if len(closes) != 1 or closes[0].get("type") != "limit":
+            continue
+        [close] = closes
+        positions = bot.positions.get(close["symbol"], {})
+        size = positions.get(close["position_side"], {}).get("size", 0.0)
+        if math.isfinite(size) and size != 0.0:
+            candidates.add(id(close))
+    return candidates
+
+
+def _apply_order_churn_admission(
+    bot,
+    orders: list[dict],
+    *,
+    planning_snapshot=None,
+    planned_creations: list[dict] | None = None,
+) -> list[dict]:
     if not orders:
         return []
     if not connector_supports_order_churn_gate(bot):
@@ -356,6 +434,9 @@ def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
         admission[id(order)] = ("ready", signed_distance <= threshold)
     selected: list[dict] = []
     deferred: list[dict] = []
+    if planned_creations is None:
+        planned_creations = admission_orders
+    uncovered_close_candidates = None
     for order in admission_orders:
         churn_evidenced = bool(order.get("_churn_evidence"))
         admission_status, exempt = admission[id(order)]
@@ -369,10 +450,16 @@ def _apply_order_churn_admission(bot, orders: list[dict]) -> list[dict]:
             and not exempt
             and projected_usage + 1 > activation_count
         ):
-            deferred.append(order)
-            order["_churn_gate_reason"] = "allowance_exhausted"
-            continue
-        if not churn_evidenced:
+            if uncovered_close_candidates is None:
+                uncovered_close_candidates = _bitunix_uncovered_close_candidates(
+                    bot, planned_creations, planning_snapshot
+                )
+            if id(order) not in uncovered_close_candidates:
+                deferred.append(order)
+                order["_churn_gate_reason"] = "allowance_exhausted"
+                continue
+            reason = "uncovered_close_exempt"
+        elif not churn_evidenced:
             reason = "no_churn_evidence"
         elif bot._is_market_execution_order(order):
             reason = "market_order_exempt"
@@ -624,6 +711,7 @@ async def execute_order_plan(
     """Execute a precomputed order plan against the exchange."""
     passivbot_cls = _pb_attr("Passivbot")
     snapshot = getattr(bot, "_current_planning_snapshot", None)
+    planned_creations = to_create
     planned_generation = int(
         getattr(snapshot, "account_invalidation_generation", 0) or 0
     )
@@ -1155,7 +1243,12 @@ async def execute_order_plan(
             bot, passivbot_cls, to_create_mod, order_wave
         )
         before_churn_admission = list(to_create_mod)
-        to_create_mod = _apply_order_churn_admission(bot, to_create_mod)
+        to_create_mod = _apply_order_churn_admission(
+            bot,
+            to_create_mod,
+            planning_snapshot=snapshot,
+            planned_creations=planned_creations,
+        )
         if order_wave is not None:
             order_wave["deferred_create"] += max(
                 0,

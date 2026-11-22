@@ -147,6 +147,10 @@ its own version heading. See [release status](docs/releases.md).
   coverage in close replacement diagnostics. Keep recording account
   observations after a replacement is submitted.
 
+- Let Bitunix submit the sole planned reduce-only limit close in a confirmed
+  uncovered cancel-first scope when the order churn allowance is exhausted.
+  Preserve native loss-gate priority and count the attempt in rolling usage.
+
 - Recover Binance USDⓈ-M trailing resets from a complete trade query at the exact
   position update millisecond when cached replay retains stale position residue.
   Keep trailing confirmation pending when the boundary has multiple fills or
