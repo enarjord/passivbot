@@ -36,6 +36,7 @@ from live.bitunix_create_journal import (
     WIRE_TOKEN_PATTERN,
 )
 from live.bitunix_create_recovery import BitunixCreateRecovery
+from live.candle_ws_health import MalformedCandleFallback
 from live.diagnostic_safety import bounded_exception_code
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 from passivbot import logging
@@ -2308,7 +2309,7 @@ class BitunixOrderStream:
                             if fallback:
                                 self._queue_ohlcv_fallback(
                                     malformed_symbol,
-                                    NetworkError(
+                                    MalformedCandleFallback(
                                         "Bitunix public kline websocket received "
                                         "consecutive malformed updates"
                                     ),

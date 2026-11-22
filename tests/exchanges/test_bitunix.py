@@ -1470,6 +1470,8 @@ def test_malformed_kline_warning_counts_repeats_across_symbols(caplog, monkeypat
 
 @pytest.mark.asyncio
 async def test_order_stream_routes_persistent_malformed_klines_to_one_watcher():
+    from live.candle_ws_health import MalformedCandleFallback
+
     client = _prepared_client()
     socket = _PublicKlineSocket()
     client._get_session = AsyncMock(return_value=_PublicKlineSession(socket))
@@ -1503,7 +1505,7 @@ async def test_order_stream_routes_persistent_malformed_klines_to_one_watcher():
 
     assert queue.qsize() == 1
     assert symbol in stream._ohlcv_fallback_pending
-    with pytest.raises(NetworkError, match="consecutive malformed updates"):
+    with pytest.raises(MalformedCandleFallback, match="consecutive malformed updates"):
         await stream.watch_ohlcv(symbol, "1m")
     assert symbol not in stream._ohlcv_fallback_pending
     assert stream._ohlcv_task is not None

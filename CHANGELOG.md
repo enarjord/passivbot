@@ -273,6 +273,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Aggregate repeated Bitunix malformed candle warnings across websocket subscriptions.
 
+- Keep the first Bitunix malformed-candle fallback visible and use the connector's
+  periodic summary for repeats. Other receive failures retain their own warnings.
+
 - Stream EMA Anchor tick inputs on CUDA when needed to fit long optimizer histories
   within the existing GPU memory limit.
 
