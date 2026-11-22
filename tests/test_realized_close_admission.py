@@ -602,3 +602,49 @@ def test_exact_terminal_fill_awaits_freshness_without_contradiction_warning(nati
     bot._hsl_fill_capture_interval = (1_000, 1_001)
     bot._trailing_fill_refresh_generation = 1
     assert admission.permits(bot, next_order)
+
+
+@pytest.mark.parametrize(
+    "issue, reason",
+    [
+        ("reduce_only", "realized_close_unknown_reduce_only"),
+        ("quantity", "realized_close_missing_remaining_qty"),
+        ("client_id", "realized_close_duplicate_client_order_id"),
+    ],
+)
+def test_resting_close_evidence_defers_with_bounded_warning(native, monkeypatch, issue, reason):
+    bot, _ = _bot()
+    now = [10.0]
+    diagnostics = []
+    monkeypatch.setattr(admission, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    def emit(event_type, **event):
+        diagnostic = LiveEvent(event_type, **event)
+        diagnostics.append(diagnostic)
+        return diagnostic
+
+    bot._emit_live_event = emit
+    resting = _close("A", pside="long", identifier="venue-private-id")
+    bot.open_orders["A"] = [resting]
+    if issue == "reduce_only":
+        resting.pop("reduce_only")
+    elif issue == "quantity":
+        resting.pop("qty")
+    else:
+        bot.open_orders["A"].append({**resting, "price": 98.9})
+    proposed = _close("B", pside="short", identifier="next")
+    _bind(bot, [proposed], cap=0.01)
+
+    assert not admission.permits(bot, proposed)
+    assert not admission.permits(bot, proposed)
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic.event_type == "risk.realized_close_recovery"
+    assert diagnostic.level == "warning"
+    assert diagnostic.reason_code == reason
+    assert diagnostic.data == {"pending_count": 0}
+    assert "venue-private-id" not in format_console_event(diagnostic)
+
+    now[0] += 300.0
+    assert not admission.permits(bot, proposed)
+    assert len(diagnostics) == 2

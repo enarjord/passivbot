@@ -73,21 +73,12 @@ Auto-unstuck works best when running multiple coins:
 #### Weakness of Auto-Unstuck
 Extreme black-swan events (exchange failure, stablecoin depeg, delisting, and other causes of prolonged unilateral price movement) may cause the auto-unstuck mechanism to keep taking losses and re-entering continually on an adversely moving coin. The only realistic solution to these edge cases is **human intervention** as the final backstop.
 
-#### Auto-Unstuck Threshold And Close Size
-
-`bot.<side>.unstuck.exposure_trigger_ratio` is an eligibility trigger: the position's wallet exposure divided
-by its effective WEL must be strictly greater than the threshold. It does not specify a target
-remaining position or prevent a close from crossing below that threshold.
-
-`unstuck.close_fraction` sizes each chunk from `balance * effective_wel` at the close order's price,
-while wallet exposure uses average entry price. The chunk can therefore reduce the exposure ratio
-by more or less than `close_fraction`, before accounting for rounding, exchange minimums, loss allowance
-and balance changes. See the [auto-unstuck formulas](config.bot.md#auto-unstucking) for details.
-
 #### Auto-Unstuck Exposure and Loss Allowance
 
-Auto-unstuck targets the exposure trigger. The projected position after a close must
-keep positive account balance and lower the exposure ratio without going below the
+`bot.<side>.risk.unstuck.exposure_trigger_ratio` is both the eligibility trigger and the
+post-fill exposure floor. The position's wallet exposure divided by its effective WEL
+must exceed the trigger before auto-unstuck can propose a close. A proposed close must
+leave positive account balance and lower the exposure ratio without going below the
 trigger. The exposure calculation includes the close's projected net PnL. A venue
 minimum larger than the exposure-bounded quantity makes the proposal infeasible.
 

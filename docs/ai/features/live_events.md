@@ -742,8 +742,9 @@ cap, including an active zero cap. The Rust debug profile includes bounded
 authority. `risk.realized_close_recovery` reports the pending reservation count when an
 exact terminal lookup has no usable evidence, is temporarily unavailable, or is unsupported.
 The same event reports duplicate exchange order IDs, conflicting fill identities, fills
-aggregated across multiple order IDs, and fills exceeding the submitted quantity. Lookup
-diagnostics repeat at most once every five minutes. Reservation warnings repeat at most once
+aggregated across multiple order IDs, and fills exceeding the submitted quantity. It also
+reports resting orders with unknown reduce-only status, missing remaining quantity, or
+duplicate client IDs. Lookup diagnostics repeat at most once every five minutes. Reservation warnings repeat at most once
 per reason within the same interval.
 
 Rust classifies held positions at the actual unstuck gates and reports allowance, exposure/EMA

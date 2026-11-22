@@ -15,8 +15,8 @@ standard deviation. Strategy sensitivities use `_coefficient`; forager
 Fraction denominators are declared in the generated configuration reference. In particular,
 Trailing Martingale `close.qty_fraction` uses a budget-derived full-position quantity at the
 position entry price, plus any over-budget remainder, rounded and capped by the actual position.
-Unstuck `close_fraction` converts its budget at the close price. Forager `score_hysteresis_margin`
-is an absolute normalized-score gap, without an incumbent-relative denominator.
+Unstuck sizes toward the configured exposure trigger while respecting loss allowances and venue
+limits. Forager `score_hysteresis_margin` is an absolute normalized-score gap.
 
 ## Native Forager Quantities
 

@@ -11,7 +11,7 @@ pytestmark = pytest.mark.skip(reason="GPU v9 realized-loss close sizing awaits p
 
 
 def make_inputs(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
-                hsl_mode="coin", interval_minutes=1):
+                hsl_mode="coin", interval_minutes=1, *, loss_gate_cap=None):
     config, _, markets, _, timestamps = _fixture(sides[0], coins, "initial")
     config['bot']["portfolio"]['strategy_kind'] = strategy
     config["backtest"]["candle_interval_minutes"] = interval_minutes
@@ -22,9 +22,12 @@ def make_inputs(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
     portfolio_risk = config["bot"]["portfolio"]["risk"]
     if hsl_mode == "portfolio":
         portfolio_risk["hsl"]["enabled"] = False
+    loss_gate = {"enabled": loss_gate_cap is not None}
+    if loss_gate_cap is not None:
+        loss_gate["max_realized_drawdown_fraction"] = loss_gate_cap
     portfolio_risk["loss_realization"] = {
         "memory_ema_span_minutes": memory_span,
-        "loss_gate": {"enabled": False},
+        "loss_gate": loss_gate,
     }
     count = 50
     for side in ("long", "short"):

@@ -1,40 +1,31 @@
 """Loss admission and unstuck share one continuous realized-memory fold."""
 
-from copy import deepcopy
-
 import pytest
 
 from test_gpu_hsl_multicoin import compare, raw
-from test_gpu_unstuck_lookback import make_proxy
+from test_gpu_unstuck_lookback import make_inputs
 
 torch = pytest.importorskip("torch")
 pytestmark = pytest.mark.skip(reason="GPU v9 realized-loss close sizing awaits parity with Rust")
 
 
 def loss_gate_proxy(
-    sides, coins=2, memory_span=8.0, *, unstuck=False, hsl_mode="coin", max_loss_pct=None,
+    sides, coins=2, memory_span=8.0, *, unstuck=False, hsl_mode="coin", max_loss_pct=0.0003,
     interval_minutes=1,
 ):
     from optimization.gpu.service import SharedAccountReplay
 
-    original, inputs = make_proxy(
+    candles, markets, config, exchange, btc, timestamps = make_inputs(
         sides, memory_span, strategy="ema_anchor", coins=coins, hsl_mode=hsl_mode,
-        interval_minutes=interval_minutes,
+        interval_minutes=interval_minutes, loss_gate_cap=max_loss_pct,
     )
-    del original
-    candles, markets, config, exchange, btc, timestamps = inputs
-    config = deepcopy(config)
-    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = memory_span
-    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.003 if unstuck else 0.0003
-    if max_loss_pct is not None:
-        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = max_loss_pct
     if not unstuck:
         # Each flat-price close loses only its fee. Entry fees initially exhaust
         # the gate; continuous decay later admits ordinary closes without unstuck.
         candles = candles.copy()
         candles[:, :, :3] = (101.0, 99.0, 100.4)
         for side in sides:
-            config["bot"][side]["unstuck"]["enabled"] = False
+            config["bot"][side]["risk"]["unstuck"]["enabled"] = False
     inputs = candles, markets, config, exchange, btc, timestamps
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, exchange=exchange,
@@ -53,7 +44,7 @@ def loss_gate_proxy(
     pytest.param(("long", "short"), 0.003, 8.0, 1, True, id="both-consumers"),
     pytest.param(("long",), 0.0, 8.0, 1, False, id="zero"),
     pytest.param(("long",), 0.99999999, 8.0, 1, False, id="active-rounds-one"),
-    pytest.param(("long",), 1e308, 8.0, 1, False, id="disabled-huge-finite"),
+    pytest.param(("long",), None, 8.0, 1, False, id="disabled"),
 ])
 def test_shared_gate_production_consumers_and_transport(
     strategy, sides, fraction, span, interval, unstuck
@@ -77,10 +68,8 @@ def test_shared_gate_production_consumers_and_transport(
             sides, 2, span, fraction, interval_minutes=interval,
         )
     else:
-        original, inputs = make_proxy(sides, span, strategy=strategy)
-        del original
+        inputs = make_inputs(sides, span, strategy=strategy, loss_gate_cap=fraction)
         candles, markets, config, exchange, btc, timestamps = inputs
-        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = fraction
         proxy = SharedAccountReplay(
             config=config, hlcvs=candles, mss=markets, exchange=exchange,
             btc=btc, timestamps=timestamps, batch_size=2,
@@ -89,9 +78,10 @@ def test_shared_gate_production_consumers_and_transport(
     runner, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(*inputs)
     assert len(fills) > 0
-    assert runner.loss_gate_enabled is (fraction < 1.0)
-    assert runner.settings[16 if len(sides) == 2 else 14].item() == float(fraction < 1.0)
-    assert runner.settings[5].item() == float(np.float32(min(fraction, 1.0)))
+    gate_enabled = fraction is not None
+    assert runner.loss_gate_enabled is gate_enabled
+    assert runner.settings[16 if len(sides) == 2 else 14].item() == float(gate_enabled)
+    assert runner.settings[5].item() == float(np.float32(fraction or 0.0))
     if not unstuck:
         assert runner.dispatch_unstuck_enabled is False
     assert not hasattr(runner, "_unstuck_pnl_buffers")
@@ -101,7 +91,7 @@ def test_shared_gate_production_consumers_and_transport(
         expected = sum(float(fill[9]) for fill in fills if fill[13].endswith(side))
         key = "psize" if side == "long" else "short_psize"
         assert output[key].item() == pytest.approx(abs(expected), abs=2e-5)
-    if 0.0 < fraction < 1.0 and not unstuck:
+    if gate_enabled and fraction > 0.0 and not unstuck:
         assert any(str(fill[13]).startswith("close_") for fill in fills)
     # Retained memory must survive real dispatch boundaries, then start fresh
     # on the next request. Neither operation owns an additional fill producer.
@@ -113,11 +103,11 @@ def test_shared_gate_production_consumers_and_transport(
 
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
-@pytest.mark.parametrize("max_loss_pct", [0.0, 0.5, 1.0])
+@pytest.mark.parametrize("max_loss_pct", [0.0, 0.5, None])
 def test_ema_gate_uses_constant_memory_without_a_history_queue(sides, max_loss_pct):
     proxy, _ = loss_gate_proxy(sides, max_loss_pct=max_loss_pct)
     runner, _ = raw(proxy, [{}])
-    enabled = max_loss_pct < 1.0
+    enabled = max_loss_pct is not None
     assert runner.loss_gate_enabled == enabled
     assert not hasattr(runner, "_unstuck_pnl_buffers")
     # Packed gate slot: single-side ABI keeps it at 14; the fused two-side
@@ -133,7 +123,9 @@ def test_ema_gate_uses_constant_memory_without_a_history_queue(sides, max_loss_p
 def test_ema_shared_decaying_gate_matches_rust(sides, coins, memory_span, unstuck):
     from backtest import run_backtest
 
-    proxy, inputs = loss_gate_proxy(sides, coins, memory_span, unstuck=unstuck)
+    proxy, inputs = loss_gate_proxy(
+        sides, coins, memory_span, unstuck=unstuck, max_loss_pct=0.003 if unstuck else 0.0003,
+    )
     runner, output = raw(proxy, [{}])
     fills, _, _ = run_backtest(*inputs)
     assert output["fill_count"].item() == len(fills)
@@ -175,12 +167,12 @@ def test_shader_validates_only_enabled_realized_memory(monkeypatch, policy, enab
         ("long", "short"),
         coins=1,
         unstuck=policy == "unstuck" and enabled,
-        max_loss_pct=1.0 if policy == "loss_gate" and not enabled else None,
+        max_loss_pct=0.0003 if policy == "loss_gate" and enabled else None,
     )
     runner, expected = raw(proxy, [{}])
     assert expected["fill_count"].item() > 0
     pack_params = runner._pack_params
-    column = runner.parameter_keys.index(f"{policy}_memory_ema_span_minutes")
+    column = runner.parameter_keys.index("realized_loss_memory_ema_span_minutes")
 
     def pack_with_invalid_span(params):
         matrix = pack_params(params).copy()

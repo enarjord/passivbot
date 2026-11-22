@@ -397,7 +397,7 @@ def _report_reservation_evidence_error(bot, reason):
         return
     deadlines[reason] = now + RECOVERY_DIAGNOSTIC_INTERVAL_SECONDS
     _report_recovery(
-        bot, reason, len(guard.realized_close_attempts),
+        bot, reason, len(getattr(guard, "realized_close_attempts", ())),
         message="unresolved close reservation evidence",
     )
 
@@ -414,18 +414,18 @@ def _reservations(bot, allocation):
             if reduce_only is False:
                 continue
             if reduce_only is not True:
-                raise ValueError("open order has unknown reduce-only status")
+                raise _ReservationEvidenceError(ReasonCodes.REALIZED_CLOSE_UNKNOWN_REDUCE_ONLY)
             order_type = _native_order_type(order)
             if order_type.startswith("close_panic_"):
                 continue
             resting_unstuck |= order_type.startswith("close_unstuck_")
             remaining = reconciler.extract_order_remaining_qty(order)
             if remaining is None:
-                raise ValueError("resting close has no authoritative remaining quantity")
+                raise _ReservationEvidenceError(ReasonCodes.REALIZED_CLOSE_MISSING_REMAINING_QTY)
             key = _identity(order)
             if key[1]:
                 if key in observed_client_ids:
-                    raise ValueError("duplicate close client order ID")
+                    raise _ReservationEvidenceError(ReasonCodes.REALIZED_CLOSE_DUPLICATE_CLIENT_ORDER_ID)
                 observed_client_ids.add(key)
             observed.append(order)
             if allocation.headroom is not None and remaining:
