@@ -1850,6 +1850,54 @@ async def test_shared_network_failure_preserves_each_symbol_and_recovery(monkeyp
     assert bot._console_candle_receive is None
 
 
+def test_malformed_receive_repeats_keep_durable_events_and_distinct_network_warnings(
+    monkeypatch, caplog
+):
+    from ccxt.base.errors import NetworkError
+    from live import candle_ws_health
+    from live.event_bus import ListEventSink, LiveEventPipeline
+
+    now = 0.0
+    monkeypatch.setattr(candle_ws_health, "time", SimpleNamespace(monotonic=lambda: now))
+    durable = ListEventSink()
+    pipeline = LiveEventPipeline(structured_sinks=[durable])
+    bot = SimpleNamespace(_live_event_pipeline=pipeline)
+    observe = candle_ws_health.observe_receive_status
+    malformed = candle_ws_health.MalformedCandleFallback("private malformed payload")
+    transport = NetworkError("private request URL")
+    try:
+        with caplog.at_level(logging.INFO):
+            observe(bot, "BTC", error=malformed)
+            now = 1.0
+            observe(bot, "ETH", error=transport)
+            now = 100.0
+            observe(bot, "ETH", error=transport)
+            now = 301.0
+            observe(bot, "BTC", error=malformed)
+            now = 302.0
+            observe(bot, "ETH", error=transport)
+            observe(bot, "ETH", recovered=True)
+            observe(bot, "BTC", recovered=True)
+            observe(bot, "BTC", error=malformed)
+        assert pipeline.flush()
+    finally:
+        pipeline.close()
+
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert ["cause=malformed_kline" in message for message in warnings] == [
+        True, False, False, True,
+    ]
+    assert "failures=2" in warnings[1]
+    assert "receive recovered symbols=2 failures=5" in caplog.text
+    assert "private" not in caplog.text
+    assert [event.data["receive_status"] for event in durable.events] == [
+        "failed", "failed", "failed", "failed", "failed", "recovered", "recovered", "failed",
+    ]
+    assert [event.data.get("receive_cause") for event in durable.events] == [
+        "malformed_kline", None, None, "malformed_kline", None, None, None, "malformed_kline",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_network_coalescing_preserves_retry_schedule_and_private_error_boundary(monkeypatch, caplog):
     from ccxt.base.errors import NetworkError

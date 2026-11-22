@@ -924,4 +924,9 @@ successful writes; other owners omit this optional field unless explicitly suppl
 
 `candle.websocket_status` retains individual CCXT receive failures and observed recovery/retirement. Console coalescing is confined to receive-stage network errors; ingestion/programming failures retain their scoped warnings. Receive recovery is recorded before downstream ingestion. Durable terminal observations survive console overflow; watcher generation ownership prevents an old retirement from clearing a replacement receive failure. Recovery covers observed failed subscriptions, not venue connectivity or REST readiness, and overflow is labeled partial. No reconnect, fallback or trading policy depends on presentation state. Candle `scope=warmup_cache` summaries describe cache windows; held close coverage and trailing input waits describe current trading impact.
 
+Bitunix's typed malformed-frame fallback sets `receive_cause=malformed_kline` on the durable
+receive event. The first such fallback in a receive episode is visible, and the connector's
+periodic drop and fallback summary covers repeats. Other receive failures keep an independent
+first warning and repeat interval within the shared receive episode.
+
 Console prefixes include bounded exchange/user identity; full user identity is also in durable events and health summaries. Timestamped command archives include a unique run suffix; stable per-user log aliases remain unchanged. Routine KuCoin re-fetches are DEBUG, while slow fetches and newly persisted fills retain their existing operator visibility.
