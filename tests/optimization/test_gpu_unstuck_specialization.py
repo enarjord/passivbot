@@ -72,19 +72,19 @@ def test_full_unstuck_ablation_preserves_raw_outputs_and_cache_transitions(
 ):
     import torch
     from optimization.gpu.service import SharedAccountReplay
-    from test_gpu_unstuck_lookback import make_proxy
+    from test_gpu_unstuck_lookback import make_inputs
     from test_gpu_hsl_multicoin import raw
 
-    original, inputs = make_proxy(sides, strategy=strategy)
-    del original
-    candles, markets, config, exchange, btc, timestamps = inputs
+    candles, markets, config, exchange, btc, timestamps = make_inputs(sides, strategy=strategy)
     for side in sides:
         config['bot'][side]['risk']['unstuck']['enabled'] = policy in {'enabled', 'coins_disabled'}
     if policy == 'coin_enabled':
-        config['coin_overrides'] = {'ETH': {'bot': {sides[-1]: {'unstuck': {'enabled': True}}}}}
+        config['coin_overrides'] = {
+            'ETH': {'bot': {sides[-1]: {'risk': {'unstuck': {'enabled': True}}}}},
+        }
     elif policy == 'coins_disabled':
         config['coin_overrides'] = {coin: {'bot': {
-            side: {'unstuck': {'enabled': False}} for side in sides
+            side: {'risk': {'unstuck': {'enabled': False}}} for side in sides
         }} for coin in ('BTC', 'ETH')}
     proxy = SharedAccountReplay(
         config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
