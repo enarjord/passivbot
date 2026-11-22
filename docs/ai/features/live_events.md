@@ -739,7 +739,9 @@ loss, binding cap and remaining headroom. The gate policy carries a boolean and 
 cap, including an active zero cap. The Rust debug profile includes bounded
 `close_allocation_sample` rows in the orchestrator return event. Live transport reports
 `realized_close_admission_deferred` when the current plan lacks account-wide reservation
-authority.
+authority. `risk.realized_close_recovery` reports the pending reservation count when an
+exact terminal lookup has no usable evidence, is temporarily unavailable, or is unsupported.
+Unchanged diagnostics repeat at most once every five minutes.
 
 Rust classifies held positions at the actual unstuck gates and reports allowance, exposure/EMA
 thresholds, projected post-fill exposure, eligibility and proposal details. Final native orders determine `selected`;

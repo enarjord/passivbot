@@ -95,10 +95,10 @@ def _build_case(name, *, candidates, dispatch_batch_size, single_bars,
         from config.schema import get_expanded_config_prototype
 
         template = generated_template(get_expanded_config_prototype(), "portfolio")
-        config["bot"]["long"].pop("hsl", None)
-        config["bot"]["short"].pop("hsl", None)
-        config["bot"]["portfolio"]["hsl"] = dict(template["bot"]["portfolio"]["hsl"])
-        config["bot"]["portfolio"]["hsl"]["enabled"] = False
+        config["bot"]["long"]["risk"].pop("hsl", None)
+        config["bot"]["short"]["risk"].pop("hsl", None)
+        config["bot"]["portfolio"]["risk"]["hsl"] = dict(template["bot"]["portfolio"]["risk"]["hsl"])
+        config["bot"]["portfolio"]["risk"]["hsl"]["enabled"] = False
         config["optimize"]["bounds"] = {}
     metrics = {"cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day"}
     replay = SharedAccountReplay(config=config, hlcvs=candles, mss=markets,

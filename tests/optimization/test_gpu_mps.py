@@ -2643,8 +2643,8 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
         risk["we_excess_allowance_fraction"] = 0.0
         risk['position_exposure_enforcer']['enabled'] = False
         risk['total_exposure_enforcer']['enabled'] = False
-        config["bot"][side]["hsl"]["enabled"] = False
-        config["bot"][side]["unstuck"]["enabled"] = False
+        config["bot"][side]["risk"]["hsl"]["enabled"] = False
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
     for side in enabled_sides:
         # This fixture uses fixed price offsets; unused volatility-dependent
         # inputs must not require an hourly bootstrap before its short warmup.
@@ -2787,10 +2787,10 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
         risk["we_excess_allowance_fraction"] = 0.0
         risk['position_exposure_enforcer']['enabled'] = False
         risk['total_exposure_enforcer']['enabled'] = False
-        config["bot"][side]["hsl"]["enabled"] = enabled
-        config["bot"][side]["hsl"]["drawdown_threshold_fraction"] = 0.9
-        config["bot"][side]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.0
-        config["bot"][side]["unstuck"]["enabled"] = False
+        config["bot"][side]["risk"]["hsl"]["enabled"] = enabled
+        config["bot"][side]["risk"]["hsl"]["drawdown_threshold_fraction"] = 0.9
+        config["bot"][side]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.0
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
     for side in enabled_sides:
         # This fixture uses fixed price offsets; unused volatility-dependent
         # inputs must not require an hourly bootstrap before its short warmup.
@@ -3571,8 +3571,8 @@ def test_mps_multicoin_forced_normal_service_matches_exact_active_symbols(
         risk["we_excess_allowance_fraction"] = 0.0
         risk['position_exposure_enforcer']['enabled'] = False
         risk['total_exposure_enforcer']['enabled'] = False
-        config["bot"][side]["hsl"]["enabled"] = False
-        config["bot"][side]["unstuck"]["enabled"] = False
+        config["bot"][side]["risk"]["hsl"]["enabled"] = False
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
     for side in enabled_sides:
         # This fixture uses fixed price offsets; unused volatility-dependent
         # inputs must not require an hourly bootstrap before its short warmup.

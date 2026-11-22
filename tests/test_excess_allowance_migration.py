@@ -76,12 +76,12 @@ def test_external_config_cannot_hide_removed_raw_policy(tmp_path, mode):
 @pytest.mark.parametrize("value", [True, False, "true", 1, None])
 def test_scaling_is_strict_boolean_and_defaults_off(value):
     source = get_expanded_config_prototype()
-    assert source["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] is False
-    source["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = value
+    assert source["bot"]["long"]["risk"]["hsl"]["scale_budget_with_excess_allowance"] is False
+    source["bot"]["long"]["risk"]["hsl"]["scale_budget_with_excess_allowance"] = value
     if type(value) is bool:
         result = prepare_config(source, verbose=False)
         assert (
-            result["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] is value
+            result["bot"]["long"]["risk"]["hsl"]["scale_budget_with_excess_allowance"] is value
         )
     else:
         with pytest.raises(TypeError, match="scale_budget_with_excess_allowance"):
@@ -91,12 +91,12 @@ def test_scaling_is_strict_boolean_and_defaults_off(value):
 def test_coin_scaling_switch_is_local_and_preserves_base_policy():
     source = get_template_config()
     source["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"hsl": {"scale_budget_with_excess_allowance": True}}}}
+        "BTC": {"bot": {"long": {"risk": {"hsl": {"scale_budget_with_excess_allowance": True}}}}}
     }
     original = deepcopy(source)
     prepared = prepare_config(source, verbose=False)
-    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] is True
-    assert prepared["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] is False
+    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["hsl"]["scale_budget_with_excess_allowance"] is True
+    assert prepared["bot"]["long"]["risk"]["hsl"]["scale_budget_with_excess_allowance"] is False
     assert source == original
 
 
@@ -105,7 +105,7 @@ def test_scaling_rejects_aggregate_scopes(mode):
     from config.hsl import generated_template
 
     source = generated_template(get_expanded_config_prototype(), mode)
-    source["bot"]["long"]["hsl"]["scale_budget_with_excess_allowance"] = True
+    source["bot"]["long"]["risk"]["hsl"]["scale_budget_with_excess_allowance"] = True
     with pytest.raises(ValueError, match="requires coin HSL mode"):
         prepare_config(source, verbose=False)
 

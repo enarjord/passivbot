@@ -17,6 +17,7 @@ from live.order_churn_gate import (
     connector_supports_order_churn_gate,
     deterministic_one_to_one_matches,
     normalize_ideal_orders,
+    order_cohort,
 )
 from passivbot_exceptions import FatalBotException
 from pure_funcs import determine_side_from_order_tuple, filter_orders, shorten_custom_id
@@ -3754,9 +3755,16 @@ def apply_order_match_tolerance(
         return to_cancel, to_create, 0
 
     gate_enabled = bot._loss_gate_enabled()
-    def exact_close(order):
-        return _order_is_reduce_only(order) and (
-            gate_enabled or _order_pb_type(order).startswith("close_unstuck_")
+    from live import realized_close_admission
+
+    def exact_close(order, *, resting=False):
+        if not _order_is_reduce_only(order):
+            return False
+        if _order_pb_type(order).startswith("close_unstuck_"):
+            return True
+        return gate_enabled and (
+            order.get("type") != "limit"
+            or realized_close_admission.spends_headroom(bot, order, resting=resting)
         )
 
     def pct_diff(a: float, b: float) -> float:
@@ -3774,9 +3782,13 @@ def apply_order_match_tolerance(
                 kept_create.append(order)
                 continue
             for idx, existing in enumerate(to_cancel):
-                if idx in used_cancel or exact_close(existing):
+                if idx in used_cancel or exact_close(existing, resting=True):
                     continue
                 try:
+                    if gate_enabled and (
+                        _order_is_reduce_only(order) or _order_is_reduce_only(existing)
+                    ) and order_cohort(order) != order_cohort(existing):
+                        continue
                     if _pb_attr("orders_matching")(
                         order,
                         existing,
@@ -3814,8 +3826,11 @@ def apply_order_match_tolerance(
             skipped,
         )
 
+    matchable_create_indices = [
+        idx for idx, order in enumerate(to_create) if not exact_close(order)
+    ]
     try:
-        current = normalize_ideal_orders(to_create)
+        current = normalize_ideal_orders([to_create[idx] for idx in matchable_create_indices])
     except (KeyError, TypeError, ValueError):
         # Current ideals are expected to be complete. Preserve the pre-existing
         # fail-open behavior here; validation at the producer boundary owns the
@@ -3825,6 +3840,8 @@ def apply_order_match_tolerance(
     matchable_cancel: list[dict] = []
     matchable_cancel_indices: list[int] = []
     for idx, order in enumerate(to_cancel):
+        if exact_close(order, resting=True):
+            continue
         try:
             normalize_ideal_orders([order])
         except (KeyError, TypeError, ValueError):
@@ -3832,26 +3849,21 @@ def apply_order_match_tolerance(
         matchable_cancel.append(order)
         matchable_cancel_indices.append(idx)
     previous = normalize_ideal_orders(matchable_cancel)
-    matches = {
-        current_idx: previous_idx
-        for current_idx, previous_idx in deterministic_one_to_one_matches(
-            current, previous, tolerance
-        ).items()
-        if not exact_close(to_create[current[current_idx].source_index])
-        and not exact_close(to_cancel[matchable_cancel_indices[previous[previous_idx].source_index]])
-    }
+    matches = deterministic_one_to_one_matches(current, previous, tolerance)
     used_cancel = {
         matchable_cancel_indices[previous[previous_idx].source_index]
         for previous_idx in matches.values()
     }
-    matched_create = {current[current_idx].source_index for current_idx in matches}
+    matched_create = {
+        matchable_create_indices[current[current_idx].source_index] for current_idx in matches
+    }
     kept_create = [
         order for idx, order in enumerate(to_create) if idx not in matched_create
     ]
     skipped = len(matches)
 
     for current_idx, previous_idx in sorted(matches.items()):
-        create_idx = current[current_idx].source_index
+        create_idx = matchable_create_indices[current[current_idx].source_index]
         order = to_create[create_idx]
         match_idx = matchable_cancel_indices[previous[previous_idx].source_index]
         try:

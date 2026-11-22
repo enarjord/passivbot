@@ -23,6 +23,13 @@ def released_risk_path(path):
     return _SCOPE_PATH.sub(r"\1\2.risk.\3", path)
 
 
+def _retired_size_selector(selector):
+    return isinstance(selector, str) and (
+        selector in {"close_fraction", "close_pct"}
+        or "unstuck.close_fraction" in selector or "unstuck_close_fraction" in selector
+    )
+
+
 def _gate(fraction, path):
     if isinstance(fraction, bool):
         raise ValueError(f"{path}: expected a finite nonnegative v8 gate fraction")
@@ -57,6 +64,9 @@ def finalize_risk_report(changes):
     """Keep authored source names and report the final public target paths."""
     for change in changes:
         new = change.get("new")
+        if change.get("path") == "optimize.fixed_params" and isinstance(new, list):
+            change["new"] = [released_risk_path(item) if isinstance(item, str) else item
+                             for item in new if not _retired_size_selector(item)]
         if not isinstance(new, dict):
             continue
         projected = {}
@@ -74,9 +84,14 @@ def finalize_risk_report(changes):
 def finalize_released_risk(config, record):
     root_bot = config.get("bot", {})
     root_positive_size = {}
+    root_explicitly_disabled = set()
     for side in ("long", "short"):
         old_policy = root_bot.get(side, {}).get("unstuck", {})
-        if isinstance(old_policy, dict) and "close_fraction" in old_policy:
+        if not isinstance(old_policy, dict):
+            continue
+        if old_policy.get("enabled") is False:
+            root_explicitly_disabled.add(side)
+        if "close_fraction" in old_policy:
             source = f"bot.{side}.unstuck.close_fraction"
             root_positive_size[side] = _close_enabled(old_policy["close_fraction"], source)
 
@@ -117,11 +132,14 @@ def finalize_released_risk(config, record):
         value = block.pop("close_fraction")
         source = f"{path}.close_fraction"
         if bounds:
-            enabled = _discard_size_bound(value, source, record)
+            positive_size = _discard_size_bound(value, source, record)
             side = path.split(".")[-2]
             policy = config.get("bot", {}).get(side, {}).get("risk", {}).get("unstuck", {})
-            if not enabled and policy.get("enabled", True):
-                raise ValueError(f"{source} disagrees with unstuck enablement. Choose an explicit policy and remove the size bound.")
+            if side not in root_explicitly_disabled and positive_size != policy.get("enabled", True):
+                raise ValueError(
+                    f"{source} disagrees with unstuck enablement. "
+                    "Choose an explicit unstuck.enabled policy and remove the size bound."
+                )
             return
         enabled = _close_enabled(value, source)
         if not enabled:
@@ -201,10 +219,7 @@ def finalize_released_risk(config, record):
                 elif key == "fixed_params" and isinstance(child, list):
                     translated = []
                     for selector in child:
-                        if isinstance(selector, str) and (
-                            selector in {"close_fraction", "close_pct"}
-                            or "unstuck.close_fraction" in selector or "unstuck_close_fraction" in selector
-                        ):
+                        if _retired_size_selector(selector):
                             record(here, selector, None, "discarded the retired unstuck size selector")
                         else:
                             translated.append(released_risk_path(selector) if isinstance(selector, str) else selector)

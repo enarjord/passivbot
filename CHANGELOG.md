@@ -11,7 +11,9 @@ its own version heading. See [release status](docs/releases.md).
 - Size close orders in Rust against available loss allowance and venue limits.
   Unstuck targets the exposure threshold. Live admission reserves outstanding
   close losses across symbols and sides, and reconciles conflicting replacements
-  before creating them. Use CPU replay for gate or unstuck evaluations.
+  before creating them. Bounded exchange lookups can recover closes canceled
+  before the open-order refresh. Zero-loss limit closes retain order-match
+  tolerance when both projections agree. Use CPU replay for gate or unstuck evaluations.
 
 - Update the Trailing Martingale starter universe and suite subsets. Add ETC and
   TRX and remove ATOM, BTW, CC, KAS, and RENDER. Resolve verified TRX asset age

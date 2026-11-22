@@ -128,7 +128,7 @@ def build_evaluation_contract(config: dict) -> dict:
         "age_admission": "side_initial_entry_v1",
         "side_activation": "explicit_side_initial_and_dca_v1",
         "forager_hysteresis": {"abi": 1, "policy": hysteresis},
-        "risk_model": "v9_independent_loss_memories_currency_drawdown_ratio_ema_finite_cooldown",
+        "risk_model": "v9_shared_realized_loss_memory_close_allocation_hsl_drawdown_ema",
         "coupled_unstuck_ema_spans": coupled,
         "implementation": deepcopy(evaluation_implementation_identity()),
         "prepared_data": deepcopy(config.get("_optimizer_prepared_dataset_identity")),

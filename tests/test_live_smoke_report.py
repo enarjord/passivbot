@@ -9338,19 +9338,8 @@ def test_live_smoke_report_flags_account_hsl_with_launch_balance_override(
             {
                 "live": {},
                 "bot": {
-                    "portfolio": {"hsl": {
-                            "scope": "portfolio",
-                            "enabled": True,
-                        }},
-                    "long": {
-                        "hsl": {
-                            "enabled": True,
-                        },
-                    },
-                    "short": {
-                        "hsl": {
-                            "enabled": False,
-                        },
+                    "portfolio": {
+                        "risk": {"hsl": {"scope": "portfolio", "enabled": True}},
                     },
                 },
             }

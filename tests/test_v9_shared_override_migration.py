@@ -57,9 +57,9 @@ def test_shared_position_selector_converts_without_changing_authored_value(owner
     ("risk_we_excess_allowance_pct", "risk.we_excess_allowance_fraction", 0.125),
     ("forager_score_weights.volume", "forager.score_weights.volume", 0.375),
     ("forager_volume_ema_span_1m", "forager.volume_ema_span_minutes", 37.5),
-    ("hsl_cooldown_minutes_after_red", "hsl.cooldown_after_red_minutes", 17.5),
-    ("hsl_ema_span_minutes", "hsl.drawdown_fraction_ema_span_minutes", 6.25),
-    ("unstuck_threshold", "unstuck.exposure_trigger_ratio", 0.625),
+    ("hsl_cooldown_minutes_after_red", "risk.hsl.cooldown_after_red_minutes", 17.5),
+    ("hsl_ema_span_minutes", "risk.hsl.drawdown_fraction_ema_span_minutes", 6.25),
+    ("unstuck_threshold", "risk.unstuck.exposure_trigger_ratio", 0.625),
     ("risk_entry_cooldown_minutes", "entry_cooldown.base_duration_minutes", 9.5),
 ])
 def test_other_declared_shared_fields_and_dictionary_tails_convert(owner, old, new, value):
@@ -285,7 +285,7 @@ def test_portfolio_smoothing_selectors_preserve_only_the_old_smoothing_gene(sele
     bounds = flatten_optimize_bounds(converted["optimize"]["bounds"],
                                      strategy_kind=converted["bot"]["portfolio"]["strategy_kind"])
     assert resolve_bound_selectors(converted, [expected], bounds) == {
-        "hsl_drawdown_fraction_ema_span_minutes": ("bot", "portfolio", "hsl", "drawdown_fraction_ema_span_minutes")
+        "hsl_drawdown_fraction_ema_span_minutes": ("bot", "portfolio", "risk", "hsl", "drawdown_fraction_ema_span_minutes")
     }
 
 

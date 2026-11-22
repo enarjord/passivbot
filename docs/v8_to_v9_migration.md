@@ -171,8 +171,10 @@ Released flat unstuck fields and optimizer IDs are translated in explicitly
 versioned conversion, including bound selectors, referenced coin files and
 inline overrides. The converter reports discarded `close_pct` sizing and search
 dimensions. A zero size can become `risk.unstuck.enabled: false`. If a size
-range searched both disabled and enabled policy, choose the intended flag
-explicitly and remove the old range before converting. The exposure trigger
+range searched both disabled and enabled policy or conflicts with the
+runtime size, choose the intended flag explicitly and remove the old range
+before converting. An explicitly disabled unstuck policy stays disabled with
+positive-only size bounds. The exposure trigger
 now also bounds the proposed partial close's remaining exposure.
 
 These unit spelling changes do not rescale values. Price and minute-log-range horizons remain

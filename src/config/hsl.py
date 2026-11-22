@@ -413,16 +413,17 @@ def normalize_hsl(config, template, *, verbose=True):
             if side not in {"long", "short"} or not isinstance(values, dict):
                 continue
             canonicalize_shared_bot_side(values)
-            if mode != "coin" and values.get("hsl"):
+            coin_hsl = values.get("risk", {}).get("hsl", {})
+            if mode != "coin" and coin_hsl:
                 raise ValueError(
-                    f"coin_overrides.{coin}.bot.{side}.hsl is inactive outside coin mode"
+                    f"coin_overrides.{coin}.bot.{side}.risk.hsl is inactive outside coin mode"
                 )
-            for path, _ in _walk_paths(values.get("risk", {}).get("hsl", {})):
+            for path, _ in _walk_paths(coin_hsl):
                 validate_parameter_path(
                     f"coin_overrides.{coin}.bot.{side}.risk.hsl.{path}", mode
                 )
-            if mode == "coin" and values.get("hsl"):
-                effective = {**bot[side]["risk"]["hsl"], **values["risk"]["hsl"]}
+            if mode == "coin" and coin_hsl:
+                effective = {**bot[side]["risk"]["hsl"], **coin_hsl}
                 normalize_block(
                     effective,
                     {},

@@ -87,6 +87,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `risk.entry_cooldown_delta_anchored`
 - `risk.input.status`
 - `risk.mode_changed`
+- `risk.realized_close_recovery`
 - `risk.realized_loss_gate_blocked`
 - `runtime.started`
 - `rust_orchestrator.called`
@@ -227,6 +228,9 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `queue_full`
 - `ranking_features_unavailable`
 - `realized_close_admission_deferred`
+- `realized_close_lookup_unavailable`
+- `realized_close_lookup_unsupported`
+- `realized_close_order_evidence_unavailable`
 - `realized_loss_gate_blocked`
 - `recent_execution`
 - `remote_fetch`

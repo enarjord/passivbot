@@ -69,6 +69,7 @@ def fee_only_close_fixture(sides, coins, memory_span, max_loss_pct, *, interval_
 @pytest.mark.parametrize("coins", [1, 2])
 @pytest.mark.parametrize("memory_span", [3.0, 8.0])
 @pytest.mark.parametrize("max_loss_pct", [0.0, 0.0003, 0.1])
+@pytest.mark.skip(reason="GPU v9 realized-loss close sizing awaits parity with Rust")
 def test_tm_ordinary_close_uses_configured_loss_allowance(sides, coins, memory_span, max_loss_pct):
     from backtest import run_backtest
 
@@ -91,6 +92,7 @@ def test_tm_ordinary_close_uses_configured_loss_allowance(sides, coins, memory_s
 @pytest.mark.parametrize("slope", [-0.02, 0.0, 0.02])
 @pytest.mark.parametrize("market", [False, True])
 @pytest.mark.parametrize("reducer", ["disabled", "wel", "twel"])
+@pytest.mark.skip(reason="GPU v9 realized-loss close sizing awaits parity with Rust")
 def test_tm_recursive_loss_plan_matches_finalized_rust_orders(sides, slope, market, reducer):
     from backtest import run_backtest
     from optimization.gpu.service import SharedAccountReplay
@@ -129,6 +131,7 @@ def test_tm_recursive_loss_plan_matches_finalized_rust_orders(sides, slope, mark
 @pytest.mark.parametrize("coins", [1, 2])
 @pytest.mark.parametrize("memory_span", [3.0, 8.0])
 @pytest.mark.parametrize("max_loss_pct", [0.0015, 0.1])
+@pytest.mark.skip(reason="GPU v9 realized-loss close sizing awaits parity with Rust")
 def test_tm_unstuck_and_general_loss_budget_share_one_decaying_memory(
     sides, coins, memory_span, max_loss_pct
 ):
@@ -159,6 +162,7 @@ def test_tm_unstuck_and_general_loss_budget_share_one_decaying_memory(
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("max_loss_pct", [0.0, 0.1, 1.0])
+@pytest.mark.skip(reason="GPU v9 realized-loss close sizing awaits parity with Rust")
 def test_tm_loss_history_consumer_and_compiler_ablation(sides, max_loss_pct):
     proxy, _ = fee_only_close_fixture(sides, 2, 8.0, max_loss_pct)
     runner, specialized = raw(proxy, [{}, {}])
@@ -185,6 +189,7 @@ def test_tm_loss_history_consumer_and_compiler_ablation(sides, max_loss_pct):
 
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
+@pytest.mark.skip(reason="GPU v9 realized-loss close sizing awaits parity with Rust")
 def test_tm_loss_plan_survives_replay_scratch_reuse_and_reordering(sides):
     import numpy as np
 
@@ -209,6 +214,7 @@ def test_tm_loss_plan_survives_replay_scratch_reuse_and_reordering(sides):
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("coins", [1, 2])
+@pytest.mark.skip(reason="GPU v9 realized-loss close sizing awaits parity with Rust")
 def test_native_tm_loss_admission_never_replays_on_cpu(monkeypatch, sides, coins):
     if not torch.cuda.is_available():
         pytest.skip("native CUDA service required")

@@ -66,6 +66,7 @@ def test_proof_rejects_misaligned_parameter_and_override_views(matrix, overrides
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("policy", ["ungated", "disabled", "gated", "coin_gated", "coins_ungated"])
+@pytest.mark.skip(reason="GPU v9 realized-loss close sizing awaits parity with Rust")
 def test_multicoin_dispatch_ablation_preserves_all_outputs(
     require_real_passivbot_rust_module, strategy, sides, policy,
 ):

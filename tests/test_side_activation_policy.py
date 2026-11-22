@@ -213,8 +213,8 @@ def test_numeric_search_never_grants_activation_but_fixed_scenario_permission_re
 
     source = {"bot": {"long": {"enabled": flag if channel == "base" else False}},
               "optimize": {"bounds": {"long": {
-                  "risk": {"max_positions": [1, 3], "total_wallet_exposure_limit_ratio": [0.5, 1.5]},
-                  "unstuck": {"close_fraction": [0.01, 0.12]}}}}}
+                  "risk": {"max_positions": [1, 3], "total_wallet_exposure_limit_ratio": [0.5, 1.5],
+                           "unstuck": {"loss_allowance_fraction": [0.01, 0.12]}}}}}}
     if channel == "fixed":
         source["optimize"]["fixed_runtime_overrides"] = {"bot.long.enabled": flag}
     elif channel == "scenario":
@@ -222,7 +222,7 @@ def test_numeric_search_never_grants_activation_but_fixed_scenario_permission_re
     config = prepare(source, live_only=True, verbose=False)
     pairs = dict(zip((key for key, _ in get_optimization_key_paths(config)),
                      extract_bounds_tuple_list_from_config(config)))
-    bound = pairs["bot.long.unstuck.close_fraction"]
+    bound = pairs["bot.long.risk.unstuck.loss_allowance_fraction"]
     assert bound.low == 0.01
     assert bound.high == (0.12 if flag else 0.01)
     assert side_activation(config) == {"long": flag if channel == "base" else False, "short": False}
@@ -383,14 +383,14 @@ def test_global_activation_direct_edit_cannot_hide_in_retained_policy(value):
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
 def test_nested_feature_switches_still_inherit_without_enabling_sides(kind):
     config = prepare({"bot": {"portfolio": {"strategy_kind": kind}, "global": {
-        "hsl": {"enabled": True}, "unstuck": {"enabled": False},
-        "risk": {"position_exposure_enforcer": {"enabled": True}}},
-        "short": {"unstuck": {"enabled": True}}}}, live_only=True, verbose=False)
+        "risk": {"hsl": {"enabled": True}, "unstuck": {"enabled": False},
+                 "position_exposure_enforcer": {"enabled": True}}},
+        "short": {"risk": {"unstuck": {"enabled": True}}}}}, live_only=True, verbose=False)
     assert side_activation(config) == {"long": False, "short": False}
-    assert config["bot"]["long"]["hsl"]["enabled"] is True
-    assert config["bot"]["short"]["hsl"]["enabled"] is True
-    assert config["bot"]["long"]["unstuck"]["enabled"] is False
-    assert config["bot"]["short"]["unstuck"]["enabled"] is True
+    assert config["bot"]["long"]["risk"]["hsl"]["enabled"] is True
+    assert config["bot"]["short"]["risk"]["hsl"]["enabled"] is True
+    assert config["bot"]["long"]["risk"]["unstuck"]["enabled"] is False
+    assert config["bot"]["short"]["risk"]["unstuck"]["enabled"] is True
     assert config["bot"]["long"]["risk"]["position_exposure_enforcer"]["enabled"] is True
 
 

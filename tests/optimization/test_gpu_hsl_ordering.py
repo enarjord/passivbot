@@ -40,11 +40,11 @@ def test_scoped_hsl_orders_use_current_observation(strategy, mode, coins, sides,
             max_positions=coins if enabled else 0,
             total_wallet_exposure_limit_ratio=2 if enabled else 0,
         )
-        inputs[0]["bot"][side]["hsl"].update(
+        inputs[0]["bot"][side]["risk"]["hsl"].update(
             drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=2.5, cooldown_after_red_minutes=5,
         )
     if mode == "portfolio":
-        inputs[0]["bot"]["portfolio"]["hsl"].update(
+        inputs[0]["bot"]["portfolio"]["risk"]["hsl"].update(
             drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=2.5, cooldown_after_red_minutes=5,
         )
     if shocks:
@@ -122,7 +122,7 @@ def _liquidation_inputs(strategy, sides, terminal_fill):
         enabled = side == "long" or sides == "both"
         bot["risk"].update(max_positions=1 if enabled else 0,
                            total_wallet_exposure_limit_ratio=(5.0 if side == "long" else 0.001) if enabled else 0)
-        bot["hsl"].update(enabled=enabled, drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=1,
+        bot["risk"]["hsl"].update(enabled=enabled, drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=1,
                           cooldown_after_red_minutes=5,
                           panic_close_order_type="market" if terminal_fill else "limit")
         bot["strategy"]["ema_anchor"]["base_qty_fraction"] = 0.8

@@ -242,6 +242,7 @@ class EventTypes:
     POSITION_CHANGED = "position.changed"
     BALANCE_CHANGED = "balance.changed"
     RISK_MODE_CHANGED = "risk.mode_changed"
+    REALIZED_CLOSE_RECOVERY = "risk.realized_close_recovery"
     HSL_TRANSITION = "hsl.transition"
     HSL_STATUS = "hsl.status"
     HSL_RAW_RED_PENDING = "hsl.raw_red_pending"
@@ -404,6 +405,9 @@ class ReasonCodes:
     ORDER_WRITE_SIGNER_REJECTED = "order_write_signer_rejected"
     REALIZED_LOSS_GATE_BLOCKED = "realized_loss_gate_blocked"
     REALIZED_CLOSE_ADMISSION_DEFERRED = "realized_close_admission_deferred"
+    REALIZED_CLOSE_ORDER_EVIDENCE_UNAVAILABLE = "realized_close_order_evidence_unavailable"
+    REALIZED_CLOSE_LOOKUP_UNAVAILABLE = "realized_close_lookup_unavailable"
+    REALIZED_CLOSE_LOOKUP_UNSUPPORTED = "realized_close_lookup_unsupported"
     TRAILING_STATUS = "trailing_status"
     UNSTUCK_SELECTION = "unstuck_selection"
     UNSTUCK_STATUS = "unstuck_status"
@@ -577,6 +581,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.POSITION_CHANGED,
     EventTypes.BALANCE_CHANGED,
     EventTypes.RISK_MODE_CHANGED,
+    EventTypes.REALIZED_CLOSE_RECOVERY,
     EventTypes.HSL_TRANSITION,
     EventTypes.HSL_STATUS,
     EventTypes.HSL_RED_TRIGGERED,
@@ -1410,6 +1415,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.POSITION_CHANGED: EventRoute(console=True, text=True),
     EventTypes.BALANCE_CHANGED: EventRoute(console=True, text=True),
     EventTypes.RISK_MODE_CHANGED: EventRoute(console=True, text=True),
+    EventTypes.REALIZED_CLOSE_RECOVERY: EventRoute(console=True, text=True),
     EventTypes.HSL_TRANSITION: EventRoute(console=True, text=True),
     EventTypes.HSL_STATUS: EventRoute(console=True, text=True),
     EventTypes.HSL_RAW_RED_PENDING: EventRoute(console=False, text=False),
@@ -1541,6 +1547,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.EMA_FALLBACK_USED: "ema",
     EventTypes.EMA_UNAVAILABLE: "ema",
     EventTypes.RISK_MODE_CHANGED: "risk",
+    EventTypes.REALIZED_CLOSE_RECOVERY: "risk",
     EventTypes.HSL_TRANSITION: "risk",
     EventTypes.HSL_STATUS: "risk",
     EventTypes.TRAILING_STATUS: "trailing",

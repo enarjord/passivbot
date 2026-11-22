@@ -309,7 +309,7 @@ class _ExecutionProjection:
             for coin in config.get("coin_overrides", {}):
                 for side in ("long", "short"):
                     for name in ("ema_span_0_minutes", "ema_span_1_minutes"):
-                        numeric_paths.add(("coin_overrides", coin, "bot", side, "unstuck", name))
+                        numeric_paths.add(("coin_overrides", coin, "bot", side, "risk", "unstuck", name))
                         numeric_paths.add(("coin_overrides", coin, "bot", side, f"unstuck_{name}"))
         self.guard = _compile_projection_guard(config, numeric_paths)
         self.specs = tuple(get_strategy_spec(kind) for kind in get_supported_strategy_kinds())

@@ -519,7 +519,7 @@ def test_fused_dormant_scoring_respects_each_sides_eligible_count(strategy):
            else mps_kernel.MpsTrailingMartingaleMulticoinFusedRunner)
     short_overrides = np.full((2, getattr(model, prefix + "_COIN_OVERRIDE_COLS")), np.nan)
     short_overrides[1, getattr(model, prefix + "_COIN_OVERRIDE_WALLET_EXPOSURE_LIMIT_RATIO_COLUMN")] = 0
-    runner = cls(run, data, short_coin_overrides=short_overrides, dynamic_wel_by_tradability=False, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
+    runner = cls(run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, short_coin_overrides=short_overrides, dynamic_wel_by_tradability=False, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
     assert runner.rms_ranking_coin_counts == (2, 1)
     row[keys.index("n_positions")] = 2
     row[keys.index("forager_score_weights_rms_directionality")] = 1
@@ -634,17 +634,17 @@ def test_fused_constant_override_cooldown_accepts_aggregated_candles(strategy, p
     cls = (mps_kernel.MpsEmaAnchorMulticoinFusedRunner if strategy == "ema_anchor"
            else mps_kernel.MpsTrailingMartingaleMulticoinFusedRunner)
     kwargs = {pin_side + "_coin_overrides": overrides}
-    runner = cls(run, data, dynamic_wel_by_tradability=False, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
+    runner = cls(run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, dynamic_wel_by_tradability=False, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
     matrix = np.asarray([row + row], dtype=float)
     active = {key: value.cpu().clone() for key, value in runner.run(matrix).items()
               if isinstance(value, torch.Tensor)}
     overrides[:, start + 3] = 0
-    baseline = cls(run, data, dynamic_wel_by_tradability=False, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}).run(matrix)
+    baseline = cls(run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, dynamic_wel_by_tradability=False, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}).run(matrix)
     for key, value in active.items():
         torch.testing.assert_close(value, baseline[key].cpu(), rtol=0, atol=0, equal_nan=True)
     # One nonconstant override on either fused side must still require 1m input.
     overrides[1, start] = 0
     overrides[1, start + 3] = 7
-    runner = cls(run, data, dynamic_wel_by_tradability=False, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
+    runner = cls(run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, dynamic_wel_by_tradability=False, **kwargs, forager_score_hysteresis={"long": 0.0, "short": 0.0}, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False})
     with pytest.raises(ValueError, match="requires one-minute candles"):
         runner.run(matrix)

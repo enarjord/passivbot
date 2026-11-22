@@ -368,8 +368,7 @@ def test_hsl_saved_fitness_contract_keeps_fixed_scope_policy(mode):
     )
     assert "restart_after_red_policy" not in block
     assert contract["version"] == CONTRACT_VERSION
-    assert "independent_loss_memories" in contract["risk_model"]
-    assert contract["risk_model"].startswith("v9_")
+    assert contract["risk_model"] == "v9_shared_realized_loss_memory_close_allocation_hsl_drawdown_ema"
     assert "drawdown_threshold_fraction" not in block  # candidate value, not fixed policy
     record = {**deepcopy(cfg), CONTRACT_KEY: contract}
     record.pop(CONTRACT_CACHE_KEY)

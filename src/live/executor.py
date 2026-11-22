@@ -650,13 +650,18 @@ async def execute_order_plan(
             ),
         )
     account_close_barrier = (
-        configure_creations
-        and any(_order_is_reduce_only(order) and not _order_is_panic(order) for order in to_cancel)
-        and bot._loss_gate_enabled()
+        configure_creations and bool(to_cancel) and bot._loss_gate_enabled()
+        and any(
+            _order_is_reduce_only(order)
+            and not _order_is_panic(order)
+            and realized_close_admission.spends_headroom(bot, order, resting=True)
+            for order in to_cancel
+        )
     )
+    connector_cancel_barrier = connector_supports_order_churn_gate(bot)
     cancel_first_barrier = (
         bool(to_cancel) and not bot.debug_mode
-        and (account_close_barrier or connector_supports_order_churn_gate(bot))
+        and (account_close_barrier or connector_cancel_barrier)
     )
     protective_batch = (
         hsl_live.active_protective_batch(bot) if not configure_creations else None
@@ -833,10 +838,15 @@ async def execute_order_plan(
             scope = _cancel_first_scope(bot, order)
             return (
                 ordinary_cancel_wave is not None
-                or (account_close_barrier and _order_is_reduce_only(order))
-                or has_unscoped_cancel
-                or scope is None
-                or scope in cancel_scopes
+                or (
+                    account_close_barrier
+                    and _order_is_reduce_only(order)
+                    and realized_close_admission.spends_headroom(bot, order)
+                )
+                or (
+                    connector_cancel_barrier
+                    and (has_unscoped_cancel or scope is None or scope in cancel_scopes)
+                )
             )
 
         barrier_deferred = [

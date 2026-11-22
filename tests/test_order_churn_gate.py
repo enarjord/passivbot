@@ -229,7 +229,31 @@ def _raw_rust_input(
     }
 
 
-def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
+def _raw_admitted_unstuck_allocation(order: dict) -> dict:
+    """Accepted break-even or profitable unstuck close in the zero-fee fixture."""
+    return {
+        "symbol_idx": order["symbol_idx"],
+        "pside": order["pside"],
+        "order_type": order["order_type"],
+        "execution_type": order["execution_type"],
+        "execution_price": order["price"],
+        "proposed_qty": order["qty"],
+        "final_qty": order["qty"],
+        "price": order["price"],
+        "estimated_loss": 0.0,
+        "proposed_loss": 0.0,
+        "headroom_before": 100.0,
+        "headroom_after": 100.0,
+        "overshoot": 0.0,
+        "binding_cap": "unstuck",
+        "reason": "admitted",
+        "outcome": "admitted",
+        "loss_gate_enabled": False,
+        "loss_gate_max_drawdown_fraction": 0.1,
+    }
+
+
+def _raw_rust_output(orders=None, *, symbol_states=None, close_allocations=()) -> dict:
     if orders is None:
         orders = []
     if symbol_states is None:
@@ -256,7 +280,7 @@ def _raw_rust_output(orders=None, *, symbol_states=None) -> dict:
             "warnings": [],
             "symbol_states": symbol_states,
             "loss_gate_blocks": [],
-            "close_allocations": [],
+            "close_allocations": list(close_allocations),
             "min_effective_cost_blocks": [],
             "forager_selections": [],
         },
@@ -827,7 +851,7 @@ def test_raw_rust_output_accepts_close_wave_equal_to_submitted_position():
     ]
 
     assert reconciler.validate_rust_orchestrator_output(
-        _raw_rust_output(orders),
+        _raw_rust_output(orders, close_allocations=[_raw_admitted_unstuck_allocation(orders[1])]),
         {0: SYMBOL},
         _raw_rust_input(
             long_pos_size=1.0,
@@ -957,7 +981,7 @@ def test_raw_rust_output_accepts_risk_critical_priority_for_protective_order():
     )
 
     assert reconciler.validate_rust_orchestrator_output(
-        _raw_rust_output([order]),
+        _raw_rust_output([order], close_allocations=[_raw_admitted_unstuck_allocation(order)]),
         {0: SYMBOL},
         _raw_rust_input(),
     ) == [order]

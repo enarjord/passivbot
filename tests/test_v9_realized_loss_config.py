@@ -11,6 +11,7 @@ from config.inherited_bounds import get_bound_plan, resolve_plan_selectors
 from config.risk_memory import (
     DEFAULT_REALIZED_LOSS_MEMORY_EMA_SPAN_MINUTES,
     LOSS_GATE_CAP_PATH,
+    optimizer_loss_gate_policy,
     require_loss_realization_policy,
     risk_memory_spans,
 )
@@ -86,6 +87,47 @@ def test_only_eligible_scenarios_open_an_explicit_cap_coordinate():
         prepare_config(source, verbose=False)
 
 
+@pytest.mark.parametrize(("overrides", "expected"), [
+    ({"bot": {"portfolio": {"risk": {"loss_realization": {"loss_gate": {CAP: 0}}}}}},
+     {"enabled": True, CAP: 0}),
+    ({GATE_DOTTED: {"enabled": False}}, {"enabled": False}),
+    ({GATE_DOTTED.rsplit(".", 1)[0]: {"memory_ema_span_minutes": 123.5}}, {"enabled": False}),
+])
+def test_optimizer_gate_projection_matches_scenario_patch(overrides, expected):
+    from config.scenario_overrides import normalize_scenario_overrides
+    from optimization.warmup import _apply_config_overrides
+    from suite_runner import apply_scenario_overrides
+
+    source = get_template_config()
+    risk(source)["loss_gate"] = {"enabled": True, CAP: 0.15}
+    fixed = {f"{GATE_DOTTED}.{CAP}": 0.1}
+    source["optimize"]["fixed_runtime_overrides"] = fixed
+    prepared = prepare_config(source, verbose=False)
+    scenario = deepcopy(prepared)
+    _apply_config_overrides(scenario, fixed)
+    apply_scenario_overrides(scenario, normalize_scenario_overrides(overrides))
+    assert optimizer_loss_gate_policy(prepared, overrides) == risk(scenario)["loss_gate"] == expected
+
+
+@pytest.mark.parametrize("overrides", [
+    {GATE_DOTTED: {CAP: 0}},
+    {GATE_DOTTED.rsplit(".", 1)[0]: {"loss_gate": {CAP: 0}}},
+])
+def test_atomic_gate_replacement_requires_enablement_in_scenario_and_projection(overrides):
+    from suite_runner import apply_scenario_overrides
+
+    source = get_template_config()
+    prepared = prepare_config(source, verbose=False)
+    with pytest.raises(ValueError, match="loss_gate.enabled must be an explicit boolean"):
+        optimizer_loss_gate_policy(prepared, overrides)
+    with pytest.raises(ValueError, match="loss_gate.enabled must be an explicit boolean"):
+        apply_scenario_overrides(prepared, overrides)
+
+    source["backtest"].update(suite_enabled=True, scenarios=[{"label": "bad", "overrides": overrides}])
+    with pytest.raises(ValueError, match="loss_gate.enabled must be an explicit boolean"):
+        prepare_config(source, verbose=False)
+
+
 def test_retired_sources_rejected_before_default_resolution(tmp_path):
     source = get_template_config()
     for retired in (
@@ -134,6 +176,32 @@ def test_v8_reports_removed_unstuck_size_and_rejects_mixed_bounds():
     source["optimize"]["bounds"]["long"]["unstuck"]["close_pct"] = [0, 0.1]
     with pytest.raises(ValueError, match="both disabled and enabled"):
         migrate(source, memory_span_minutes=43200)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_v8_positive_size_bounds_require_a_choice_when_runtime_size_disables_unstuck(side):
+    source = released_v8_policy()
+    source["bot"][side]["unstuck"]["close_pct"] = 0
+    source["optimize"]["bounds"][side]["unstuck"]["close_pct"] = [0.01, 0.12]
+    with pytest.raises(ValueError, match=rf"bounds\.{side}.*explicit unstuck\.enabled"):
+        migrate(source, memory_span_minutes=43200)
+
+    source["bot"][side]["unstuck"]["enabled"] = False
+    result = migrate(source, memory_span_minutes=43200)
+    assert result.config["bot"][side]["risk"]["unstuck"]["enabled"] is False
+    assert "close_fraction" not in result.config["optimize"]["bounds"][side]["risk"]["unstuck"]
+
+
+def test_v8_fixed_selector_report_lists_only_final_supported_targets():
+    source = released_v8_policy()
+    selectors = ["bot.long.unstuck.close_pct", "bot.short.unstuck.threshold"]
+    source["optimize"]["fixed_params"] = selectors
+    result = migrate(source, memory_span_minutes=43200)
+    expected = ["bot.short.risk.unstuck.exposure_trigger_ratio"]
+    assert result.config["optimize"]["fixed_params"] == expected
+    assert any(row["old"] == selectors and row["new"] == expected for row in result.changes)
+    assert any("discarded the retired unstuck size selector" in row["reason"]
+               for row in result.changes)
 
 
 def test_optimizer_candidates_supply_only_enabled_scenarios():

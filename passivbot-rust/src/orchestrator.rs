@@ -1895,9 +1895,15 @@ mod core {
             }
         }
 
-        fn blocked_reason(&self, gate: Option<&RealizedLossGateState>) -> &'static str {
+        fn blocked_reason(
+            &self,
+            input: &OrchestratorInput,
+            gate: Option<&RealizedLossGateState>,
+        ) -> &'static str {
+            // A gate block describes a close that would be executable without
+            // the portfolio gate, including venue minimums and the unstuck floor.
             if gate.is_some_and(|state| state.remaining <= 0.0)
-                && self.projection.loss(self.order.qty) > 0.0
+                && self.size(input, None).is_some()
             {
                 "loss_gate_exhausted"
             } else {
@@ -1998,7 +2004,7 @@ mod core {
                     let reason = if picked_unstuck && candidate.unstuck.is_some() {
                         "unstuck_already_selected"
                     } else if candidate.size(input, gate.as_ref()).is_none() {
-                        candidate.blocked_reason(gate.as_ref())
+                        candidate.blocked_reason(input, gate.as_ref())
                     } else {
                         return true;
                     };
@@ -2087,7 +2093,7 @@ mod core {
                 let per_side = if order.pside == PositionSide::Long { &mut *per_long } else { &mut *per_short };
                 per_side[slot].as_mut().expect("close position remains allocated").closes.push(order);
             } else {
-                let reason = candidate.blocked_reason(gate.as_ref());
+                let reason = candidate.blocked_reason(input, gate.as_ref());
                 candidate.observe(input, gate.as_ref(), 0.0, reason, false, diagnostics);
             }
         }
@@ -5307,6 +5313,37 @@ mod core {
                 if expected == "inputs_unavailable" {
                     assert_eq!(output.diagnostics.unstuck[0].allowance, Some(100.0));
                 }
+            }
+        }
+
+        #[test]
+        fn exhausted_gate_blocks_unstuck_only_if_a_valid_lot_exists() {
+            for (minimum, reason) in [(0.1, "loss_gate_blocked"), (0.5, "no_valid_lot")] {
+                let mut input = unstuck_diagnostic_test_input();
+                input.global.loss_gate_enabled = true;
+                input.global.loss_gate_max_drawdown_fraction = Some(0.0);
+                let symbol = &mut input.symbols[0];
+                symbol.long.position.price = 100.0;
+                symbol.long.bot_params.unstuck_exposure_trigger_ratio = 0.99;
+                symbol.order_book = OrderBook { bid: 99.0, ask: 99.0 };
+                symbol.exchange.min_qty = minimum;
+
+                let output = compute_ideal_orders_for_test(&input).unwrap();
+                let allocation = output
+                    .diagnostics
+                    .close_allocations
+                    .iter()
+                    .find(|row| row.order_type == OrderType::CloseUnstuckLong)
+                    .unwrap();
+                assert_eq!(allocation.proposed_qty, -0.1);
+                assert_eq!(allocation.outcome, "blocked");
+                assert_eq!(output.diagnostics.unstuck[0].reason, reason);
+                assert_eq!(
+                    output.diagnostics.loss_gate_blocks.iter().any(|block| {
+                        block.order_type == OrderType::CloseUnstuckLong
+                    }),
+                    minimum == 0.1,
+                );
             }
         }
 

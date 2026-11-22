@@ -3790,6 +3790,39 @@ def test_unstuck_and_ordinary_close_coexist_and_are_capped():
     assert total_close_qty <= 10.0 + 1e-9
 
 
+@pytest.mark.parametrize(
+    ("minimum", "reason"),
+    [(0.1, "loss_gate_blocked"), (0.5, "no_valid_lot")],
+)
+def test_exhausted_gate_diagnostics_require_a_valid_unstuck_lot(minimum, reason):
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(
+        0,
+        bid=99.0,
+        ask=99.0,
+        long_pos_size=10.0,
+        long_pos_price=100.0,
+        long_bp={
+            "unstuck_enabled": True,
+            "unstuck_ema_gating_enabled": False,
+            "unstuck_loss_allowance_fraction": 0.1,
+            "unstuck_exposure_trigger_ratio": 0.99,
+        },
+    )
+    symbol["exchange"].update(qty_step=0.1, min_qty=minimum)
+    inp = make_input(balance=1000.0, symbols=[symbol])
+    inp["global"].update(loss_gate_enabled=True, loss_gate_max_drawdown_fraction=0.0)
+
+    out = compute(pbr, inp)
+    reconciler.validate_rust_orchestrator_output(out, {0: "BTC/USDT:USDT"}, inp)
+    assert out["diagnostics"]["unstuck"][0]["reason"] == reason
+    assert any(
+        block["order_type"] == "close_unstuck_long"
+        for block in out["diagnostics"]["loss_gate_blocks"]
+    ) == (reason == "loss_gate_blocked")
+
+
 def test_unstuck_uses_shared_drawdown_with_the_gate_disabled():
     import passivbot_rust as pbr
 

@@ -36,8 +36,8 @@ def _fixture(side, coin_count, entry_kind):
             weights_minutes={"adverse_directionality": 0.0, "exposure_ratio": 0.0},
         )
         bot["forager"]["score_weights"]["rms_directionality"] = 0.0
-        bot["hsl"]["enabled"] = False
-        bot["unstuck"]["enabled"] = False
+        bot["risk"]["hsl"]["enabled"] = False
+        bot["risk"]["unstuck"]["enabled"] = False
         # These short sizing fixtures have no completed hourly observation.
         # Declare a strategy that does not consume an unavailable hourly EMA.
         bot["strategy"]["ema_anchor"]["offset_log_range_1h_coefficient"] = 0.0

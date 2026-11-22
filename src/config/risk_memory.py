@@ -7,7 +7,8 @@ import struct
 
 DEFAULT_REALIZED_LOSS_MEMORY_EMA_SPAN_MINUTES = 85_511.137
 LOSS_REALIZATION_PATH = ("bot", "portfolio", "risk", "loss_realization")
-LOSS_GATE_CAP_PATH = (*LOSS_REALIZATION_PATH, "loss_gate", "max_realized_drawdown_fraction")
+LOSS_GATE_PATH = (*LOSS_REALIZATION_PATH, "loss_gate")
+LOSS_GATE_CAP_PATH = (*LOSS_GATE_PATH, "max_realized_drawdown_fraction")
 DEFAULT_RISK_BOOTSTRAP_MAX_LOOKBACK_MINUTES = 129_600.0
 MAX_RISK_BOOTSTRAP_LOOKBACK_MINUTES = 129_600.0
 
@@ -62,6 +63,19 @@ def normalize_loss_gate_cap(value, *, field=".".join(LOSS_GATE_CAP_PATH)):
     return cap
 
 
+def _require_loss_gate(gate):
+    if not isinstance(gate, dict) or type(gate.get("enabled")) is not bool:
+        raise ValueError(f"{'.'.join(LOSS_GATE_PATH)}.enabled must be an explicit boolean")
+    enabled = gate["enabled"]
+    if LOSS_GATE_CAP_PATH[-1] in gate:
+        cap = normalize_loss_gate_cap(gate[LOSS_GATE_CAP_PATH[-1]])
+    elif enabled:
+        raise ValueError(f"{'.'.join(LOSS_GATE_CAP_PATH)} is required when the loss gate is enabled")
+    else:
+        cap = None
+    return enabled, cap
+
+
 def require_loss_realization_policy(config):
     """Read the resolved portfolio policy, including explicit gate enablement."""
     policy = config["bot"]["portfolio"]["risk"]["loss_realization"]
@@ -69,63 +83,67 @@ def require_loss_realization_policy(config):
     span = normalize_memory_ema_span_minutes(
         policy["memory_ema_span_minutes"], field=f"{path}.memory_ema_span_minutes"
     )
-    gate = policy["loss_gate"]
-    if not isinstance(gate, dict) or type(gate.get("enabled")) is not bool:
-        raise ValueError(f"{path}.loss_gate.enabled must be an explicit boolean")
-    enabled = gate["enabled"]
-    if "max_realized_drawdown_fraction" in gate:
-        cap = normalize_loss_gate_cap(gate["max_realized_drawdown_fraction"])
-    elif enabled:
-        raise ValueError(f"{'.'.join(LOSS_GATE_CAP_PATH)} is required when the loss gate is enabled")
-    else:
-        cap = None
+    enabled, cap = _require_loss_gate(policy.get("loss_gate"))
     return span, enabled, cap
 
 
-def _project_loss_gate(base, overrides):
+def validate_loss_gate_replacement(path, value):
+    """Validate an explicitly replaced gate before portfolio defaults are resolved."""
+    if LOSS_GATE_PATH[:len(path)] != path:
+        return
+    for part in LOSS_GATE_PATH[len(path):]:
+        if not isinstance(value, dict) or part not in value:
+            return
+        value = value[part]
+    _require_loss_gate(value)
+
+
+def _project_loss_gate(config, overrides):
+    from .bot_inheritance import apply_bot_config_patch, get_bot_policy, get_side_field_catalog
+    from .bot_inheritance import install_bot_policy, resolve_bot_policy
     from .scenario_overrides import normalize_scenario_overrides
 
-    gate_path = LOSS_GATE_CAP_PATH[:-1]
-    gate = deepcopy(base)
+    relevant = {}
     for selector, value in normalize_scenario_overrides(overrides).items():
         path = tuple(selector.split("."))
-        if path == gate_path:
-            gate = deepcopy(value)
-        elif path[:-1] == gate_path:
-            gate[path[-1]] = value
-        elif gate_path[:len(path)] == path:
-            gate = value
-            for part in gate_path[len(path):]:
-                gate = gate.get(part, {})
-            gate = deepcopy(gate)
-    gate.setdefault("enabled", False)
-    if type(gate["enabled"]) is not bool:
-        raise ValueError(f"{'.'.join(gate_path)}.enabled must be a boolean")
-    if LOSS_GATE_CAP_PATH[-1] in gate:
-        normalize_loss_gate_cap(gate[LOSS_GATE_CAP_PATH[-1]])
-    elif gate["enabled"]:
-        raise ValueError(f"{'.'.join(LOSS_GATE_CAP_PATH)} is required when the loss gate is enabled")
-    return gate
+        if LOSS_GATE_PATH[:len(path)] == path or path[:len(LOSS_GATE_PATH)] == LOSS_GATE_PATH:
+            relevant[selector] = value
+    if not relevant:
+        return config
+    # Use the scenario/optimizer patch owner for defaults and atomic object
+    # replacements. Bounds are deliberately excluded while building the plan.
+    projected = {"bot": deepcopy(config["bot"])}
+    if get_bot_policy(projected) is None:
+        policy = resolve_bot_policy(
+            {"portfolio": projected["bot"]["portfolio"]}, get_side_field_catalog()
+        )
+        install_bot_policy(projected, policy)
+    apply_bot_config_patch(projected, relevant)
+    require_loss_realization_policy(projected)
+    return projected
+
+
+def _loss_gate(config):
+    realized = config["bot"]["portfolio"]["risk"]["loss_realization"]
+    return deepcopy(realized["loss_gate"])
 
 
 def optimizer_loss_gate_policy(config, scenario_overrides=None):
     """Resolve authored loss policy independently of the optimizer's genome."""
-    _, enabled, cap = require_loss_realization_policy(config)
-    root = {"enabled": enabled}
-    if cap is not None:
-        root[LOSS_GATE_CAP_PATH[-1]] = cap
-    fixed = _project_loss_gate(root, config.get("optimize", {}).get("fixed_runtime_overrides"))
-    return _project_loss_gate(fixed, scenario_overrides) if scenario_overrides else fixed
+    require_loss_realization_policy(config)
+    fixed = _project_loss_gate(config, config.get("optimize", {}).get("fixed_runtime_overrides"))
+    return _loss_gate(_project_loss_gate(fixed, scenario_overrides))
 
 
 def optimizer_loss_gate_policies(config):
     """Determine gate reachability before reading numeric bounds."""
-    fixed = optimizer_loss_gate_policy(config)
+    require_loss_realization_policy(config)
+    fixed = _project_loss_gate(config, config.get("optimize", {}).get("fixed_runtime_overrides"))
     backtest = config.get("backtest", {})
     if backtest.get("suite_enabled") and backtest.get("scenarios"):
-        return tuple(_project_loss_gate(fixed, scenario.get("overrides"))
+        return tuple(_loss_gate(_project_loss_gate(fixed, scenario.get("overrides")))
                      for scenario in backtest["scenarios"])
-    return (fixed,)
+    return (_loss_gate(fixed),)
 
 
 def unstuck_memory_required(config):

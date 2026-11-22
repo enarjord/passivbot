@@ -219,6 +219,8 @@ def validate_authored_config(config, template, *, policy_context=None):
                 visit(child, expected[key], (*parts, key), f"{path}.{key}")
 
     def validate_patch(patch, path):
+        from .risk_memory import validate_loss_gate_replacement
+
         _mapping(patch, path)
 
         def validate_group(parts, value):
@@ -272,5 +274,6 @@ def validate_authored_config(config, template, *, policy_context=None):
                     raise ValueError(f"{path}.{selector} targets an unknown configuration field")
                 expected = expected[part]
             visit(value, expected, parts, f"{path}.{selector}")
+            validate_loss_gate_replacement(parts, value)
 
     visit(config, schema, ())

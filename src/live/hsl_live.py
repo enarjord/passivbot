@@ -1219,6 +1219,7 @@ class Owner:
         )
 
     async def _ordinary_preparation_account(self):
+        await realized_close_admission.recover(self.bot)
         account = self.account_facts()
         required_fills = account[3]
         task = getattr(self, "_fill_task", None)
