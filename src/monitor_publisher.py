@@ -213,6 +213,7 @@ class MonitorPublisher:
         self._current_history_paths: dict[str, Path] = {}
         self._last_price_tick_emitted_ms: dict[str, int] = {}
         self._last_candle_ts_by_key: dict[tuple[str, str], int] = {}
+        self._last_hour_rollup_ts: dict[str, int] = {}
         self._disk_full_last_log_ms = 0
         self._disk_full_suppressed = 0
         self._lock = threading.RLock()
@@ -994,6 +995,35 @@ class MonitorPublisher:
                 self._last_price_tick_emitted_ms[symbol] = now_ms
             return entry
 
+    def completed_hour_rollup_due(self, symbol: str, ts: int) -> bool:
+        """Allow a minute observer to skip work for an already published hour."""
+        with self._lock:
+            if not (self.retain_candles and self.emit_completed_candles):
+                return False
+            symbol = str(symbol)
+            native_ts = self._last_candle_ts_by_key.get((symbol, "1h"))
+            rollup_ts = self._last_hour_rollup_ts.get(symbol)
+            return all(last_ts is None or ts > last_ts for last_ts in (native_ts, rollup_ts))
+
+    def record_completed_hour_rollup(self, symbol: str, candle: dict) -> Optional[dict]:
+        """Append a derived hour while retaining the independent native cursor."""
+        with self._lock:
+            symbol = str(symbol)
+            ts = int(candle["ts"])
+            if not self.completed_hour_rollup_due(symbol, ts):
+                return None
+            entry = self.record_history_entry(
+                "candles_1h",
+                "completed_candle",
+                {**candle, "source": "minute_rollup"},
+                ts=ts,
+                symbol=symbol,
+                timeframe="1h",
+            )
+            if entry is not None:
+                self._last_hour_rollup_ts[symbol] = ts
+            return entry
+
     def record_completed_candles(
         self,
         symbol: str,
@@ -1017,9 +1047,6 @@ class MonitorPublisher:
                 to_emit = [
                     candle for candle in sorted_candles if int(candle["ts"]) > last_known_ts
                 ]
-            if not to_emit:
-                self._last_candle_ts_by_key[key] = int(sorted_candles[-1]["ts"])
-                return []
             emitted: list[dict] = []
             for candle in to_emit:
                 entry = self.record_history_entry(

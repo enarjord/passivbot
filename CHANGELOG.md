@@ -86,6 +86,10 @@ its own version heading. See [release status](docs/releases.md).
   preserving split UTF-8 characters and live relay offsets. Preserve row boundaries
   during relay startup and reset the read offset when current files rotate.
 
+- Keep hourly monitor candle history current from complete cached minute windows when
+  native hourly candles have not been published. Tag these observations as minute rollups
+  and keep late native hours available.
+
 - Select backtest plots with `--plots` and cap the optimizer seed shortlist with
   `--compress-starting-configs`. Remove the duplicate flags.
 
