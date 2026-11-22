@@ -5,6 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Coalesce repeated live RMS candle-read warnings and staged account-refresh
+  progress messages while retaining detailed diagnostics.
+
 - Update the Trailing Martingale starter universe and suite subsets. Add ETC and
   TRX and remove ATOM, BTW, CC, KAS, and RENDER. Resolve verified TRX asset age
   for Binance and Bybit perpetuals.

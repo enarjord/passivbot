@@ -677,6 +677,23 @@ def record_staged_refresh_timing_summary(
     summaries.pop(plan_key, None)
 
 
+def _refresh_progress_log_level(bot, plan, pending, now_ms, *, repeated):
+    """Coalesce equivalent slow refreshes across successive refresh tasks."""
+    if repeated:
+        return logging.DEBUG, 0
+    states = getattr(bot, "_staged_refresh_progress_log_state", None)
+    if states is None:
+        states = {}
+        bot._staged_refresh_progress_log_state = states
+    key = (tuple(sorted(plan)), pending)
+    last, repeats = states.get(key, (None, 0))
+    if last is not None and 0 <= now_ms - last < 300_000:
+        states[key] = (last, repeats + 1)
+        return logging.DEBUG, 0
+    states[key] = (now_ms, 0)
+    return logging.INFO, repeats
+
+
 async def log_staged_refresh_progress_until(
     bot,
     plan: set[str],
@@ -705,16 +722,15 @@ async def log_staged_refresh_progress_until(
             )
             if not pending:
                 return
-            elapsed_ms = int(max(0, _utc_ms() - wall_started_ms))
+            now = _utc_ms()
+            elapsed_ms = int(max(0, now - wall_started_ms))
             completed = " ".join(
                 f"{surface}={int(timings_ms[surface])}ms"
                 for surface in sorted(timings_ms)
                 if surface not in pending
             )
-            key = pending
-            level = logging.INFO if key not in logged_pending else logging.DEBUG
-            repeated = key in logged_pending
-            logged_pending.add(key)
+            repeated = pending in logged_pending
+            logged_pending.add(pending)
             event_emitters.emit_state_refresh_progress_event(
                 bot,
                 plan=plan,
@@ -727,15 +743,19 @@ async def log_staged_refresh_progress_until(
                 },
                 threshold_s=threshold_s,
                 repeated=repeated,
-                level="info" if level >= logging.INFO else "debug",
+                level="debug" if repeated else "info",
+            )
+            level, repeats = _refresh_progress_log_level(
+                bot, plan, pending, now, repeated=repeated
             )
             logging.log(
                 level,
-                "[state] staged refresh still waiting | plan=%s | pending=%s | elapsed=%dms%s",
+                "[state] staged refresh still waiting | plan=%s | pending=%s | elapsed=%dms%s%s",
                 ",".join(sorted(plan)),
                 ",".join(pending),
                 elapsed_ms,
                 f" | completed={completed}" if completed else "",
+                f" | suppressed_refreshes={repeats}" if repeats else "",
             )
             await bot._sleep_unless_shutdown(
                 interval_s, stage="staged_refresh_progress"

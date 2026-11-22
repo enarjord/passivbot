@@ -3,12 +3,15 @@
 import asyncio
 import logging
 import math
+import time
 
 import ccxt
 import numpy as np
 import passivbot_rust
 from candlestick_manager import OhlcvFetchError
 from config.entry_cooldown import uses_adverse_rms
+from live.console_health import token
+from live.diagnostic_safety import bounded_exception_type
 
 
 RMS_CACHE_KIND = "signed_rms_directionality"
@@ -63,6 +66,28 @@ def adverse_enabled(bot, side, symbol):
             "entry_cooldown_max_duration_minutes",
         )},
     })
+
+
+def _log_read_failure(bot, symbol, exc):
+    error_type = bounded_exception_type(exc)
+    logging.debug(
+        "[ema] RMS directionality read failed | symbol=%s error_type=%s",
+        token(symbol, 32), error_type,
+    )
+    states = getattr(bot, "_rms_read_warning_state", None)
+    if states is None:
+        states = {}
+        bot._rms_read_warning_state = states
+    now = time.monotonic()
+    last, repeats = states.get(error_type, (None, 0))
+    if last is not None and now - last < 300:
+        states[error_type] = (last, repeats + 1)
+        return
+    logging.warning(
+        "[ema] RMS directionality unavailable | sample=%s error_type=%s failures=%d",
+        token(symbol, 32), error_type, repeats + 1,
+    )
+    states[error_type] = (now, 0)
 
 
 async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
@@ -134,11 +159,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
                 logging.debug("[ema] RMS directionality retrying local candles | symbol=%s", symbol)
                 rows = await bot.cm.get_candles(symbol, allow_remote_fetch=False, **read_args)
         except (ccxt.NetworkError, OhlcvFetchError, OSError, asyncio.TimeoutError) as exc:
-            logging.warning(
-                "[ema] RMS directionality unavailable | symbol=%s error_type=%s",
-                symbol,
-                type(exc).__name__,
-            )
+            _log_read_failure(bot, symbol, exc)
             continue
 
         # Find the latest complete segment for each span. A partial segment
