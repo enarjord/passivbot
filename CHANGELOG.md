@@ -5,6 +5,11 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Let a confirmed uncovered Bitunix hedge position submit its sole eligible
+  reduce-only limit close when the order churn allowance is exhausted. Keep
+  that attempt in the rolling count and place it after risk-critical creates
+  when batch capacity is tight.
+
 - Update the Trailing Martingale starter universe and suite subsets. Add ETC and
   TRX and remove ATOM, BTW, CC, KAS, and RENDER. Resolve verified TRX asset age
   for Binance and Bybit perpetuals.

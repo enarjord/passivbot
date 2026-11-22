@@ -108,6 +108,15 @@ orders farther from market than
 The market distance is calculated by that final generic pre-create guard. The
 churn gate does not perform its own market fetch.
 
+For Bitunix hedge positions, the first admissible resting close has an additional
+economy exemption when the current plan contains a single reduce-only limit
+close and the confirmed account snapshot shows a nonzero position with no
+resting close in that position side. The exemption applies only when allowance
+is exhausted. It counts toward rolling usage and gets create-batch priority
+after risk-critical orders. Missing or changed account facts and outstanding
+confirmation keep ordinary admission in place. Cancel-first sequencing,
+quote readiness, create recovery, and all connector write guards still apply.
+
 Connector calls remain responsible for their own exchange rate limiting.
 
 ## Deliberately removed machinery
