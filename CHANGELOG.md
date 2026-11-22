@@ -5,8 +5,6 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Identify which account facts changed when live ordinary order planning defers.
-
 - Update the Trailing Martingale starter universe and suite subsets. Add ETC and
   TRX and remove ATOM, BTW, CC, KAS, and RENDER. Resolve verified TRX asset age
   for Binance and Bybit perpetuals.
@@ -395,6 +393,8 @@ its own version heading. See [release status](docs/releases.md).
 
 - Recheck a ready ordinary plan blocked only by account receipt expiry after the scheduled
   account refresh and protective pass, with the same exact facts and admission requirements.
+
+- Identify which account facts changed when live ordinary order planning defers.
 
 - Join an in-flight account refresh before choosing which HSL fill task ordinary preparation
   can wait for. Give that task a bounded opportunity to finish before acquiring quotes.
