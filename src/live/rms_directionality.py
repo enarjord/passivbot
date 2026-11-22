@@ -172,7 +172,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
         except (ccxt.NetworkError, OhlcvFetchError, OSError, asyncio.TimeoutError) as exc:
             run_diagnostic_step(
                 "record RMS candle read failure",
-                lambda: _log_read_failure(bot, symbol, exc),
+                lambda exc=exc: _log_read_failure(bot, symbol, exc),
             )
             continue
 
