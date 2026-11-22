@@ -12,6 +12,7 @@ from typing import Any, Iterable, Optional
 import numpy as np
 import passivbot_rust as pbr
 
+from candlestick_manager import ONE_MIN_MS
 from live.diagnostic_safety import bounded_exception_type
 from live.diagnostic_valuation import observe_signed_entry_distance_fraction
 from live.event_bus import EventTypes, ReasonCodes
@@ -444,6 +445,30 @@ def _monitor_handle_candlestick_persist(
         for row in batch
     ]
     publisher.record_completed_candles(symbol, timeframe, candles)
+    if timeframe == "1m":
+        _monitor_record_hour_from_minutes(self, publisher, symbol)
+
+
+def _monitor_record_hour_from_minutes(self, publisher, symbol: str) -> None:
+    """Publish the latest fully observed UTC hour from the live minute cache."""
+    cm = self.cm
+    hour_ms = 60 * ONE_MIN_MS
+    start_ts = (int(cm._now_ms()) // hour_ms - 1) * hour_ms
+    if not publisher.completed_candle_due(symbol, "1h", start_ts):
+        return
+    minutes = cm.peek_complete_minute_window(symbol, start_ts, start_ts + hour_ms - ONE_MIN_MS)
+    if minutes is None:
+        return
+    candle = {
+        "ts": start_ts,
+        "o": float(minutes[0]["o"]),
+        "h": float(minutes["h"].max()),
+        "l": float(minutes["l"].min()),
+        "c": float(minutes[-1]["c"]),
+        "bv": float(minutes["bv"].sum(dtype=np.float64)),
+        "source": "minute_rollup",
+    }
+    publisher.record_completed_candles(symbol, "1h", [candle])
 
 
 def _monitor_equity(self, *, balance_raw: float, now_ms: int) -> Optional[float]:

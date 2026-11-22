@@ -994,6 +994,14 @@ class MonitorPublisher:
                 self._last_price_tick_emitted_ms[symbol] = now_ms
             return entry
 
+    def completed_candle_due(self, symbol: str, timeframe: str, ts: int) -> bool:
+        """Allow a candle observer to skip work for a bucket already published."""
+        with self._lock:
+            if not (self.retain_candles and self.emit_completed_candles):
+                return False
+            last_ts = self._last_candle_ts_by_key.get((str(symbol), str(timeframe)))
+            return last_ts is None or int(ts) > last_ts
+
     def record_completed_candles(
         self,
         symbol: str,
@@ -1017,9 +1025,6 @@ class MonitorPublisher:
                 to_emit = [
                     candle for candle in sorted_candles if int(candle["ts"]) > last_known_ts
                 ]
-            if not to_emit:
-                self._last_candle_ts_by_key[key] = int(sorted_candles[-1]["ts"])
-                return []
             emitted: list[dict] = []
             for candle in to_emit:
                 entry = self.record_history_entry(

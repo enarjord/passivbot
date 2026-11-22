@@ -5970,6 +5970,29 @@ class CandlestickManager:
 
     # ----- Array slicing helpers -----
 
+    def peek_complete_minute_window(
+        self, symbol: str, start_ts: int, end_ts: int
+    ) -> Optional[np.ndarray]:
+        """Copy an exact window of observed minutes from the in-memory cache."""
+        cached = self._cache.get(symbol)
+        if cached is None or not cached.size or cached[0]["ts"] > start_ts:
+            return None
+        if cached[-1]["ts"] < end_ts:
+            return None
+        rows = self._slice_ts_range(cached, start_ts, end_ts, assume_sorted=True)
+        timestamps = rows["ts"]
+        if (
+            not timestamps.size
+            or timestamps[0] != start_ts
+            or timestamps[-1] != end_ts
+            or np.any(np.diff(timestamps) != ONE_MIN_MS)
+        ):
+            return None
+        synthetic = self._synthetic_timestamps.get(symbol, ())
+        if synthetic and any(int(ts) in synthetic for ts in timestamps):
+            return None
+        return rows.copy()
+
     def _slice_ts_range(
         self, arr: np.ndarray, start_ts: int, end_ts: int, *, assume_sorted: bool = False
     ) -> np.ndarray:

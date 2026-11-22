@@ -6,6 +6,12 @@
 retention, and recovery. Persistence failures stay visible and trading decisions remain independent.
 The [relay](monitor_relay.md) reads the published files.
 
+Native completed candle observations follow the candle persistence hook. A minute persistence
+notification also offers the latest completed UTC hour to monitor history when the in-memory
+minute cache covers all 60 opens and contains observed rows throughout. The monitor marks this
+OHLCV rollup with `source=minute_rollup`. Native and rollup rows share a per-symbol hourly publisher
+watermark. The rollup is a passive observation with a single-hour scope.
+
 Snapshots, event rows, and history rows require strict JSON. Reject NaN and infinity, including
 after NumPy conversion, through the existing persistence-failure policy. Failed snapshots keep
 the previous snapshot and checkpoint. Failed event or history serialization appends no partial

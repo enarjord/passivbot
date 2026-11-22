@@ -104,6 +104,9 @@ class RecorderPublisher:
         self.completed_candles.append(entry)
         return entry["candles"]
 
+    def completed_candle_due(self, symbol, timeframe, ts):
+        return False
+
     def close(self):
         self.closed = True
 
@@ -3218,6 +3221,7 @@ def test_candle_persist_handler_preserves_monitor_and_emits_flush_summary():
 
         def __init__(self):
             self.monitor_publisher = RecorderPublisher()
+            self.cm = SimpleNamespace(_now_ms=lambda: 120_000)
             self._bot_ready = True
             self._cache_flush_event_throttle_seconds = 60.0
             self.flush_events = []
@@ -6106,6 +6110,74 @@ def test_monitor_record_price_ticks_delegates_valid_prices_only():
     assert all(entry["source"] == "test" for entry in bot.monitor_publisher.price_ticks)
 
 
+@pytest.mark.parametrize("gap_kind", ["missing", "synthetic"])
+def test_minute_monitor_publishes_only_the_complete_closed_hour(
+    tmp_path, monkeypatch, gap_kind
+):
+    from candlestick_manager import CANDLE_DTYPE, ONE_MIN_MS, CandlestickManager
+    from config import get_template_config
+    from monitor_publisher import MonitorPublisher
+    from passivbot_monitor import _monitor_handle_candlestick_persist
+
+    symbol = "BTC/USDT:USDT"
+    hour_ms = 60 * ONE_MIN_MS
+    start_ts = hour_ms
+    close_ts = start_ts + hour_ms
+    clock = [close_ts - 1]
+    cm = CandlestickManager(exchange_name="bybit", cache_dir=str(tmp_path / "cache"))
+    monkeypatch.setattr(cm, "_now_ms", lambda: clock[0])
+    publisher = MonitorPublisher.from_config(
+        exchange="bybit",
+        user="test",
+        config={**get_template_config()["monitor"], "root_dir": str(tmp_path / "monitor")},
+    )
+    bot = SimpleNamespace(cm=cm, monitor_publisher=publisher, _bot_ready=True)
+    history_path = publisher.history_dir / "candles_1h.current.ndjson"
+    rows = np.array(
+        [
+            (start_ts + i * ONE_MIN_MS, 10 + i, 12 + i, 9 + i, 11 + i, 2)
+            for i in range(60)
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._cache[symbol] = rows
+    _monitor_handle_candlestick_persist(bot, symbol, "1m", rows[-2:-1])
+    assert not history_path.exists()
+
+    clock[0] = close_ts
+    if gap_kind == "missing":
+        cm._cache[symbol] = np.delete(rows, 13)
+    else:
+        cm._synthetic_timestamps[symbol] = {int(rows[13]["ts"])}
+    _monitor_handle_candlestick_persist(bot, symbol, "1m", rows[-1:])
+    assert not history_path.exists()
+
+    cm.set_persist_batch_observer(
+        lambda sym, tf, batch: _monitor_handle_candlestick_persist(bot, sym, tf, batch)
+    )
+    cm._persist_batch(symbol, rows[13:14])
+    _monitor_handle_candlestick_persist(bot, symbol, "1m", rows[-1:])
+    native = rows[-1:].copy()
+    native[0]["ts"] = start_ts - hour_ms
+    _monitor_handle_candlestick_persist(bot, symbol, "1h", native)
+    native[0]["ts"] = start_ts
+    _monitor_handle_candlestick_persist(bot, symbol, "1h", native)
+
+    history = [json.loads(line) for line in history_path.read_text().splitlines()]
+    assert len(history) == 1
+    assert history[0]["symbol"] == symbol
+    assert history[0]["timeframe"] == "1h"
+    assert history[0]["payload"] == {
+        "ts": start_ts,
+        "o": 10.0,
+        "h": 71.0,
+        "l": 9.0,
+        "c": 70.0,
+        "bv": 120.0,
+        "source": "minute_rollup",
+    }
+
+
 def test_monitor_handle_candlestick_persist_requires_ready_bot():
     import passivbot as pb_mod
 
@@ -6116,6 +6188,7 @@ def test_monitor_handle_candlestick_persist_requires_ready_bot():
 
         def __init__(self):
             self.monitor_publisher = RecorderPublisher()
+            self.cm = SimpleNamespace(_now_ms=lambda: 120_000)
             self._bot_ready = False
 
     bot = FakeBot()
