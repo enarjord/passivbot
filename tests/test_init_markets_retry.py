@@ -728,13 +728,19 @@ async def test_protective_preflight_is_read_only_and_requires_existing_mode(
 
     cls = {"bitunix": BitunixBot, "binance": BinanceBot, "kucoin": KucoinBot}[exchange]
     bot = cls.__new__(cls)
+    mode = {"hedged": hedged}
+    if exchange == "kucoin" and hedged is not None:
+        mode["info"] = {"positionMode": int(hedged)}
     bot.cca = SimpleNamespace(
-        fetch_position_mode=AsyncMock(return_value={"hedged": hedged}),
+        fetch_position_mode=AsyncMock(return_value=mode),
         fetch_balance=AsyncMock(),
         set_position_mode=AsyncMock(),
     )
     if hedged is True:
         await bot._prepare_protective_account()
+    elif exchange == "kucoin" and hedged is None:
+        with pytest.raises(ValueError, match="position mode response"):
+            await bot._prepare_protective_account()
     else:
         with pytest.raises(RuntimeError, match="existing hedge"):
             await bot._prepare_protective_account()

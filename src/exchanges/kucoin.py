@@ -617,26 +617,34 @@ class KucoinBot(CCXTBot):
         except (KeyError, TypeError, AttributeError):
             return False
 
+    async def _fetch_exchange_hedge_mode(self) -> bool:
+        response = await self.cca.fetch_position_mode()
+        info = response.get("info") if isinstance(response, dict) else None
+        mode = info.get("positionMode") if isinstance(info, dict) else None
+        # CCXT normalizes absent and unknown modes to hedged=False.
+        if type(mode) not in (int, str) or mode not in (0, 1, "0", "1"):
+            raise ValueError("KuCoin position mode response must report one-way or hedge mode")
+        return mode in (1, "1")
+
     async def _prepare_protective_account(self):
-        current = await self.cca.fetch_position_mode()
-        if current.get("hedged") is not True:
+        if not await self._fetch_exchange_hedge_mode():
             raise RuntimeError("KuCoin protective startup requires existing hedge position mode")
 
     async def update_exchange_config(self):
-        """Ensure account-level settings (hedge mode) are applied."""
+        """Verify hedge mode and change it only when KuCoin reports one-way mode."""
         try:
-            # Hedge mode enabled so both long/short can coexist.
-            if hasattr(self.cca, "set_position_mode"):
-                res = await self.cca.set_position_mode(True)
-                logging.info(
-                    "[config] set_position_mode hedged=True result=%s",
-                    format_exchange_config_response(res),
-                )
-            else:
-                raise NotImplementedError("set_position_mode not supported by current KuCoin client")
+            if await self._fetch_exchange_hedge_mode():
+                return
+            res = await self.cca.set_position_mode(True)
+            if not await self._fetch_exchange_hedge_mode():
+                raise RuntimeError("KuCoin did not confirm hedge position mode")
+            logging.info(
+                "[config] set_position_mode hedged=True result=%s",
+                format_exchange_config_response(res),
+            )
         except Exception as e:
             logging.error(
-                "[config] set_position_mode hedged=True not applied | %s",
+                "[config] hedge mode setup failed | %s",
                 self._format_exchange_config_error(e),
             )
             raise

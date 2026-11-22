@@ -280,8 +280,12 @@ Problem:
 
 Handling:
 
-1. Treat current same-mode success as success (`code=200000`, `data.positionMode=1`).
-2. Let unknown `set_position_mode` failures raise unless a verified KuCoin no-op code is added with a targeted test.
+1. Read the account's raw `positionMode` before a configuration write. An explicit hedge mode
+   completes setup without a write. Only an explicit one-way mode permits a switch, and a
+   fresh position-mode read must confirm hedge mode after a successful switch.
+2. Protective startup uses the same strict mode read and requires existing hedge mode.
+   Let failed reads, unrecognized modes, and failed writes propagate to the caller.
+   The bounded Futures read retry applies to the position-mode read.
 3. The connector keeps the exchange account in hedge mode even when `bot.portfolio.hedge_mode=false`
    disables simultaneous strategy exposure. Normalize order updates against that actual exchange
    mode, not the strategy flag.
@@ -291,6 +295,9 @@ Handling:
    plus `reduceOnly` tuple.
 5. In exchange hedge mode, derive entry/close-only effect from the authoritative buy/sell plus
    long/short tuple when KuCoin omits native `reduceOnly`.
+
+Primary references: [Get Position Mode](https://www.kucoin.com/docs-new/rest/futures-trading/positions/get-position-mode)
+and [Switch Position Mode](https://www.kucoin.com/docs-new/rest/futures-trading/positions/switch-position-mode).
 
 ### OHLCV limit behavior + sparse-minute markets
 
