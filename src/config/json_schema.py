@@ -9,7 +9,7 @@ import re
 
 from .field_registry import LIVE_OPERATIONAL_PATHS, get_field_registry
 from .field_spec import CoinOverridePolicy, FieldType, NO_DEFAULT
-from .risk_memory import LOSS_GATE_CAP_PATH
+from .risk_memory import LOSS_GATE_CAP_PATH, LOSS_GATE_PATH
 
 
 def field_schema(field, *, include_default=True):
@@ -252,6 +252,13 @@ def _patch_schemas(root, definitions, mode, registry):
                 properties[name] = {"type": "object", "maxProperties": 0}
             else:
                 properties[name] = {"$ref": _pointer(path)}
+                if LOSS_GATE_PATH[:len(path)] == path:
+                    # Dotted object selectors replace the entire group. The
+                    # nested patch form still uses the sparse schema above.
+                    authority = {"required": ["enabled"]}
+                    for part in reversed(LOSS_GATE_PATH[len(path):]):
+                        authority = {"required": [part], "properties": {part: authority}}
+                    properties[name].update(authority)
         patterns = {}
         # Dotted per-coin settings retain the same narrow permission set.
         coin_patch = definitions["coinPatch"]

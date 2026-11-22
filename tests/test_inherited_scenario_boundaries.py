@@ -40,8 +40,14 @@ def test_untyped_and_nonbot_scenario_paths_still_require_existing_fields():
     ("bot.portfolio.invented", 1.0),
     ("bot.portfolio.execution.invented", 1.0),
     ("bot.portfolio.execution", {"invented": 1.0}),
-    ("bot.portfolio", {"execution": {"invented": 1.0}}),
-    ("bot", {"portfolio": {"execution": {"invented": 1.0}}}),
+    ("bot.portfolio", {
+        "execution": {"invented": 1.0},
+        "risk": {"loss_realization": {"loss_gate": {"enabled": False}}},
+    }),
+    ("bot", {"portfolio": {
+        "execution": {"invented": 1.0},
+        "risk": {"loss_realization": {"loss_gate": {"enabled": False}}},
+    }}),
 ])
 def test_typed_scenario_and_facade_reject_unknown_portfolio_leaves_and_objects(owner, path, value):
     from config.bot_inheritance import apply_bot_config_patch

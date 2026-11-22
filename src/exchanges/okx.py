@@ -16,6 +16,8 @@ calc_order_price_gap_fraction = pbr.calc_order_price_gap_fraction
 
 
 class OKXBot(CCXTBot):
+    supports_close_lookup_by_client_id = True
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.order_side_map = {

@@ -1151,3 +1151,68 @@ class TestBuildOrderParams:
         result = bot._build_order_params(order)
 
         assert result["timeInForce"] == "GTC"
+
+
+@pytest.mark.parametrize(
+    "venue, exchange_id, expected_method, expected_args",
+    [
+        ("binance", "", "fetch_order", (None, "A", {"clientOrderId": "client"})),
+        ("bitget", "", "fetch_order", (None, "A", {"clientOrderId": "client"})),
+        ("hyperliquid", "", "fetch_order", (None, "A", {"clientOrderId": "client"})),
+        ("okx", "", "fetch_order", (None, "A", {"clientOrderId": "client"})),
+        ("bybit", "", "fetch_canceled_and_closed_orders", ("A", None, 2, {"orderLinkId": "client"})),
+        ("bybit", "order", "fetch_canceled_and_closed_orders", ("A", None, 2, {"orderId": "order"})),
+        ("kucoin", "", "fetch_contract_order", (None, "A", {"clientOrderId": "client"})),
+        ("kucoin", "order", "fetch_order", ("order", "A")),
+        ("default", "order", "fetch_order", ("order", "A")),
+        ("default", "", "fetch_closed_orders", ("A", 123, 50)),
+    ],
+)
+def test_realized_close_lookup_routes_use_connector_identity(
+    venue, exchange_id, expected_method, expected_args
+):
+    from exchanges.binance import BinanceBot
+    from exchanges.bitget import BitgetBot
+    from exchanges.bybit import BybitBot
+    from exchanges.ccxt_bot import CCXTBot
+    from exchanges.hyperliquid import HyperliquidBot
+    from exchanges.kucoin import KucoinBot
+    from exchanges.okx import OKXBot
+
+    adapter = {
+        "binance": BinanceBot, "bitget": BitgetBot, "hyperliquid": HyperliquidBot,
+        "okx": OKXBot, "bybit": BybitBot, "kucoin": KucoinBot, "default": CCXTBot,
+    }[venue]
+    bot = adapter.__new__(adapter)
+    bot.cca = MagicMock()
+    bot.cca.has = {
+        "fetchOrder": True,
+        "fetchCanceledAndClosedOrders": True,
+        "fetchClosedOrders": True,
+    }
+    routes = list(bot.realized_close_lookup_routes(
+        "A", exchange_id, "client", since_ms=123, limit=50,
+    ))
+
+    assert routes[0] == (
+        getattr(bot.cca, expected_method), expected_args,
+        expected_method in {"fetch_canceled_and_closed_orders", "fetch_closed_orders"},
+    )
+    assert routes[-1] == (bot.cca.fetch_closed_orders, ("A", 123, 50), True)
+    assert bot.cca.mock_calls == []
+
+
+@pytest.mark.asyncio
+async def test_lighter_realized_close_lookup_uses_supported_history():
+    from exchanges.lighter import AsyncLighter, LighterBot
+
+    bot = LighterBot.__new__(LighterBot)
+    bot.cca = AsyncLighter()
+    try:
+        assert bot.cca.has["fetchClosedOrders"] is True
+        routes = list(bot.realized_close_lookup_routes(
+            "A", "", "client", since_ms=123, limit=50,
+        ))
+        assert (bot.cca.fetch_closed_orders, ("A", 123, 50), True) in routes
+    finally:
+        await bot.cca.close()

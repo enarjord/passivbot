@@ -31,6 +31,10 @@ def _apply_config_overrides(
     preserve_derived_outputs=True,
 ) -> None:
     from config.bot_inheritance import get_bot_policy
+    from config.risk_memory import validate_loss_gate_replacements
+
+    if overrides:
+        validate_loss_gate_replacements(overrides)
     if get_bot_policy(config) is not None:
         _apply_inherited_config_overrides(
             config, overrides, preserve_prepared_universe=preserve_prepared_universe,

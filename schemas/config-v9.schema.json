@@ -18650,7 +18650,31 @@
           "$ref": "#/$defs/config/properties/bot/properties/long/properties/universe/properties/minimum_coin_age_days"
         },
         "bot.portfolio": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio"
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio",
+          "required": [
+            "risk"
+          ],
+          "properties": {
+            "risk": {
+              "required": [
+                "loss_realization"
+              ],
+              "properties": {
+                "loss_realization": {
+                  "required": [
+                    "loss_gate"
+                  ],
+                  "properties": {
+                    "loss_gate": {
+                      "required": [
+                        "enabled"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
         },
         "bot.portfolio.execution": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/execution"
@@ -18665,7 +18689,24 @@
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hedge_mode"
         },
         "bot.portfolio.risk": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk"
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk",
+          "required": [
+            "loss_realization"
+          ],
+          "properties": {
+            "loss_realization": {
+              "required": [
+                "loss_gate"
+              ],
+              "properties": {
+                "loss_gate": {
+                  "required": [
+                    "enabled"
+                  ]
+                }
+              }
+            }
+          }
         },
         "bot.portfolio.risk.hsl": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/hsl"
@@ -18695,10 +18736,23 @@
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/hsl/properties/scope"
         },
         "bot.portfolio.risk.loss_realization": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization"
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization",
+          "required": [
+            "loss_gate"
+          ],
+          "properties": {
+            "loss_gate": {
+              "required": [
+                "enabled"
+              ]
+            }
+          }
         },
         "bot.portfolio.risk.loss_realization.loss_gate": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate"
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate",
+          "required": [
+            "enabled"
+          ]
         },
         "bot.portfolio.risk.loss_realization.loss_gate.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate/properties/enabled"
@@ -21255,7 +21309,24 @@
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/hedge_mode"
         },
         "portfolio.risk": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk"
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk",
+          "required": [
+            "loss_realization"
+          ],
+          "properties": {
+            "loss_realization": {
+              "required": [
+                "loss_gate"
+              ],
+              "properties": {
+                "loss_gate": {
+                  "required": [
+                    "enabled"
+                  ]
+                }
+              }
+            }
+          }
         },
         "portfolio.risk.hsl": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/hsl"
@@ -21285,10 +21356,23 @@
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/hsl/properties/scope"
         },
         "portfolio.risk.loss_realization": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization"
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization",
+          "required": [
+            "loss_gate"
+          ],
+          "properties": {
+            "loss_gate": {
+              "required": [
+                "enabled"
+              ]
+            }
+          }
         },
         "portfolio.risk.loss_realization.loss_gate": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate"
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate",
+          "required": [
+            "enabled"
+          ]
         },
         "portfolio.risk.loss_realization.loss_gate.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate/properties/enabled"
@@ -23397,10 +23481,23 @@
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/hsl/properties/scope"
         },
         "risk.loss_realization": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization"
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization",
+          "required": [
+            "loss_gate"
+          ],
+          "properties": {
+            "loss_gate": {
+              "required": [
+                "enabled"
+              ]
+            }
+          }
         },
         "risk.loss_realization.loss_gate": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate"
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate",
+          "required": [
+            "enabled"
+          ]
         },
         "risk.loss_realization.loss_gate.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate/properties/enabled"
@@ -23474,7 +23571,10 @@
           "$ref": "#/$defs/scenarioPatch:bot.portfolio.risk.loss_realization"
         },
         "loss_realization.loss_gate": {
-          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate"
+          "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate",
+          "required": [
+            "enabled"
+          ]
         },
         "loss_realization.loss_gate.enabled": {
           "$ref": "#/$defs/config/properties/bot/properties/portfolio/properties/risk/properties/loss_realization/properties/loss_gate/properties/enabled"

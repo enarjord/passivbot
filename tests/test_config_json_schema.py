@@ -269,6 +269,26 @@ def test_nested_scenario_overrides_remain_supported(validator):
     validator.validate(source(backtest={"scenarios": [{"overrides": {
         "bot": {"long": {"risk.unstuck.ema_span_0_minutes": 60.5}},
     }}]}))
+    validator.validate(source(backtest={"scenarios": [{"overrides": {
+        "bot": {"portfolio": {"risk": {"loss_realization": {"memory_ema_span_minutes": 123.5}}}},
+    }}]}))
+
+
+@pytest.mark.parametrize(("selector", "gate_path"), [
+    ("bot.portfolio", ("risk", "loss_realization", "loss_gate")),
+    ("bot.portfolio.risk", ("loss_realization", "loss_gate")),
+    ("bot.portfolio.risk.loss_realization", ("loss_gate",)),
+    ("bot.portfolio.risk.loss_realization.loss_gate", ()),
+])
+def test_atomic_scenario_replacement_requires_explicit_gate_authority(validator, selector, gate_path):
+    value = gate = {}
+    config = source(backtest={"scenarios": [{"overrides": {selector: value}}]})
+    with pytest.raises(ValidationError):
+        validator.validate(config)
+    for part in gate_path:
+        gate = gate.setdefault(part, {})
+    gate["enabled"] = False
+    validator.validate(config)
 
 
 @pytest.mark.parametrize("patch", [

@@ -116,8 +116,9 @@ The unstuck fraction `p` is the binary32 product of `loss_allowance_fraction` an
 the applicable TWEL. The gate uses its cap directly. The gate's strict `enabled` flag
 controls activation, and an enabled gate requires `max_realized_drawdown_fraction`
 in `[0, 1)`. Zero blocks every projected lossy non-panic close. A valid cap accompanying
-a disabled gate is dormant. A scenario that replaces the whole `loss_gate` object
-must include `enabled`. A leaf override inherits the rest of the gate policy.
+a disabled gate is dormant. A scenario that atomically replaces `loss_gate` or
+an enclosing object must supply `loss_gate.enabled` explicitly. A leaf override
+inherits the rest of the gate policy.
 Either enabled policy can consume the shared state independently.
 
 ### Close allocation and venue limits

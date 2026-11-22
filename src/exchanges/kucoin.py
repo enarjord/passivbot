@@ -147,6 +147,14 @@ class KucoinBot(CCXTBot):
         self.quote = "USDT"
         self.hedge_mode = True
 
+    def _realized_close_exact_lookup_routes(self, symbol, exchange_order_id, client_order_id):
+        if not exchange_order_id and getattr(self.cca, "has", {}).get("fetchOrder") is True:
+            yield self.cca.fetch_contract_order, (None, symbol, {"clientOrderId": client_order_id}), False
+        else:
+            yield from super()._realized_close_exact_lookup_routes(
+                symbol, exchange_order_id, client_order_id
+            )
+
     def _get_partner_signature(self, timestamp: str) -> str:
         prehash = f"{timestamp}{self.partner}{self.api_key}"
         digest = hmac.new(self.broker_key.encode(), prehash.encode(), hashlib.sha256).digest()

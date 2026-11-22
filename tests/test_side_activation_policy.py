@@ -347,7 +347,10 @@ def test_global_activation_rejected_in_leaf_and_parent_patches(value, parent, ch
     config = prepare({"bot": {"long": {"enabled": True}}}, live_only=True, verbose=False)
     patch = {"leaf": {"bot.global.enabled": value},
              "global": {"bot.global": {"enabled": value}},
-             "bot": {"bot": {"global": {"enabled": value}}}}[parent]
+             "bot": {"bot": {
+                 "global": {"enabled": value},
+                 "portfolio": {"risk": {"loss_realization": {"loss_gate": {"enabled": False}}}},
+             }}}[parent]
     functions = {"fixed": _apply_config_overrides, "scenario": apply_scenario_overrides,
                  "authored": apply_bot_config_patch, "activation": apply_activation_patch}
     with pytest.raises(ValueError, match=r"bot.global.enabled is unsupported.*bot.long.enabled"):

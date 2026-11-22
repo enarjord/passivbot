@@ -11,6 +11,7 @@ from config.inherited_bounds import get_bound_plan, resolve_plan_selectors
 from config.risk_memory import (
     DEFAULT_REALIZED_LOSS_MEMORY_EMA_SPAN_MINUTES,
     LOSS_GATE_CAP_PATH,
+    LOSS_REALIZATION_PATH,
     optimizer_loss_gate_policy,
     require_loss_realization_policy,
     risk_memory_spans,
@@ -91,7 +92,11 @@ def test_only_eligible_scenarios_open_an_explicit_cap_coordinate():
     ({"bot": {"portfolio": {"risk": {"loss_realization": {"loss_gate": {CAP: 0}}}}}},
      {"enabled": True, CAP: 0}),
     ({GATE_DOTTED: {"enabled": False}}, {"enabled": False}),
-    ({GATE_DOTTED.rsplit(".", 1)[0]: {"memory_ema_span_minutes": 123.5}}, {"enabled": False}),
+    ({".".join(LOSS_REALIZATION_PATH): {
+        "memory_ema_span_minutes": 123.5, "loss_gate": {"enabled": False},
+    }}, {"enabled": False}),
+    ({"bot": {"portfolio": {"risk": {"loss_realization": {"memory_ema_span_minutes": 123.5}}}}},
+     {"enabled": True, CAP: 0.1}),
 ])
 def test_optimizer_gate_projection_matches_scenario_patch(overrides, expected):
     from config.scenario_overrides import normalize_scenario_overrides
@@ -126,6 +131,47 @@ def test_atomic_gate_replacement_requires_enablement_in_scenario_and_projection(
     source["backtest"].update(suite_enabled=True, scenarios=[{"label": "bad", "overrides": overrides}])
     with pytest.raises(ValueError, match="loss_gate.enabled must be an explicit boolean"):
         prepare_config(source, verbose=False)
+
+
+@pytest.mark.parametrize("overrides", [
+    {"bot.portfolio.risk.loss_realization": {"memory_ema_span_minutes": 123.5}},
+    {"bot.portfolio.risk": {"hsl": {"scope": "coin"}}},
+    {"bot.portfolio": {"strategy_kind": "trailing_martingale"}},
+])
+def test_atomic_ancestor_replacement_requires_explicit_gate_authority(overrides):
+    from optimization.warmup import _apply_config_overrides
+    from suite_runner import apply_scenario_overrides
+
+    source = get_template_config()
+    risk(source)["loss_gate"] = {"enabled": True, CAP: 0.03}
+    prepared = prepare_config(source, verbose=False)
+    error = "loss_gate.enabled must be an explicit boolean"
+    with pytest.raises(ValueError, match=error):
+        optimizer_loss_gate_policy(prepared, overrides)
+    for base in (source, prepared):
+        for apply in (apply_scenario_overrides, _apply_config_overrides):
+            candidate = deepcopy(base)
+            with pytest.raises(ValueError, match=error):
+                apply(candidate, overrides)
+            assert candidate == base
+
+    source["backtest"]["scenarios"] = [{"label": "bad", "overrides": overrides}]
+    with pytest.raises(ValueError, match=error):
+        prepare_config(source, verbose=False)
+
+
+def test_direct_runtime_bot_replacement_checks_gate_before_defaults():
+    from config.bot_inheritance import apply_bot_config_patch
+    from optimization.warmup import _apply_config_overrides
+    from suite_runner import apply_scenario_overrides
+
+    prepared = prepare_config(get_template_config(), verbose=False)
+    overrides = {"bot": {"long": {"enabled": True}}}
+    for apply in (apply_bot_config_patch, _apply_config_overrides, apply_scenario_overrides):
+        candidate = deepcopy(prepared)
+        with pytest.raises(ValueError, match="loss_gate.enabled must be an explicit boolean"):
+            apply(candidate, overrides)
+        assert candidate == prepared
 
 
 def test_retired_sources_rejected_before_default_resolution(tmp_path):

@@ -10,10 +10,8 @@ torch = pytest.importorskip("torch")
 pytestmark = pytest.mark.skip(reason="GPU v9 realized-loss close sizing awaits parity with Rust")
 
 
-def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
-               hsl_mode="coin", interval_minutes=1):
-    from optimization.gpu.service import SharedAccountReplay
-
+def make_inputs(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
+                hsl_mode="coin", interval_minutes=1):
     config, _, markets, _, timestamps = _fixture(sides[0], coins, "initial")
     config['bot']["portfolio"]['strategy_kind'] = strategy
     config["backtest"]["candle_interval_minutes"] = interval_minutes
@@ -21,11 +19,14 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
     if hsl_mode != "coin":
         from config.hsl import generated_template
         config = generated_template(config, hsl_mode)
-        if hsl_mode == "portfolio":
-            config["bot"]["portfolio"]["hsl"]["enabled"] = False
+    portfolio_risk = config["bot"]["portfolio"]["risk"]
+    if hsl_mode == "portfolio":
+        portfolio_risk["hsl"]["enabled"] = False
+    portfolio_risk["loss_realization"] = {
+        "memory_ema_span_minutes": memory_span,
+        "loss_gate": {"enabled": False},
+    }
     count = 50
-    config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = memory_span
-    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = memory_span
     for side in ("long", "short"):
         config["bot"][side]["enabled"] = side in sides
     for side in sides:
@@ -34,13 +35,11 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
             max_positions=coins,
             total_wallet_exposure_limit_ratio=float(coins),
         )
-        # The fixture template already carries the canonical cooldown leaf;
-        # a legacy risk leaf cannot override it. Prevent reentry after closes.
+        # Prevent reentry after closes.
         bot["entry_cooldown"]["base_duration_minutes"] = 1000.0
-        bot["unstuck"].update(
+        bot["risk"]["unstuck"].update(
             enabled=True,
             ema_gating_enabled=False,
-            close_fraction=0.1,
             loss_allowance_fraction=0.001,
             exposure_trigger_ratio=0.3,
         )
@@ -73,14 +72,21 @@ def make_proxy(sides, memory_span=8.0, strategy="trailing_martingale", coins=2,
             maker=0.0002,
         )
     markets["__meta__"].update(data_interval_minutes=interval_minutes, requested_start_ts=first_ts)
-    inputs = candles, markets, config, "bybit", btc, timestamps
+    return candles, markets, config, "bybit", btc, timestamps
+
+
+def make_proxy(*args, **kwargs):
+    from optimization.gpu.service import SharedAccountReplay
+
+    inputs = make_inputs(*args, **kwargs)
+    candles, markets, config, exchange, btc, timestamps = inputs
     proxy = SharedAccountReplay(
         config=config,
         hlcvs=candles,
         mss=markets,
         btc=btc,
         timestamps=timestamps,
-        exchange="bybit",
+        exchange=exchange,
         batch_size=3,
         needed_metrics={"cagr_fraction_strategy_equity"},
     )

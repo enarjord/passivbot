@@ -88,14 +88,19 @@ def require_loss_realization_policy(config):
 
 
 def validate_loss_gate_replacement(path, value):
-    """Validate an explicitly replaced gate before portfolio defaults are resolved."""
+    """Require gate authority when replacing it or any of its ancestors."""
     if LOSS_GATE_PATH[:len(path)] != path:
         return
     for part in LOSS_GATE_PATH[len(path):]:
-        if not isinstance(value, dict) or part not in value:
-            return
-        value = value[part]
+        value = value.get(part) if isinstance(value, dict) else None
     _require_loss_gate(value)
+
+
+def validate_loss_gate_replacements(overrides):
+    """Validate normalized runtime patches before any mutations."""
+    for selector, value in overrides.items():
+        if isinstance(selector, str):
+            validate_loss_gate_replacement(tuple(selector.split(".")), value)
 
 
 def _project_loss_gate(config, overrides):

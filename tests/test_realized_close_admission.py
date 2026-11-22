@@ -57,6 +57,12 @@ def _bot():
     ), events
 
 
+def _use_lookup_connector(bot, connector_type, **client_attributes):
+    connector = connector_type.__new__(connector_type)
+    bot.cca = connector.cca = SimpleNamespace(**client_attributes)
+    bot.realized_close_lookup_routes = connector.realized_close_lookup_routes
+
+
 def _bind(bot, orders, *, cap=0.001, enabled=True, balance=1000.0, drawdown=0.0, symbols=("A", "B")):
     exchange = {
         "qty_step": 0.1, "price_step": 0.1, "min_qty": 0.1, "min_cost": 0.0,
@@ -270,6 +276,9 @@ def test_gate_rechecks_current_quote_receipt_at_transport(native):
 @pytest.mark.parametrize("venue", ["binance", "bybit"])
 @pytest.mark.asyncio
 async def test_accepted_close_cancelled_before_open_order_observation(native, gate_enabled, venue):
+    from exchanges.binance import BinanceBot
+    from exchanges.bybit import BybitBot
+
     bot, _ = _bot()
     bot._loss_gate_enabled = lambda: gate_enabled
     initial = _close("A", pside="long", identifier="initial", order_type="unstuck")
@@ -286,12 +295,12 @@ async def test_accepted_close_cancelled_before_open_order_observation(native, ga
         return [await lookup(params["orderId"], symbol)]
 
     if venue == "bybit":
-        bot.cca = SimpleNamespace(
-            id=venue, has={"fetchCanceledAndClosedOrders": True},
+        _use_lookup_connector(
+            bot, BybitBot, has={"fetchCanceledAndClosedOrders": True},
             fetch_canceled_and_closed_orders=terminal_history,
         )
     else:
-        bot.cca = SimpleNamespace(id=venue, has={"fetchOrder": True}, fetch_order=lookup)
+        _use_lookup_connector(bot, BinanceBot, has={"fetchOrder": True}, fetch_order=lookup)
     confirmations = []
     bot._request_authoritative_confirmation = (
         lambda surfaces, *, min_epoch: confirmations.append((surfaces, min_epoch))
@@ -352,8 +361,10 @@ async def test_ambiguous_close_history_requires_exact_identity_and_complete_fill
              "status": "canceled", "filled": 0.3},
         ]
 
-    bot.cca = SimpleNamespace(
-        id="okx", has={"fetchOrder": True, "fetchClosedOrders": True},
+    from exchanges.okx import OKXBot
+
+    _use_lookup_connector(
+        bot, OKXBot, has={"fetchOrder": True, "fetchClosedOrders": True},
         fetch_order=lookup, fetch_closed_orders=history,
     )
     _bind(bot, [initial])
@@ -428,7 +439,9 @@ async def test_recovery_lookup_preserves_owner_backpressure(native, error_type):
             error.retry_after_seconds = 10.0
         raise error
 
-    bot.cca = SimpleNamespace(id="okx", has={"fetchOrder": True}, fetch_order=lookup)
+    from exchanges.okx import OKXBot
+
+    _use_lookup_connector(bot, OKXBot, has={"fetchOrder": True}, fetch_order=lookup)
     with pytest.raises(error_type, match="busy"):
         await admission.recover(bot)
     assert bot._create_failure_guard.realized_close_attempts
@@ -489,3 +502,103 @@ def test_allocation_validation_uses_global_market_slippage(native):
         "loss_gate_enabled": True, "loss_gate_max_drawdown_fraction": 0.03,
     }
     admission.validate_allocations([row], [order], {"global": policy, "symbols": [symbol]})
+
+
+@pytest.mark.parametrize(
+    "problem, reason, pending_count, gate_enabled",
+    [
+        ("duplicate_order", "realized_close_duplicate_exchange_order_id", 2, True),
+        ("fill_identity", "realized_close_conflicting_fill_identity", 1, True),
+        ("coalesced_fill", "realized_close_ambiguous_fill_identity", 1, True),
+        ("fill_quantity", "realized_close_conflicting_fill_quantity", 1, True),
+        ("fill_quantity", "realized_close_conflicting_fill_quantity", 1, False),
+    ],
+)
+def test_unresolved_reservation_evidence_defers_with_bounded_warning(
+    native, monkeypatch, problem, reason, pending_count, gate_enabled
+):
+    bot, fills = _bot()
+    bot._loss_gate_enabled = lambda: gate_enabled
+    now = [10.0]
+    diagnostics = []
+    monkeypatch.setattr(admission, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    def emit(event_type, **event):
+        diagnostic = LiveEvent(event_type, **event)
+        diagnostics.append(diagnostic)
+        return diagnostic
+
+    bot._emit_live_event = emit
+    initial = _close(
+        "A", pside="long", identifier="initial",
+        order_type="grid" if gate_enabled else "unstuck",
+    )
+    next_order = _close("B", pside="short", identifier="next", order_type="unstuck")
+    _bind(bot, [initial], cap=0.01, enabled=gate_enabled)
+    admission.submitted(bot, initial)
+    admission.result(bot, initial, response={"id": "venue-private-id", "status": "open"})
+    if problem == "duplicate_order":
+        duplicate = {**initial, "custom_id": "duplicate"}
+        admission.submitted(bot, duplicate)
+        admission.result(bot, duplicate, response={"id": "venue-private-id", "status": "open"})
+    else:
+        order_ids = {
+            "fill_identity": ["other"],
+            "coalesced_fill": ["venue-private-id", "other"],
+            "fill_quantity": ["venue-private-id"],
+        }[problem]
+        fills.append(SimpleNamespace(
+            symbol="A", position_side="long", client_order_id="initial",
+            id="fill-1", timestamp=1_000,
+            qty=-1.2 if problem == "fill_quantity" else -0.1,
+            raw=[{"data": {"order": order_id}} for order_id in order_ids],
+        ))
+    _bind(bot, [next_order], cap=0.01, enabled=gate_enabled)
+
+    assert not admission.permits(bot, next_order)
+    assert not admission.permits(bot, next_order)
+    now[0] += 299.0
+    assert not admission.permits(bot, next_order)
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic.event_type == "risk.realized_close_recovery"
+    assert diagnostic.level == "warning"
+    assert diagnostic.status == "deferred"
+    assert diagnostic.reason_code == reason
+    assert diagnostic.data == {"pending_count": pending_count}
+    formatted = format_console_event(diagnostic)
+    assert reason in formatted
+    assert f"pending={pending_count}" in formatted
+    assert "venue-private-id" not in formatted
+    assert len(bot._create_failure_guard.realized_close_attempts) == pending_count
+
+    now[0] += 1.0
+    assert not admission.permits(bot, next_order)
+    assert len(diagnostics) == 2
+
+
+def test_exact_terminal_fill_awaits_freshness_without_contradiction_warning(native):
+    bot, fills = _bot()
+    diagnostics = []
+    bot._emit_live_event = lambda event_type, **event: diagnostics.append((event_type, event))
+    bot._request_authoritative_confirmation = lambda *args, **kwargs: None
+    initial = _close("A", pside="long", identifier="initial")
+    next_order = _close("B", pside="short", identifier="next", order_type="unstuck")
+    _bind(bot, [initial], cap=0.01)
+    admission.submitted(bot, initial)
+    admission.result(bot, initial, response={"status": "filled", "filled": 1.0})
+    fills.append(SimpleNamespace(
+        symbol="A", position_side="long", client_order_id="initial",
+        id="fill-1", qty=-1.0, timestamp=1_000,
+    ))
+    _bind(bot, [next_order], cap=0.01)
+
+    assert not admission.permits(bot, next_order)
+    assert not diagnostics
+    ledger = bot._ensure_freshness_ledger()
+    ledger.begin_epoch()
+    for surface in ACCOUNT_SURFACES:
+        ledger.stamp(surface, now_ms=1_001)
+    bot._hsl_fill_capture_interval = (1_000, 1_001)
+    bot._trailing_fill_refresh_generation = 1
+    assert admission.permits(bot, next_order)

@@ -16,6 +16,8 @@ from config.access import require_live_value
 
 
 class BinanceBot(CCXTBot):
+    supports_close_lookup_by_client_id = True
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.custom_id_max_length = 36

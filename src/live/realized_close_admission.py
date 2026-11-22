@@ -29,9 +29,15 @@ from passivbot_exceptions import FatalBotException
 
 LOOKUP_INTERVAL_SECONDS = 5.0
 LOOKUP_TIMEOUT_SECONDS = 3.0
-LOOKUP_DIAGNOSTIC_INTERVAL_SECONDS = 300.0
+RECOVERY_DIAGNOSTIC_INTERVAL_SECONDS = 300.0
 LOOKUP_HISTORY_LIMIT = 50
 LOOKUP_HISTORY_OVERLAP_MS = 60_000
+
+
+class _ReservationEvidenceError(ValueError):
+    def __init__(self, reason_code):
+        super().__init__(reason_code)
+        self.reason_code = reason_code
 
 
 def _order_key(order):
@@ -273,37 +279,6 @@ def _terminal_confirmed(bot, allocation, attempt, filled):
     )
 
 
-def _lookup_routes(client, attempt):
-    has = getattr(client, "has", {})
-    venue = getattr(client, "id", "")
-    if venue == "bybit" and has.get("fetchCanceledAndClosedOrders") is True:
-        identity = (
-            {"orderId": attempt.exchange_id}
-            if attempt.exchange_id else {"orderLinkId": attempt.wire_client_id}
-        )
-        yield client.fetch_canceled_and_closed_orders, (attempt.symbol, None, 2, identity), True
-    elif has.get("fetchOrder") is True:
-        if attempt.exchange_id and venue != "bybit":
-            yield client.fetch_order, (attempt.exchange_id, attempt.symbol), False
-        elif venue in {"binance", "bitget", "hyperliquid", "okx"}:
-            params = {"clientOrderId": attempt.wire_client_id}
-            yield client.fetch_order, (None, attempt.symbol, params), False
-        elif venue == "kucoinfutures":
-            params = {"clientOrderId": attempt.wire_client_id}
-            yield client.fetch_contract_order, (None, attempt.symbol, params), False
-    for capability, method in (
-        ("fetchOrders", "fetch_orders"),
-        ("fetchCanceledOrders", "fetch_canceled_orders"),
-        ("fetchClosedOrders", "fetch_closed_orders"),
-    ):
-        if has.get(capability) is True:
-            yield (
-                getattr(client, method),
-                (attempt.symbol, max(0, attempt.timestamp - LOOKUP_HISTORY_OVERLAP_MS), LOOKUP_HISTORY_LIMIT),
-                True,
-            )
-
-
 def _terminal_quantity(bot, attempt, row):
     if not _matches_attempt(attempt, row):
         return None
@@ -353,7 +328,14 @@ async def recover(bot):
         return
     attempt = min(ready, key=lambda attempt: attempt.next_lookup)
     guard.next_realized_close_lookup = attempt.next_lookup = now + LOOKUP_INTERVAL_SECONDS
-    routes = list(_lookup_routes(bot.cca, attempt))
+    routes = []
+    lookup_routes = getattr(bot, "realized_close_lookup_routes", None)
+    if callable(lookup_routes):
+        routes = list(lookup_routes(
+            attempt.symbol, attempt.exchange_id, attempt.wire_client_id,
+            since_ms=max(0, attempt.timestamp - LOOKUP_HISTORY_OVERLAP_MS),
+            limit=LOOKUP_HISTORY_LIMIT,
+        ))
     reason = ReasonCodes.REALIZED_CLOSE_LOOKUP_UNSUPPORTED
     if routes:
         method, args, collection = routes[attempt.lookup_index % len(routes)]
@@ -383,14 +365,17 @@ async def recover(bot):
                     return
             reason = ReasonCodes.REALIZED_CLOSE_ORDER_EVIDENCE_UNAVAILABLE
     if now >= getattr(guard, "next_realized_close_recovery_log", 0.0):
-        guard.next_realized_close_recovery_log = now + LOOKUP_DIAGNOSTIC_INTERVAL_SECONDS
+        guard.next_realized_close_recovery_log = now + RECOVERY_DIAGNOSTIC_INTERVAL_SECONDS
         run_diagnostic_step(
-            "emit realized close recovery", lambda: _report_lookup(bot, reason, len(attempts))
+            "emit realized close recovery",
+            lambda: _report_recovery(
+                bot, reason, len(attempts), message="awaiting close submission evidence"
+            ),
         )
 
 
-def _report_lookup(bot, reason, pending_count):
-    message = f"awaiting close submission evidence | pending={pending_count}"
+def _report_recovery(bot, reason, pending_count, *, message):
+    message = f"{message} | pending={pending_count}"
     emit = getattr(bot, "_emit_live_event", None)
     if callable(emit) and emit(
         EventTypes.REALIZED_CLOSE_RECOVERY,
@@ -400,6 +385,21 @@ def _report_lookup(bot, reason, pending_count):
     ) is not None:
         return
     logging.warning("[risk] %s reason=%s", message, reason)
+
+
+def _report_reservation_evidence_error(bot, reason):
+    guard = bot._create_failure_guard
+    deadlines = getattr(guard, "realized_close_evidence_deadlines", None)
+    if deadlines is None:
+        guard.realized_close_evidence_deadlines = deadlines = {}
+    now = time.monotonic()
+    if now < deadlines.get(reason, 0.0):
+        return
+    deadlines[reason] = now + RECOVERY_DIAGNOSTIC_INTERVAL_SECONDS
+    _report_recovery(
+        bot, reason, len(guard.realized_close_attempts),
+        message="unresolved close reservation evidence",
+    )
 
 
 def _reservations(bot, allocation):
@@ -444,7 +444,7 @@ def _reservations(bot, allocation):
         for key, attempt in attempts.items() if attempt.exchange_id
     }
     if len(attempts_by_order_id) != sum(bool(attempt.exchange_id) for attempt in attempts.values()):
-        raise ValueError("duplicate unresolved close exchange order ID")
+        raise _ReservationEvidenceError(ReasonCodes.REALIZED_CLOSE_DUPLICATE_EXCHANGE_ORDER_ID)
     seen_fills = set()
     for fill in events:
         client_id = reconciler.canonical_passivbot_custom_id(fill.client_order_id)
@@ -454,8 +454,16 @@ def _reservations(bot, allocation):
             if not client_id and len(order_ids) == 1:
                 key = attempts_by_order_id.get((fill.symbol, next(iter(order_ids))))
             elif key in attempts and attempts[key].exchange_id and order_ids:
-                if order_ids != {attempts[key].exchange_id}:
-                    raise ValueError("close fill identity contradicts submitted order")
+                if attempts[key].exchange_id not in order_ids:
+                    raise _ReservationEvidenceError(
+                        ReasonCodes.REALIZED_CLOSE_CONFLICTING_FILL_IDENTITY
+                    )
+                if len(order_ids) > 1:
+                    # Canonical fills may coalesce multiple real orders into
+                    # one quantity and a representative client ID.
+                    raise _ReservationEvidenceError(
+                        ReasonCodes.REALIZED_CLOSE_AMBIGUOUS_FILL_IDENTITY
+                    )
         if key in attempts and fill.id not in seen_fills:
             attempt = attempts[key]
             if (
@@ -466,6 +474,7 @@ def _reservations(bot, allocation):
                 seen_fills.add(fill.id)
     for key, attempt in list(attempts.items()):
         remaining = attempt.qty - filled[key]
+        fully_filled = _same_fill_qty(allocation, attempt, filled[key], attempt.qty)
         working = next(
             (
                 order for order in observed
@@ -484,16 +493,21 @@ def _reservations(bot, allocation):
         if (
             working is None
             and (
-                (attempt.terminal_fill_qty is None and _same_fill_qty(allocation, attempt, filled[key], attempt.qty))
+                (attempt.terminal_fill_qty is None and fully_filled)
                 or _terminal_confirmed(bot, allocation, attempt, filled[key])
             )
         ):
             del attempts[key]
             continue
         resting_unstuck |= attempt.unstuck
+        if (
+            remaining < 0 and not fully_filled
+            and (allocation.headroom is not None or attempt.unstuck)
+        ):
+            raise _ReservationEvidenceError(ReasonCodes.REALIZED_CLOSE_CONFLICTING_FILL_QUANTITY)
         if allocation.headroom is not None:
             if remaining <= 0:
-                raise ValueError("close fill evidence contradicts outstanding submission")
+                raise ValueError("full close fill awaits reservation confirmation")
             latest = _project_loss(
                 allocation, attempt.symbol, attempt.pside, remaining, attempt.price,
                 attempt.route, post_only=attempt.post_only,
@@ -541,6 +555,13 @@ def permits(bot, order):
         return True
     try:
         reserved, resting_unstuck = _reservations(bot, allocation)
+    except _ReservationEvidenceError as exc:
+        reason = exc.reason_code
+        run_diagnostic_step(
+            "emit close reservation evidence warning",
+            lambda: _report_reservation_evidence_error(bot, reason),
+        )
+        return False
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         logging.debug("[risk] close reservation inputs unavailable | error_type=%s", type(exc).__name__)
         return False
