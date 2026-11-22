@@ -25,6 +25,10 @@ its own version heading. See [release status](docs/releases.md).
   IDs. Validate the matching instrument metadata before resolving coin-age
   evidence, including offline, so positive minimum-age filters can admit them.
 
+- Coalesce repeated live RMS candle-read warnings and staged account-refresh
+  progress messages while retaining detailed diagnostics. Use a compact warning
+  for HSL input expiry without an additional unavailable or RED condition.
+
 - Label pre-submit live order summaries as create candidates, including market orders.
   Use execution outcomes to see which orders were acknowledged, skipped, or deferred.
 

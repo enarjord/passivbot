@@ -187,6 +187,7 @@ class EventTypes:
     EMA_BUNDLE_COMPLETED = "ema.bundle.completed"
     EMA_FALLBACK_USED = "ema.fallback_used"
     EMA_UNAVAILABLE = "ema.unavailable"
+    EMA_RMS_READ_FAILED = "ema.rms_read_failed"
     CANDLE_COVERAGE_CHECKED = "candle.coverage_checked"
     CANDLE_TAIL_PROJECTED = "candle.tail_projected"
     CANDLE_WEBSOCKET_STATUS = "candle.websocket_status"
@@ -539,6 +540,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EMA_BUNDLE_COMPLETED,
     EventTypes.EMA_FALLBACK_USED,
     EventTypes.EMA_UNAVAILABLE,
+    EventTypes.EMA_RMS_READ_FAILED,
     EventTypes.CANDLE_COVERAGE_CHECKED,
     EventTypes.CANDLE_TAIL_PROJECTED,
     EventTypes.CANDLE_WEBSOCKET_STATUS,
@@ -1362,6 +1364,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EMA_UNAVAILABLE: EventRoute(
         console=True, text=True, throttle_interval_ms=15 * 60 * 1000
     ),
+    EventTypes.EMA_RMS_READ_FAILED: EventRoute(console=True, text=True),
     EventTypes.CANDLE_COVERAGE_CHECKED: EventRoute(console=False, text=False),
     EventTypes.CANDLE_TAIL_PROJECTED: EventRoute(console=False, text=False),
     EventTypes.CANDLE_WEBSOCKET_STATUS: EventRoute(console=False, text=False),
@@ -1555,6 +1558,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.RESOURCE_MEMORY_SNAPSHOT: "memory",
     EventTypes.EMA_FALLBACK_USED: "ema",
     EventTypes.EMA_UNAVAILABLE: "ema",
+    EventTypes.EMA_RMS_READ_FAILED: "ema",
     EventTypes.RISK_MODE_CHANGED: "risk",
     EventTypes.REALIZED_CLOSE_RECOVERY: "risk",
     EventTypes.HSL_TRANSITION: "risk",
@@ -3187,6 +3191,16 @@ def _ema_unavailable_console_ema_type(group: Mapping[str, Any]) -> str | None:
     return None
 
 
+def format_rms_read_failed_console(data: Mapping[str, Any]) -> str:
+    symbol = _bounded_ema_console_text(str(data.get("sample") or "unknown"), limit=32)
+    error = _bounded_ema_console_text(str(data.get("error_type") or "Exception"), limit=32)
+    failures = _data_int(data, "failures") or 1
+    return (
+        f"[ema] RMS directionality unavailable | sample={symbol} "
+        f"error_type={error} failures={failures}"
+    )
+
+
 def format_ema_unavailable_console(data: Mapping[str, Any]) -> str:
     """Project required EMA unavailability without reducing structured diagnostics."""
     candidate_unavailable = data.get("candidate_unavailable")
@@ -3401,6 +3415,17 @@ def format_hsl_status_console(data: Mapping) -> str:
         f"estimated={count('estimated')}",
     ]
     row, input_cause = _hsl_input_console(data)
+    if not input_cause and count("unavailable") == "0" and hsl_observation_can_be_superseded(data):
+        # Keep a real freshness loss visible in one compact record. Earlier
+        # scope details remain in the structured observation.
+        return " ".join((
+            "[risk] HSL observation=stale",
+            "mode=" + token(data.get("signal_mode"), 13),
+            "stale_reason=" + token(data["stale_reasons"][0], 26),
+            f"last_green={count('green')}",
+            f"last_inactive={count('inactive')}",
+            f"estimated={count('estimated')}",
+        ))
     if input_cause:
         parts.append(input_cause)
 
@@ -3463,6 +3488,8 @@ def format_console_event(event: LiveEvent) -> str:
         )
     if event.event_type == EventTypes.EMA_FALLBACK_USED:
         return format_ema_fallback_console(event.data)
+    if event.event_type == EventTypes.EMA_RMS_READ_FAILED:
+        return format_rms_read_failed_console(event.data)
     if event.event_type == EventTypes.EMA_UNAVAILABLE:
         return format_ema_unavailable_console(event.data)
     if event.event_type == EventTypes.FORAGER_ELIGIBILITY_CHANGED:

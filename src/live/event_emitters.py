@@ -2035,6 +2035,7 @@ def _emit_state_refresh_progress_event_unchecked(
     threshold_s: float | None = None,
     repeated: bool = False,
     level: str = "info",
+    suppressed_refreshes: int = 0,
 ) -> None:
     data: dict[str, Any] = {
         "plan": _sorted_str_list(plan),
@@ -2046,6 +2047,8 @@ def _emit_state_refresh_progress_event_unchecked(
     threshold = _safe_float(threshold_s)
     if threshold is not None:
         data["threshold_s"] = max(0.0, float(threshold))
+    if suppressed_refreshes > 0:
+        data["suppressed_refreshes"] = min(suppressed_refreshes, 999_999)
     if live_event_debug_profile_enabled(bot, "state"):
         data["debug"] = _state_refresh_debug_payload(data)
         data["debug_profile"] = "state"

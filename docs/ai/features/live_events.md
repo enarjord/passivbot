@@ -177,6 +177,24 @@ When account facts invalidate ordinary preparation or reconciliation, the diagno
 `changed_account_facts`. Its labels identify positions, account generation, open orders,
 strategy balance, or required fills. The event carries the labels without account values.
 
+## Live Read Progress And Failures
+
+An HSL freshness loss without RED, unavailable account inputs, unavailable scopes, or
+a candle source failure uses a single compact warning. Its full prior observation
+remains in the structured event. Recovery and status transitions retain their existing
+visibility.
+
+`ema.rms_read_failed` records bounded RMS candle-read exception types and a single
+symbol sample, without exception text. The first failure per exception type and each
+following five-minute summary project as warnings. Intervening occurrences remain
+structured DEBUG observations. The summary's `failures` counts the current failure
+and equivalent failures since the previous warning.
+
+`state.refresh_progress` retains every previously recorded observation. The first
+slow refresh per plan and pending surface shape is visible at INFO, with equivalent
+refreshes coalesced across cycles for five minutes. On the next visible occurrence,
+`suppressed_refreshes` counts similar refreshes since the last INFO record.
+
 ## Market Snapshot Diagnostic Skips
 
 `market.snapshot_diagnostic_skipped` records noncritical position-change and balance diagnostics
