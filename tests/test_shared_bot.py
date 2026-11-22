@@ -5,7 +5,7 @@ from config.shared_bot import flatten_shared_bot_side, require_grouped_bot_value
 
 def test_flatten_shared_bot_side_prefers_grouped_value_over_stale_runtime_alias():
     side_cfg = {
-        "hsl": {"drawdown_threshold_fraction": 1.0},
+        "risk": {"hsl": {"drawdown_threshold_fraction": 1.0}},
         "hsl_drawdown_threshold_fraction": 0.3,
     }
 

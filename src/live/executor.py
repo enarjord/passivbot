@@ -649,13 +649,15 @@ async def execute_order_plan(
                 bot, order_wave, to_cancel, to_create, _utc_ms()
             ),
         )
+    close_cancels = [
+        order for order in to_cancel
+        if _order_is_reduce_only(order) and not _order_is_panic(order)
+    ]
     account_close_barrier = (
-        configure_creations and bool(to_cancel) and bot._loss_gate_enabled()
+        configure_creations and bool(close_cancels) and bot._loss_gate_enabled()
         and any(
-            _order_is_reduce_only(order)
-            and not _order_is_panic(order)
-            and realized_close_admission.spends_headroom(bot, order, resting=True)
-            for order in to_cancel
+            realized_close_admission.spends_headroom(bot, order, resting=True)
+            for order in close_cancels
         )
     )
     connector_cancel_barrier = connector_supports_order_churn_gate(bot)

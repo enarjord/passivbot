@@ -210,6 +210,9 @@ class _CreateBot:
     def get_exchange_time(self):
         return 123456
 
+    def _orchestrator_uses_realized_pnl(self):
+        return False
+
     def log_order_action(self, *args, **kwargs):
         return None
 

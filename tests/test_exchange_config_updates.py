@@ -686,6 +686,7 @@ async def test_okx_already_gone_cancel_does_not_log_raw_exception(
 
     bot = OKXBot.__new__(OKXBot)
     bot.cca = SimpleNamespace(cancel_order=cancel_order)
+    bot._orchestrator_uses_realized_pnl = lambda: False
     bot.recent_order_cancellations = []
     bot.log_order_action = lambda *args, **kwargs: None
     bot._log_order_action_summary = lambda *args, **kwargs: None
@@ -1417,6 +1418,9 @@ async def test_execute_order_plan_defers_replacement_until_cancel_confirmation()
     import passivbot as pb_mod
 
     class FakeBot:
+        def _loss_gate_enabled(self):
+            return False
+
         debug_mode = False
         balance_threshold = 0.0
         quote = "USDT"
@@ -1520,6 +1524,9 @@ async def test_execute_order_plan_defers_creations_after_cancel():
     import passivbot as pb_mod
 
     class FakeBot:
+        def _loss_gate_enabled(self):
+            return False
+
         _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
         _emit_execution_create_filter_event = (
             pb_mod.Passivbot._emit_execution_create_filter_event

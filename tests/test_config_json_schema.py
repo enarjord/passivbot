@@ -274,7 +274,7 @@ def test_nested_scenario_overrides_remain_supported(validator):
 @pytest.mark.parametrize("patch", [
     {"bot.long.not_a_field": 1}, {"long.risk.unstuck.ema_span_0_minutes": 1},
     {"coin_overrides.BTC.bot.long.risk.max_positions": 1},
-    {"coin_overrides.BTC.bot.portfolio.loss_gate.max_drawdown_fraction": 0.5},
+    {"coin_overrides.BTC.bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction": 0.5},
     {"coin_overrides.BTC.override_config_path": "policy.json"},
 ])
 def test_overrides_cannot_expand_canonical_paths_or_coin_permissions(validator, patch):

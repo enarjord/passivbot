@@ -183,8 +183,8 @@ def test_migrated_replay_matches_explicit_legacy_pairs_and_independent_spans_cha
     np.testing.assert_array_equal(old_equity, expected_equity)
     assert sum(row[13] == "close_unstuck_long" for row in old_fills) > 100
     independent = deepcopy(migrated)
-    independent["bot"]["long"]["unstuck"].update(ema_span_0_minutes=3.5, ema_span_1_minutes=5.5)
-    independent["coin_overrides"]["ETH"]["bot"]["long"].pop("unstuck")
+    independent["bot"]["long"]["risk"]["unstuck"].update(ema_span_0_minutes=3.5, ema_span_1_minutes=5.5)
+    independent["coin_overrides"]["ETH"]["bot"]["long"]["risk"].pop("unstuck")
     new_fills, _, _ = _replay(independent)
     assert not np.array_equal(new_fills, old_fills)
 
@@ -213,7 +213,7 @@ def test_orchestrator_profiling_preserves_replay_and_records_stages(
     set_side_universe_sources(raw, 'approved_coins', {
         active_side: ["BTC", "ETH"], inactive_side: []
     })
-    raw["bot"][active_side]["hsl"].update(
+    raw["bot"][active_side]["risk"]["hsl"].update(
         enabled=hsl_enabled,
         drawdown_fraction_ema_span_minutes=1.0, drawdown_threshold_fraction=0.001,
         cooldown_after_red_minutes=7.0,
