@@ -173,6 +173,9 @@ Ordinary staged readiness failures before snapshot capture retain the original f
 `defer_reason=staged_planner_inputs_not_fresh`, using the same diagnostic bounds. Epoch failures
 record the observed and required epoch. Quote failures retain the affected symbol and available
 age details even if the provider has refreshed by the time the owner processes the failure.
+When account facts invalidate ordinary preparation or reconciliation, the diagnostic includes
+`changed_account_facts`. Its labels identify positions, account generation, open orders,
+strategy balance, or required fills. The event carries the labels without account values.
 
 ## Market Snapshot Diagnostic Skips
 

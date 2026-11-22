@@ -413,6 +413,8 @@ its own version heading. See [release status](docs/releases.md).
 - Recheck a ready ordinary plan blocked only by account receipt expiry after the scheduled
   account refresh and protective pass, with the same exact facts and admission requirements.
 
+- Identify which account facts changed when live ordinary order planning defers.
+
 - Join an in-flight account refresh before choosing which HSL fill task ordinary preparation
   can wait for. Give that task a bounded opportunity to finish before acquiring quotes.
   Record the handoff route, account receipt freshness and confirmation status, and reconciled

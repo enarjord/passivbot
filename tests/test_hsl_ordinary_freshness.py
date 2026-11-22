@@ -138,8 +138,14 @@ async def test_slow_preparation_confirms_account_before_real_hsl_capture(monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["position", "order", "strategy_balance", "generation", "fill"])
-async def test_changed_account_confirmation_discards_prepared_universe(monkeypatch, change):
+@pytest.mark.parametrize("change, fact", [
+    ("position", "positions"),
+    ("order", "open_orders"),
+    ("strategy_balance", "strategy_balance"),
+    ("generation", "account_generation"),
+    ("fill", "required_fills"),
+])
+async def test_changed_account_confirmation_discards_prepared_universe(monkeypatch, change, fact):
     fixture = planning_bot(monkeypatch, change=change)
     task = asyncio.create_task(fixture.owner._ordinary_plan())
     await asyncio.wait_for(fixture.entered.wait(), 1.0)
@@ -148,6 +154,7 @@ async def test_changed_account_confirmation_discards_prepared_universe(monkeypat
     assert await task is None
     assert not fixture.captures
     assert fixture.defers[-1]["defer_reason"] == "account_facts_changed_during_preparation"
+    assert fixture.defers[-1]["changed_account_facts"] == (fact,)
 
 
 @pytest.mark.asyncio

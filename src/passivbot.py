@@ -10488,6 +10488,10 @@ class Passivbot:
                         {"invalid_counts": dict(details["invalid_counts"])}
                         if details.get("invalid_counts") else {}
                     ),
+                    **(
+                        {"changed_account_facts": list(details["changed_account_facts"])}
+                        if details.get("changed_account_facts") else {}
+                    ),
                     "defer_reason": details.get("defer_reason"),
                 },
                 ts_ms=utc_ms(),

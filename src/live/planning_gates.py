@@ -179,6 +179,8 @@ def format_staged_execution_defer_message(bot, details: dict) -> str:
         "will_retry=automatic",
         f"epoch={int(details.get('epoch', 0) or 0)}",
     ]
+    if details.get("changed_account_facts"):
+        parts.append("changed_account_facts=" + ",".join(details["changed_account_facts"]))
     if missing:
         parts.append("action=refresh_required_surfaces_then_retry")
     if invalid:
@@ -265,7 +267,8 @@ def log_staged_execution_defer(bot, details: dict) -> None:
     required = tuple(details.get("required", ()))
     context = str(details.get("context") or "planning")
     invalid = details.get("invalid") or {}
-    log_key = (context, missing, required, tuple(sorted(invalid)))
+    changed_account_facts = tuple(details.get("changed_account_facts", ()))
+    log_key = (context, missing, required, tuple(sorted(invalid)), changed_account_facts)
     last_log_ms = int(getattr(bot, "_staged_execution_defer_last_log_ms", 0) or 0)
     throttle_ms = 15_000
     if (
