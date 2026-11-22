@@ -25,6 +25,7 @@ def source_config():
     config["bot"]["short"]["enabled"] = False
     config["bot"]["global"]["universe"]["approved_coins"] = ["BTC"]
     config["bot"]["global"]["universe"]["minimum_coin_age_days"] = 0
+    config["bot"]["global"]["risk"]["unstuck"]["enabled"] = False
     # This short preparation fixture exercises the ordinary EMA warmup cap.
     config["bot"]["global"]["forager"]["score_weights"]["rms_directionality"] = 0.0
     config["bot"]["global"]["entry_cooldown"]["weights_minutes"] = {

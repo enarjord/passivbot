@@ -26,15 +26,13 @@ def test_stress_recipe_preserves_data_identity_and_materializes_hsl(strategy, mo
     modified = gpu_parity.fixture_inputs(args(*base,
         "--hsl-drawdown-threshold-fraction", ".002", "--hsl-drawdown-fraction-ema-span-minutes", "2.5",
         "--hsl-cooldown-minutes", "10000", "--hsl-memory-ema-span-minutes", "3600.0",
-        "--unstuck-memory-ema-span-minutes", "5400.25",
-        "--loss-gate-memory-ema-span-minutes", "7200.5",
+        "--realized-loss-memory-ema-span-minutes", "7200.5",
         "--price-shock", "0", "64", ".7", "--price-shock", "0", "96", "1.3"))
     config, candles, markets, btc, timestamps = modified
-    assert config["bot"]["portfolio"]["hsl"]["scope"] == mode
-    assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 5400.25
-    assert config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 7200.5
-    for policy in [config["bot"][side]["hsl"] for side in ("long", "short")] + (
-            [config["bot"]["portfolio"]["hsl"]] if mode == "portfolio" else []):
+    assert config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == mode
+    assert config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 7200.5
+    for policy in [config["bot"][side]["risk"]["hsl"] for side in ("long", "short")] + (
+            [config["bot"]["portfolio"]["risk"]["hsl"]] if mode == "portfolio" else []):
         assert policy["drawdown_threshold_fraction"] == .002
         assert policy["drawdown_fraction_ema_span_minutes"] == 2.5
         assert policy["memory_ema_span_minutes"] == 3600.0
@@ -102,7 +100,7 @@ def test_cli_records_resolved_recipe_even_when_metric_comparison_fails(monkeypat
         validate_gpu_metric_names=lambda names, **_: names,
     ))
     def comparison(inputs, *a, **kw):
-        assert inputs[0]["bot"]["portfolio"]["hsl"]["drawdown_threshold_fraction"] == .002
+        assert inputs[0]["bot"]["portfolio"]["risk"]["hsl"]["drawdown_threshold_fraction"] == .002
         return {"passed": False}
     monkeypatch.setattr(gpu_parity, "run_comparison", comparison)
     assert gpu_parity.main(["--fixture", "ema_anchor", "--bars", "128", "--hsl", "portfolio",
@@ -113,8 +111,7 @@ def test_cli_records_resolved_recipe_even_when_metric_comparison_fails(monkeypat
     assert recipe["hsl_drawdown_fraction_ema_span_minutes"] == 2.5
     assert recipe["hsl_cooldown_minutes"] == 30
     assert recipe["hsl_memory_ema_span_minutes"] == 1440.0
-    assert recipe["unstuck_memory_ema_span_minutes"] == 1440.0
-    assert recipe["loss_gate_memory_ema_span_minutes"] == 1440.0
+    assert recipe["realized_loss_memory_ema_span_minutes"] == 1440.0
     assert recipe["price_shocks"] == [[0, 64, .7]]
     assert recipe["seed"] == 7 and recipe["fixture"] == "ema_anchor"
 
@@ -458,7 +455,7 @@ def test_fixtures_are_canonical_and_keep_ordered_prepared_metadata(strategy, hsl
     from utils import date_to_ts
     assert date_to_ts(config["backtest"]["start_date"]) == timestamps[0]
     assert date_to_ts(config["backtest"]["end_date"]) == timestamps[-1] + 60_000
-    assert config["bot"]["long"]["hsl"]["enabled"] == (hsl in {"coin", "position_side"})
+    assert config["bot"]["long"]["risk"]["hsl"]["enabled"] == (hsl in {"coin", "position_side"})
     for side in ("long", "short"):
         bot = config["bot"][side]
         assert bot["forager"]["score_weights"]["rms_directionality"] == 0.0

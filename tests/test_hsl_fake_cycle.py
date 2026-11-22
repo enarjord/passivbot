@@ -39,11 +39,11 @@ async def _exercise_standard_fake_runner(
     cfg = generated_template(mutable_runtime_fixture(legacy), mode)
     if side == "short":
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
-        cfg["bot"]["long"]["hsl"]["enabled"] = False
+        cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
             max_positions=0, total_wallet_exposure_limit_ratio=0.0
         )
-    block = cfg["bot"]["portfolio"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["hsl"]
+    block = cfg["bot"]["portfolio"]["risk"]["hsl"] if mode == "portfolio" else cfg["bot"][side]["risk"]["hsl"]
     block.update(
         enabled=True,
         drawdown_threshold_fraction=0.06,
@@ -54,10 +54,10 @@ async def _exercise_standard_fake_runner(
     if case == "entry":
         block["drawdown_threshold_fraction"] = 0.5
         for pside in ("long", "short"):
-            cfg["bot"][pside]["unstuck"]["enabled"] = False
+            cfg["bot"][pside]["risk"]["unstuck"]["enabled"] = False
             cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 0.0
             cfg['bot'][pside]['universe']['approved_coins'] = ["BTC"] if pside == side else []
-        cfg["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
+        cfg["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]["enabled"] = False
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")})

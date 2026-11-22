@@ -62,7 +62,7 @@ def cohort():
     bot = SimpleNamespace(
         MAX_OPEN_ORDERS=100,
         live_value=lambda key: {"time_in_force": "post_only"}[key],
-        _loss_gate_max_drawdown_fraction=lambda: 1.0,
+        _loss_gate_enabled=lambda: False,
         fetched_positions=[
             position(BTC, "long"),
             position(ETH, "short", id_="position-b"),
@@ -195,9 +195,9 @@ def test_requires_capacity_after_all_actual_open_orders(cohort):
 
 def test_loss_gate_or_non_post_only_requires_serial_admission(cohort):
     bot, _, _ = cohort
-    bot._loss_gate_max_drawdown_fraction = lambda: 0.99
+    bot._loss_gate_enabled = lambda: True
     assert select(cohort) == ()
-    bot._loss_gate_max_drawdown_fraction = lambda: 1.0
+    bot._loss_gate_enabled = lambda: False
     bot.live_value = lambda key: "good_till_cancelled"
     assert select(cohort) == ()
 

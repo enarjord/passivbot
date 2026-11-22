@@ -32,7 +32,7 @@ def config_for(kind="trailing_martingale"):
              "ema_span_1_minutes": [1.0, 10_000.0]}
     config["optimize"]["bounds"] = {side: {
         "strategy": {kind: {"entry": deepcopy(spans)} if kind == "trailing_martingale" else deepcopy(spans)},
-        "unstuck": deepcopy(spans),
+        "risk": {"unstuck": deepcopy(spans)},
     } for side in ("long", "short")}
     config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     config = parse_overrides(prepare_config(config, verbose=False), verbose=False)
@@ -42,7 +42,7 @@ def config_for(kind="trailing_martingale"):
             if kind == "trailing_martingale"
             else config["bot"][side]["strategy"][kind]
         ).update(ema_span_0_minutes=17.25, ema_span_1_minutes=211.75)
-        config["bot"][side]["unstuck"].update(ema_span_0_minutes=9999.5, ema_span_1_minutes=8888.5)
+        config["bot"][side]["risk"]["unstuck"].update(ema_span_0_minutes=9999.5, ema_span_1_minutes=8888.5)
     prepare_bound_plan(config)
     return config
 
@@ -57,7 +57,7 @@ def test_coupled_candidates_drop_redundant_genes_and_materialize_effective_coin_
     config["coin_overrides"] = {
         "BTC": {
             "bot": {
-                "long": {
+                "long": {"risk": {"unstuck": {"ema_span_0_minutes": 1.0, "ema_span_1_minutes": 2.0}},
                     "strategy": {
                         kind: (
                             {"entry": {"ema_span_0_minutes": 71.5}}
@@ -65,15 +65,15 @@ def test_coupled_candidates_drop_redundant_genes_and_materialize_effective_coin_
                             else {"ema_span_0_minutes": 71.5}
                         )
                     },
-                    "unstuck": {"ema_span_0_minutes": 1.0, "ema_span_1_minutes": 2.0},
+
                 }
             }
         },
-        "ETH": {"bot": {"short": {"unstuck": {"ema_span_0_minutes": 3.0}}}},
+        "ETH": {"bot": {"short": {"risk": {"unstuck": {"ema_span_0_minutes": 3.0}}}}},
     }
     original = deepcopy(config)
     paths = get_optimization_key_paths(config)
-    assert not any(path[2:3] == ("unstuck",) and path[-1].startswith("ema_span_")
+    assert not any(path[2:4] == ("risk", "unstuck") and path[-1].startswith("ema_span_")
                    for _, path in paths)
     vector = []
     for key, path in paths:
@@ -85,18 +85,18 @@ def test_coupled_candidates_drop_redundant_genes_and_materialize_effective_coin_
         vector.append(101.25 if path == target else value)
     candidate = build_optimizer_vector_config(vector, config, key_paths=paths)
     assert config == original
-    assert candidate["bot"]["long"]["unstuck"]["ema_span_1_minutes"] == 101.25
+    assert candidate["bot"]["long"]["risk"]["unstuck"]["ema_span_1_minutes"] == 101.25
     btc = candidate["coin_overrides"]["BTC"]["bot"]
-    assert btc["long"]["unstuck"]["ema_span_0_minutes"] == 71.5
-    assert btc["long"]["unstuck"]["ema_span_1_minutes"] == 101.25
-    assert btc["short"]["unstuck"]["ema_span_0_minutes"] == 17.25
+    assert btc["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 71.5
+    assert btc["long"]["risk"]["unstuck"]["ema_span_1_minutes"] == 101.25
+    assert btc["short"]["risk"]["unstuck"]["ema_span_0_minutes"] == 17.25
     # Reopening a saved candidate with optimizer overrides disabled preserves behavior.
     saved = clean_config(candidate)
     saved["optimize"]["enable_overrides"] = []
     loaded = parse_overrides(prepare_config(saved, verbose=False), verbose=False)
     assert (
-        loaded["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]
-        == btc["long"]["unstuck"]
+        loaded["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]
+        == btc["long"]["risk"]["unstuck"]
     )
 
 
@@ -105,37 +105,37 @@ def test_independent_default_and_mirror_fixed_override_order():
     config["optimize"]["enable_overrides"] = []
     prepare_bound_plan(config)
     assert any(
-        path[2:3] == ("unstuck",) and path[-1].startswith("ema_span_")
+        path[2:4] == ("risk", "unstuck") and path[-1].startswith("ema_span_")
         for _, path in get_optimization_key_paths(config)
     )
     independent = _finalize_optimizer_vector_config(deepcopy(config))
-    assert independent["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 9999.5
+    assert independent["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 9999.5
     config["optimize"]["enable_overrides"] = [
         "couple_unstuck_ema_spans",
         "mirror_short_from_long",
     ]
     config["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes": 61.25,
-        "bot.short.unstuck.ema_span_0_minutes": 1.5,
+        "bot.short.risk.unstuck.ema_span_0_minutes": 1.5,
     }
     candidate = _finalize_optimizer_vector_config(deepcopy(config))
     for side in ("long", "short"):
-        assert candidate["bot"][side]["unstuck"]["ema_span_0_minutes"] == 61.25
+        assert candidate["bot"][side]["risk"]["unstuck"]["ema_span_0_minutes"] == 61.25
         assert "unstuck_ema_span_0_minutes" not in candidate["bot"][side]
 
 
 def test_coupling_materializes_scenario_dependencies_for_plain_saved_suite_replay():
     config = config_for()
     config["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 4.5}}}}
+        "BTC": {"bot": {"long": {"risk": {"unstuck": {"ema_span_0_minutes": 4.5}}}}}
     }
     config["backtest"]["scenarios"] = [
         {
             "label": "alternate",
             "overrides": {
                 "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes": 301.25,
-                "bot.long.unstuck.ema_span_0_minutes": 3.0,
-                "coin_overrides.BTC.bot.long.unstuck.ema_span_0_minutes": 5.0,
+                "bot.long.risk.unstuck.ema_span_0_minutes": 3.0,
+                "coin_overrides.BTC.bot.long.risk.unstuck.ema_span_0_minutes": 5.0,
             },
         }
     ]
@@ -143,12 +143,12 @@ def test_coupling_materializes_scenario_dependencies_for_plain_saved_suite_repla
     replay = clean_config(finalized)
     replay["optimize"]["enable_overrides"] = []
     _apply_config_overrides(replay, replay["backtest"]["scenarios"][0]["overrides"])
-    assert replay["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 301.25
+    assert replay["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 301.25
     assert (
-        replay["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"]
+        replay["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"]
         == 301.25
     )
-    assert config["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 9999.5
+    assert config["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 9999.5
 
 
 def test_coupling_contract_ignores_derived_coin_values_but_tracks_mode_and_sources():
@@ -156,7 +156,7 @@ def test_coupling_contract_ignores_derived_coin_values_but_tracks_mode_and_sourc
 
     config = config_for()
     config["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 4.5}}}}
+        "BTC": {"bot": {"long": {"risk": {"unstuck": {"ema_span_0_minutes": 4.5}}}}}
     }
     first = build_evaluation_contract(config)
     config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
@@ -183,13 +183,13 @@ def test_coupled_suite_resume_compares_saved_candidate_dependencies(kind):
         strategy = {"entry": strategy}
     config["coin_overrides"] = {
         "BTC": {"bot": {"long": {"strategy": {kind: strategy}}}},
-        "ETH": {"bot": {"long": {"unstuck": {"close_fraction": 0.05}}}},
+        "ETH": {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.05}}}}},
     }
     config["backtest"].update(suite_enabled=True, scenarios=[
         {"label": "base", "coins": ["BTC", "ETH"], "start_date": "2024-01-01"},
         {"label": "alternate", "overrides": {
             f"bot.long.{strategy_path}.ema_span_1_minutes": 301.25,
-            "coin_overrides.ETH.bot.long.unstuck.close_fraction": 0.075,
+            "coin_overrides.ETH.bot.long.risk.unstuck.loss_allowance_fraction": 0.075,
         }},
     ])
     saved = deepcopy(config)
@@ -210,7 +210,7 @@ def test_coupled_suite_resume_compares_saved_candidate_dependencies(kind):
         (0, "start_date", "2024-01-02"),
         (1, "overrides", {f"bot.long.{strategy_path}.ema_span_1_minutes": 401.25}),
         (1, "overrides", {f"coin_overrides.BTC.bot.long.{strategy_path}.ema_span_0_minutes": 80.5}),
-        (1, "overrides", {"coin_overrides.ETH.bot.long.unstuck.close_fraction": 0.08}),
+        (1, "overrides", {"coin_overrides.ETH.bot.long.risk.unstuck.loss_allowance_fraction": 0.08}),
     ]
     for index, key, value in changes:
         changed = deepcopy(config)
@@ -222,7 +222,7 @@ def test_coupled_suite_resume_compares_saved_candidate_dependencies(kind):
                    for item in _resume_config_mismatches(entry, changed))
 
     corrupted = deepcopy(entry)
-    corrupted["backtest"]["scenarios"][0]["overrides"]["bot.long.unstuck.ema_span_0_minutes"] = 99.0
+    corrupted["backtest"]["scenarios"][0]["overrides"]["bot.long.risk.unstuck.ema_span_0_minutes"] = 99.0
     assert any("backtest.scenarios" in item
                for item in _resume_config_mismatches(corrupted, config))
     changed = deepcopy(config)
@@ -284,7 +284,7 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
     config["coin_overrides"] = {
         "BTC": {
             "bot": {
-                side: {
+                side: {"risk": {"unstuck": {"ema_span_0_minutes": 4.0, "ema_span_1_minutes": 5.0}},
                     "strategy": {
                         kind: (
                             {"entry": {"ema_span_0_minutes": 71.5}}
@@ -292,7 +292,7 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
                             else {"ema_span_0_minutes": 71.5}
                         )
                     },
-                    "unstuck": {"ema_span_0_minutes": 4.0, "ema_span_1_minutes": 5.0},
+
                 }
             }
         }
@@ -306,12 +306,13 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
         backtest_params={
             "coins": ["BTC"],
             "dynamic_wel_by_tradability": True,
-            "unstuck_memory_ema_span_minutes": config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"],
-            "loss_gate_memory_ema_span_minutes": config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"],
+            "realized_loss_memory_ema_span_minutes": config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"],
+            "loss_gate_enabled": False,
+            "loss_gate_max_drawdown_fraction": None,
             "equity_hard_stop_loss": {
                 "engine": "hsl",
                 "mode": "coin",
-                "coins": {"BTC": [config["bot"][s]["hsl"] for s in ("long", "short")]},
+                "coins": {"BTC": [config["bot"][s]["risk"]["hsl"] for s in ("long", "short")]},
             },
         },
         strategy_params_list=[{side: strategy}],
@@ -321,6 +322,7 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
                     "risk_entry_cooldown_minutes": 0,
                     "total_wallet_exposure_limit_ratio": 1,
                     "n_positions": 1,
+                    "unstuck_enabled": False,
                 }
             }
         ],
@@ -350,7 +352,7 @@ def test_coupled_warmup_tracks_strategy_bounds_and_ignores_migrated_unstuck_pins
     config['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     config['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     config["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 900_000.5}}}}
+        "BTC": {"bot": {"long": {"risk": {"unstuck": {"ema_span_0_minutes": 900_000.5}}}}}
     }
     _apply_config_overrides(config, {
         "optimize.bounds.long.strategy.trailing_martingale.entry.ema_span_0_minutes": [17.25, 80_000.5]})
@@ -382,8 +384,8 @@ def test_anchored_search_derives_spans_from_selected_anchor_and_tunable_strategy
     assert [key for key, _ in shape.key_paths] == [
         "__anchor_id__", "bot.long.strategy.trailing_martingale.entry.ema_span_1_minutes"]
     candidate = build_optimizer_vector_config([1.0, 311.5], config)
-    assert candidate["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 401.75
-    assert candidate["bot"]["long"]["unstuck"]["ema_span_1_minutes"] == 311.5
+    assert candidate["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 401.75
+    assert candidate["bot"]["long"]["risk"]["unstuck"]["ema_span_1_minutes"] == 311.5
 
 
 def test_exact_suite_finalization_couples_after_context_overrides_without_mutating_candidate():
@@ -392,14 +394,14 @@ def test_exact_suite_finalization_couples_after_context_overrides_without_mutati
     config = config_for()
     config["backtest"].update(coins={"bybit": ["BTC"]}, cache_dir={})
     config["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 3.0}}}}
+        "BTC": {"bot": {"long": {"risk": {"unstuck": {"ema_span_0_minutes": 3.0}}}}}
     }
     before = deepcopy(config)
     ctx = SimpleNamespace(
         config=deepcopy(config),
         overrides={
             "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes": 401.5,
-            "bot.long.unstuck.ema_span_0_minutes": 4.5,
+            "bot.long.risk.unstuck.ema_span_0_minutes": 4.5,
         },
     )
     evaluator = SuiteEvaluator.__new__(SuiteEvaluator)
@@ -407,9 +409,9 @@ def test_exact_suite_finalization_couples_after_context_overrides_without_mutati
     evaluator.objective_bases = []
     ctx.msss = {}
     actual = evaluator.build_scenario_candidate_config(config, ctx)
-    assert actual["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 401.5
+    assert actual["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 401.5
     assert (
-        actual["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 401.5
+        actual["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 401.5
     )
     assert config == before
 
@@ -459,8 +461,8 @@ def test_scenario_override_file_is_resolved_before_materializing_coupled_spans(
     candidate = _finalize_optimizer_vector_config(config)
     saved = candidate["backtest"]["scenarios"][0]["overrides"]["coin_overrides"]["BTC"]
     assert "override_config_path" not in saved
-    assert saved["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 71.25
-    assert saved["bot"]["long"]["unstuck"]["ema_span_1_minutes"] == 211.5
+    assert saved["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 71.25
+    assert saved["bot"]["long"]["risk"]["unstuck"]["ema_span_1_minutes"] == 211.5
 
 
 def test_coupled_saved_scenario_preserves_explicit_coin_override_clear():
@@ -485,14 +487,14 @@ def test_coupled_saved_scenario_preserves_explicit_coin_override_clear():
     [
         {
             "bot": {
-                "long": {
+                "long": {"risk": {"unstuck": {"ema_span_0_minutes": 3.0}},
                     "strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": 71.25}}},
-                    "unstuck": {"ema_span_0_minutes": 3.0},
+
                 }
             }
         },
         {"bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes": 71.25,
-         "bot.long.unstuck.ema_span_0_minutes": 3.0},
+         "bot.long.risk.unstuck.ema_span_0_minutes": 3.0},
     ],
 )
 def test_coupled_saved_scenarios_preserve_nested_and_dotted_canonical_paths(overrides):
@@ -508,7 +510,7 @@ def test_coupled_saved_scenarios_preserve_nested_and_dotted_canonical_paths(over
         saved["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0_minutes"]
         == 71.25
     )
-    assert saved["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 71.25
+    assert saved["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 71.25
 
 
 @pytest.mark.parametrize("path", [
@@ -536,10 +538,10 @@ def test_finalization_keeps_file_coupling_and_repeated_candidates_canonical(tmp_
         file_strategy = {"entry": file_strategy}
         inline_strategy = {"entry": inline_strategy}
     path = tmp_path / "canonical-coin.json"
-    path.write_text(json.dumps({"bot": {"long": {
+    path.write_text(json.dumps({"bot": {"long": {"risk": {"unstuck": {"ema_span_0_minutes": 4.5}},
         "strategy": {kind: file_strategy},
         "entry_cooldown": {"base_duration_minutes": 3.5},
-        "unstuck": {"ema_span_0_minutes": 4.5},
+
     }}}))
     source_bytes = path.read_bytes()
     config["coin_overrides"] = {"BTC": {
@@ -559,7 +561,7 @@ def test_finalization_keeps_file_coupling_and_repeated_candidates_canonical(tmp_
     candidate = _finalize_optimizer_vector_config(deepcopy(config))
     assert config == before and path.read_bytes() == source_bytes
     for side in ("long", "short"):
-        assert candidate["bot"][side]["unstuck"]["ema_span_0_minutes"] == 31.25
+        assert candidate["bot"][side]["risk"]["unstuck"]["ema_span_0_minutes"] == 31.25
         assert not (set(candidate["bot"][side]) & set(FLAT_BOT_KEY_TO_GROUP_PATH))
         assert candidate["bot"][side]["forager"]["score_weights"] == {
             "volume": .25, "ema_readiness": .75, "log_range": 0.0, "rms_directionality": 0.0,
@@ -567,12 +569,12 @@ def test_finalization_keeps_file_coupling_and_repeated_candidates_canonical(tmp_
     patch = candidate["coin_overrides"]["BTC"]
     assert "override_config_path" not in patch
     assert patch["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == 3.5
-    assert patch["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 71.25
-    assert patch["bot"]["long"]["unstuck"]["ema_span_1_minutes"] == 211.5
+    assert patch["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 71.25
+    assert patch["bot"]["long"]["risk"]["unstuck"]["ema_span_1_minutes"] == 211.5
     scenario = candidate["backtest"]["scenarios"][0]["overrides"]
-    assert scenario["bot.long.unstuck.ema_span_1_minutes"] == 301.25
-    assert scenario["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 81.25
-    assert scenario["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_1_minutes"] == 211.5
+    assert scenario["bot.long.risk.unstuck.ema_span_1_minutes"] == 301.25
+    assert scenario["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 81.25
+    assert scenario["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["ema_span_1_minutes"] == 211.5
     saved = clean_config(candidate)
     repeated = _finalize_optimizer_vector_config(deepcopy(candidate))
     assert clean_config(repeated) == saved
@@ -592,9 +594,9 @@ def test_candidate_genes_pins_and_mirroring_win_over_stale_runtime_aliases(kind,
         "mirror_short_from_long", "couple_unstuck_ema_spans",
     ]
     _apply_config_overrides(config, {
-        "optimize.bounds.long.hsl.drawdown_threshold_fraction": [0.1, 0.5, 0.01]})
+        "optimize.bounds.long.risk.hsl.drawdown_threshold_fraction": [0.1, 0.5, 0.01]})
     config["optimize"]["fixed_runtime_overrides"] = {
-        "bot.long.hsl.cooldown_after_red_minutes": 1.0,
+        "bot.long.risk.hsl.cooldown_after_red_minutes": 1.0,
     }
     config["bot"]["long"]["forager"]["score_weights"] = {
         "volume": 1.0, "ema_readiness": 3.0, "log_range": 0.0, "rms_directionality": 0.0,
@@ -603,7 +605,7 @@ def test_candidate_genes_pins_and_mirroring_win_over_stale_runtime_aliases(kind,
     vector = [0.35]
     if anchored:
         install_anchored_fine_tune_plan(
-            config, ["bot.long.hsl.drawdown_threshold_fraction"], "<memory>",
+            config, ["bot.long.risk.hsl.drawdown_threshold_fraction"], "<memory>",
             starting_configs_override=[deepcopy(config)],
         )
         vector = [0.0, *vector]
@@ -614,13 +616,13 @@ def test_candidate_genes_pins_and_mirroring_win_over_stale_runtime_aliases(kind,
 
     candidate = build_optimizer_vector_config(
         vector, config,
-        key_paths=[("bot.long.hsl.drawdown_threshold_fraction", ("bot", "long", "hsl", "drawdown_threshold_fraction"))],
+        key_paths=[("bot.long.risk.hsl.drawdown_threshold_fraction", ("bot", "long", "risk", "hsl", "drawdown_threshold_fraction"))],
     )
 
     assert config == before
     for side in ("long", "short"):
-        assert candidate["bot"][side]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.35)
-        assert candidate["bot"][side]["hsl"]["cooldown_after_red_minutes"] == 1.0
+        assert candidate["bot"][side]["risk"]["hsl"]["drawdown_threshold_fraction"] == pytest.approx(0.35)
+        assert candidate["bot"][side]["risk"]["hsl"]["cooldown_after_red_minutes"] == 1.0
         assert candidate["bot"][side]["forager"]["score_weights"] == {
             "volume": 0.25, "ema_readiness": 0.75, "log_range": 0.0, "rms_directionality": 0.0,
         }

@@ -6,7 +6,7 @@ import numpy as np
 from config.shared_bot import flatten_shared_bot_side
 from optimization.gpu.hsl import project_bot
 from optimization.gpu.model import (
-    adaptive_params, EMA_ANCHOR_MULTICOIN_PARAM_KEYS, GLOBAL_RISK_PARAM_KEYS,
+    adaptive_params, EMA_ANCHOR_MULTICOIN_PARAM_KEYS, GLOBAL_RISK_PARAM_KEYS, RESERVED_RISK_PARAM_KEYS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, UNSTUCK_EMA_PARAM_KEYS,
     flatten_trailing_martingale_params,
 )
@@ -71,7 +71,6 @@ def _unstuck_params(bot: dict) -> dict[str, float]:
     return {
         "unstuck_enabled": float(bool(bot["unstuck_enabled"])),
         "unstuck_ema_gating_enabled": float(bool(bot["unstuck_ema_gating_enabled"])),
-        "unstuck_close_fraction": float(bot["unstuck_close_fraction"]),
         "unstuck_ema_distance_fraction": float(bot["unstuck_ema_distance_fraction"]),
         "unstuck_loss_allowance_fraction": float(bot["unstuck_loss_allowance_fraction"]),
         "unstuck_exposure_trigger_ratio": float(bot["unstuck_exposure_trigger_ratio"]),
@@ -91,12 +90,18 @@ def multicoin_parameters_from_payload(payload, config, *, sides=("long", "short"
     Static coin patches belong to the registered dataset's override arrays. Callers
     preparing global candidate values must supply a payload without those patches.
     """
+    from config.gpu import validate_gpu_loss_gate_policy
+
+    validate_gpu_loss_gate_policy(
+        payload.backtest_params["loss_gate_enabled"],
+        payload.backtest_params["loss_gate_max_drawdown_fraction"],
+    )
     kind = config['bot']["portfolio"]['strategy_kind']
     keys = {"ema_anchor": EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
             "trailing_martingale": TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS}[kind]
     from config.hsl import native_hsl_mode
 
-    mode = native_hsl_mode(config["bot"]["portfolio"]["hsl"]["scope"])
+    mode = native_hsl_mode(config["bot"]["portfolio"]["risk"]["hsl"]["scope"])
     result = {}
     for side in sides:
         bot = project_bot(payload, 0, side, config)
@@ -117,7 +122,7 @@ def multicoin_parameters_from_payload(payload, config, *, sides=("long", "short"
         risk = config["bot"][side]["risk"]
         strategy.update(_single_coin_exposure_params(
             risk, side=side,
-            scale_hsl_budget=config["bot"][side]["hsl"]["scale_budget_with_excess_allowance"],
+            scale_hsl_budget=config["bot"][side]["risk"]["hsl"]["scale_budget_with_excess_allowance"],
         ))
         if kind == "trailing_martingale":
             strategy.update(_position_exposure_enforcer_params(risk, side=side))
@@ -127,6 +132,7 @@ def multicoin_parameters_from_payload(payload, config, *, sides=("long", "short"
         strategy.update(_hsl_params(project_bot(payload, 0, side, config, base=True), signal_mode=mode))
         strategy.update(adaptive_params(flat_bot))
         strategy.update({key: float(payload.backtest_params[key]) for key in GLOBAL_RISK_PARAM_KEYS})
+        strategy.update(dict.fromkeys(RESERVED_RISK_PARAM_KEYS, 0.0))
         missing = set(keys) - strategy.keys()
         if missing:
             raise ValueError(f"GPU {kind} {side} payload is missing parameters: {sorted(missing)}")
@@ -170,7 +176,7 @@ def prepare_candidate_parameters(config, markets, exchange):
     hsl = backtest["equity_hard_stop_loss"]
     for index, side in enumerate(("long", "short")):
         if hsl["mode"] == "coin":
-            policy = config["bot"][side]["hsl"]
+            policy = config["bot"][side]["risk"]["hsl"]
         else:
             policy = hsl["portfolio"] if hsl["mode"] == "portfolio" else hsl["sides"][index]
         result[f"_core_hsl_policy_enabled_{side}"] = float(bool(policy["enabled"]))

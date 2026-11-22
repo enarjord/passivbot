@@ -43,6 +43,9 @@ def compile_runtime_config(
                 path_prefix=("coin_overrides", pside),
                 seed_missing_groups=False,
             )
+    from .risk_memory import require_loss_realization_policy
+
+    require_loss_realization_policy(result)
     from .hsl import normalize_hsl
     from .schema import get_expanded_config_prototype
 

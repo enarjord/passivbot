@@ -147,18 +147,19 @@ def load_parameter_source(config_path: str | None, pside: str) -> tuple[dict[str
 
 
 def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, Any]:
+    from config.risk_memory import require_loss_realization_policy
     from config_utils import expand_PB_mode
 
     live = _require_mapping(config.get("live"), "live")
     bot = _require_mapping(config.get("bot"), "bot")
     side = _require_mapping(bot.get(pside), f"bot.{pside}")
-    portfolio_risk = _require_mapping(bot.get("portfolio"), "bot.portfolio")
-    hsl_policy = _require_mapping(portfolio_risk.get("hsl"), "bot.portfolio.hsl")
+    portfolio = _require_mapping(bot.get("portfolio"), "bot.portfolio")
+    hsl_policy = portfolio["risk"]["hsl"]
     hsl_scope = hsl_policy["scope"]
-    hsl = hsl_policy if hsl_scope == "portfolio" else _require_mapping(side.get("hsl", {}), f"bot.{pside}.hsl")
-    loss_gate = _require_mapping(portfolio_risk.get("loss_gate"), "bot.portfolio.loss_gate")
     risk = _require_mapping(side.get("risk"), f"bot.{pside}.risk")
-    unstuck = _require_mapping(side.get("unstuck", {}), f"bot.{pside}.unstuck")
+    hsl = hsl_policy if hsl_scope == "portfolio" else risk["hsl"]
+    _, loss_gate_enabled, loss_gate_cap = require_loss_realization_policy(config)
+    unstuck = risk["unstuck"]
     strategies = _require_mapping(side.get("strategy"), f"bot.{pside}.strategy")
     strategy = _require_mapping(
         strategies.get(STRATEGY_KIND),
@@ -206,7 +207,7 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
             strategy_override = override_strategies.get(STRATEGY_KIND, {})
             if isinstance(strategy_override, Mapping) and strategy_override:
                 coin_strategy_override_symbols.append(str(symbol))
-        hsl_override = override_side.get("hsl", {})
+        hsl_override = override_side.get("risk", {}).get("hsl", {})
         if (
             isinstance(hsl_override, Mapping)
             and hsl_override
@@ -238,12 +239,11 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "hsl_enabled_global": hsl_enabled_global,
         "hsl_enabled_override_symbols": sorted(hsl_enabled_override_symbols),
         "hsl_scope": hsl_scope,
-        "hedge_mode": bool(portfolio_risk.get("hedge_mode", False)),
+        "hedge_mode": portfolio["hedge_mode"],
         "coin_strategy_override_symbols": sorted(coin_strategy_override_symbols),
         "coin_context_override_descriptions": sorted(coin_context_override_descriptions),
-        "loss_gate_max_drawdown_ratio": _finite_float(
-            loss_gate["max_drawdown_fraction"], "bot.portfolio.loss_gate.max_drawdown_fraction"
-        ),
+        "loss_gate_enabled": loss_gate_enabled,
+        "loss_gate_max_drawdown_fraction": loss_gate_cap,
         "position_exposure_enforcer_enabled": bool(
             risk.get('position_exposure_enforcer', {}).get('enabled', False)
         ),
@@ -262,18 +262,15 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
             risk.get('total_exposure_enforcer', {}).get('policy', 'unknown')
         ),
         "unstuck_enabled": bool(unstuck.get("enabled", False)),
-        "unstuck_close_fraction": _finite_float(
-            unstuck.get("close_fraction", 0.0), f"bot.{pside}.unstuck.close_fraction"
-        ),
         "unstuck_loss_allowance_fraction": _finite_float(
             unstuck.get("loss_allowance_fraction", 0.0),
-            f"bot.{pside}.unstuck.loss_allowance_fraction",
+            f"bot.{pside}.risk.unstuck.loss_allowance_fraction",
         ),
         "unstuck_ema_gating_enabled": bool(
             unstuck.get("ema_gating_enabled", False)
         ),
         "unstuck_exposure_trigger_ratio": _finite_float(
-            unstuck.get("exposure_trigger_ratio", 0.0), f"bot.{pside}.unstuck.exposure_trigger_ratio"
+            unstuck.get("exposure_trigger_ratio", 0.0), f"bot.{pside}.risk.unstuck.exposure_trigger_ratio"
         ),
         "entry_cooldown_minutes": None if state_dependent else clamped_base,
         "entry_cooldown": deepcopy(cooldown),
@@ -679,7 +676,6 @@ def _unstuck_active(context: Mapping[str, Any] | None) -> bool:
     return bool(
         context
         and context.get("unstuck_enabled", False)
-        and context.get("unstuck_close_fraction", 0.0) > 0.0
         and context.get("unstuck_loss_allowance_fraction", 0.0) > 0.0
         and context.get("unstuck_exposure_trigger_ratio", 0.0) > 0.0
     )
@@ -999,8 +995,7 @@ def _classify_side(
                 else "EMA gating is disabled, so EMA trigger and readiness do not constrain the candidate."
             )
             overall.append(
-                "Auto-unstuck is active with close quantity "
-                f"{context['unstuck_close_fraction'] * 100.0:g}%, loss allowance "
+                "Auto-unstuck sizes eligible closes toward the exposure trigger, with loss allowance "
                 f"{context['unstuck_loss_allowance_fraction'] * 100.0:g}%, and position threshold "
                 f"{context['unstuck_exposure_trigger_ratio'] * 100.0:g}%. Eligible CLOSE rows strictly above that "
                 "WE / effective WEL threshold are marked unstuck-dependent: "
@@ -1009,14 +1004,14 @@ def _classify_side(
             )
         elif context.get("unstuck_enabled", False):
             overall.append(
-                "Auto-unstuck is enabled but inactive because its close quantity, loss allowance, "
+                "Auto-unstuck is enabled but inactive because its loss allowance "
                 "or position threshold is non-positive."
             )
-        if context.get("loss_gate_max_drawdown_ratio", 1.0) < 1.0:
+        if context["loss_gate_enabled"]:
             overall.append(
                 "The realized-loss gate is active at "
-                f"a maximum remembered drawdown ratio of {context['loss_gate_max_drawdown_ratio'] * 100.0:g}%. CLOSE rows are "
-                "PnL-gated: Rust may remove losing non-panic strategy closes or protective reducers after "
+                f"a maximum remembered drawdown ratio of {context['loss_gate_max_drawdown_fraction'] * 100.0:g}%. CLOSE rows are "
+                "PnL-gated: Rust may resize or block losing non-panic strategy closes or protective reducers after "
                 "evaluating projected batch PnL, fees, and account-wide realized-loss allowance."
             )
         if context.get("hsl_enabled", False):
@@ -1496,7 +1491,7 @@ def _scenario_runtime_path(
         qualifiers.append("TWEL-dependent")
     if _unstuck_active(context) and exposure_ratio > context.get("unstuck_exposure_trigger_ratio", 0.0):
         qualifiers.append("unstuck-dependent")
-    if context.get("loss_gate_max_drawdown_ratio", 1.0) < 1.0:
+    if context["loss_gate_enabled"]:
         qualifiers.append("PnL-gated")
     if payload.get("inactive_reason") in {
         "unreachable_short_threshold",

@@ -77,7 +77,7 @@ def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
         if mode == "portfolio"
         else cfg["optimize"]["bounds"]["long"]
     )
-    target["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.9]}
+    target["risk"]["hsl"] = {"drawdown_threshold_fraction": [0.01, 0.9]}
     cfg["optimize"]["scoring"] = ["hsl_triggers_per_year"]
     cfg["optimize"]["limits"] = []
     manager = SharedArrayManager()
@@ -112,9 +112,9 @@ def test_real_cpu_evaluator_fitness_changes_with_hsl_threshold(mode):
         )
         # Exercise effective scenario overrides through the complete suite evaluator.
         path = (
-            "bot.portfolio.hsl.drawdown_threshold_fraction"
+            "bot.portfolio.risk.hsl.drawdown_threshold_fraction"
             if mode == "portfolio"
-            else "bot.long.hsl.drawdown_threshold_fraction"
+            else "bot.long.risk.hsl.drawdown_threshold_fraction"
         )
         contexts = [
             ScenarioEvalContext(
@@ -311,7 +311,7 @@ async def test_cpu_optimizer_cli_and_resume_are_offline(tmp_path, monkeypatch, c
     # Only the HSL threshold varies. Unlisted coordinates retain the
     # minute-scale fixture's fixed policy.
     cfg["optimize"]["bounds"] = {
-        "portfolio": {"hsl": {"drawdown_threshold_fraction": [0.01, 0.1]}},
+        "portfolio": {"risk": {"hsl": {"drawdown_threshold_fraction": [0.01, 0.1]}}},
     }
     # Spawned workers and the manager also deny IP networking; local Unix IPC
     # remains available for the real multiprocessing backend.

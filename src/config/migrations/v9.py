@@ -98,6 +98,33 @@ def require_v9_runtime_config(config, *, additional_inputs=()):
     reject_retired_v9_fields(config, additional_inputs=additional_inputs)
 
 
+_RETIRED_RISK_GROUP = re.compile(
+    r"(?:^|\.)(?:global|long|short|\*)\.(hsl|unstuck)(?:\.|$)"
+)
+_RETIRED_PORTFOLIO_RISK_GROUP = re.compile(
+    r"(?:^|\.)portfolio\.(hsl|unstuck|loss_gate)(?:\.|$)"
+)
+_RETIRED_UNSTUCK_SIZE = re.compile(
+    r"(?:^|[._])unstuck[._](?:close_fraction|close_pct)(?:[.\[]|$)"
+)
+_RETIRED_MEMORY_KEYS = frozenset({"unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"})
+
+
+def reject_retired_risk_path(path):
+    if _RETIRED_UNSTUCK_SIZE.search(path) or path in {"close_fraction", "close_pct"}:
+        raise ValueError(
+            f"{path}: unstuck.close_fraction was removed. Use risk.unstuck.enabled for "
+            "permission and risk.unstuck.exposure_trigger_ratio for the exposure target."
+        )
+    if _RETIRED_RISK_GROUP.search(path):
+        raise ValueError(f"{path}: directional HSL and unstuck paths now require the risk group")
+    if _RETIRED_PORTFOLIO_RISK_GROUP.search(path) or path.rsplit(".", 1)[-1] in _RETIRED_MEMORY_KEYS:
+        raise ValueError(
+            f"{path}: use bot.portfolio.risk.hsl for HSL and "
+            "bot.portfolio.risk.loss_realization for the shared span and explicit loss gate"
+        )
+
+
 def reject_retired_v9_fields(config, *, additional_inputs=()):
     """Also protect sparse config exports from silently deleting old authority."""
     from .shared_policy import COIN_SOURCE_FIELDS, LIVE_POLICY_PATHS
@@ -120,6 +147,9 @@ def reject_retired_v9_fields(config, *, additional_inputs=()):
     for node in (config, *additional_inputs):
         for path, key, value in _walk(node):
             name = str(key)
+            reject_retired_risk_path(path)
+            if isinstance(value, str) and "fixed_params" in path:
+                reject_retired_risk_path(value)
             operational = operational_pattern.search(path) or (
                 isinstance(value, str)
                 and "fixed_params" in path
@@ -177,7 +207,7 @@ def _validate_legacy_gate_window(value, path, *, days=False):
         raise ValueError(f"{path} must fit in signed 64-bit milliseconds")
 
 
-def _realized_gate_migration_contexts(config):
+def _realized_gate_migration_contexts(config, *, require_span=True):
     """Inspect only global gate consumers, including dormant authored scenarios.
 
     Coin-file global fields are not an allowed coin patch. Their migration uses
@@ -215,12 +245,13 @@ def _realized_gate_migration_contexts(config):
         if not math.isfinite(fraction) or fraction < 0.0:
             raise ValueError(f"{path}: live.max_realized_loss_pct must be finite and >= 0")
         if fraction < 1.0:
-            if span is None:
+            if span is None and require_span:
                 raise ValueError(
                     f"{path}: active realized-loss gate requires an explicit "
                     "--lookback-ema-span-minutes choice or authored shared span"
                 )
-            span = normalize_lookback_ema_span_minutes(span)
+            if span is not None:
+                span = normalize_lookback_ema_span_minutes(span)
             active.append(dict(context=path, max_realized_loss_pct=fraction,
                                lookback_ema_span_minutes=span))
     return active
@@ -339,7 +370,7 @@ def migrate_v8_to_v9(
         validate_authored_config(result, get_template_config())
         if memory_span_minutes is not None and normalize_lookback_ema_span_minutes(
             memory_span_minutes
-        ) != result.get("bot", {}).get("portfolio", {}).get("unstuck", {}).get("memory_ema_span_minutes"):
+        ) != result.get("bot", {}).get("portfolio", {}).get("risk", {}).get("loss_realization", {}).get("memory_ema_span_minutes"):
             raise ValueError("already-v9 configuration has a different memory span; edit it explicitly")
         if memory_span_choices:
             raise ValueError("memory-span choices do not apply to an already-v9 configuration")
@@ -383,6 +414,9 @@ def migrate_v8_to_v9(
     else:
         metric_changes = []
     if best_effort and memory_span_minutes is None and not _coin_patch:
+        requested = result.get("live", {}).get("lookback_ema_span_minutes")
+        if requested is None and _realized_gate_migration_contexts(result, require_span=False):
+            raise ValueError("active realized-loss gate requires an explicit --lookback-ema-span-minutes choice")
         from .best_effort_v9 import infer_memory_span
 
         live = result.get("live", {})
@@ -554,7 +588,7 @@ def migrate_v8_to_v9(
                 elif current in choices:
                     span = normalize_lookback_ema_span_minutes(choices[current])
                     used_choices.add(current)
-                elif best_effort:
+                elif best_effort and not _realized_gate_migration_contexts(result, require_span=False):
                     from .best_effort_v9 import infer_memory_span
 
                     span = infer_memory_span(value, current, changes)
@@ -598,14 +632,8 @@ def migrate_v8_to_v9(
         live["lookback_ema_span_minutes"] = root_span
         record("live.lookback_ema_span_minutes", None, root_span, "materialized shared v9 memory span")
     if not _coin_patch:
-        active_contexts = _require_gate_ack(result, acknowledge_realized_loss_gate_memory_change or best_effort)
-        if active_contexts and best_effort and not acknowledge_realized_loss_gate_memory_change:
-            from .best_effort_v9 import record_guess
-
-            for context in active_contexts:
-                record_guess(changes, context["context"], None, context,
-                             "adopt independent decaying realized-loss memory instead of rolling history")
-        elif active_contexts:
+        active_contexts = _require_gate_ack(result, acknowledge_realized_loss_gate_memory_change)
+        if active_contexts:
             record("live.max_realized_loss_pct", None, active_contexts,
                    "acknowledged shared realized-loss memory in every effective authored context")
     result["config_version"] = V9_SCHEMA_VERSION
@@ -640,6 +668,10 @@ def migrate_v8_to_v9(
     from config.authored import validate_authored_config
     from config.schema import get_template_config
 
+    from .released_v8_risk import finalize_released_risk, finalize_risk_report
+
+    finalize_released_risk(result, record)
+    finalize_risk_report(changes)
     for path, value in independent_choices.items():
         parts = path.split(".")
         target = result
@@ -659,6 +691,6 @@ def migrate_v8_to_v9(
         result,
         changes,
         ("HSL ratios, drawdown memory, cooldown and unstuck replenishment changed. "
-         "HSL, unstuck and the loss gate now have independent spans and shared arithmetic. "
+         "HSL uses equity memory and both realized-loss policies share one memory span. "
          "Re-tune spans/allowances/bounds and freshly evaluate every seed; old fitness/checkpoints are invalid.",),
     )

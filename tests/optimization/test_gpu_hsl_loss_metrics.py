@@ -17,7 +17,7 @@ def test_native_hsl_episode_loss_matches_cpu_report(strategy, sides):
         "--bars", "3000", "--seed", "43", "--hsl", "coin",
     ]))
     for side in ("long", "short"):
-        inputs[0]["bot"][side]["hsl"].update(
+        inputs[0]["bot"][side]["risk"]["hsl"].update(
             drawdown_threshold_fraction=0.002, drawdown_fraction_ema_span_minutes=2.5,
             cooldown_after_red_minutes=5,
         )

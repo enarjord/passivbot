@@ -47,7 +47,9 @@ def validate_optimizer_preparation(
     _apply_config_overrides(effective_config, config["optimize"].get("fixed_runtime_overrides", {}))
     if effective_config['bot']["portfolio"]['strategy_kind'] != config['bot']["portfolio"]['strategy_kind']:
         raise ValueError("fixed_runtime_overrides may not change bot.portfolio.strategy_kind")
-    validate_gpu_backtest_config(effective_config)
+    validate_gpu_backtest_config(
+        effective_config, check_realized_close_policies=not suite_cfg.get("enabled")
+    )
     for field in ("batch_size", "max_dispatch_candidate_bars"):
         resolve_gpu_sizing(config["optimize"]["gpu"].get(field), field=field)
     screening = resolve_gpu_screening(config["optimize"]["gpu"].get("screening"))

@@ -117,7 +117,7 @@ async def test_failed_attempt_releases_consumed_receipt(outcome):
 async def test_disabled_hsl_preserves_early_preparation_receipt(change):
     bot, instance = planning_bot(empty=True)
     for side in ("long", "short"):
-        bot.config["bot"][side]["hsl"]["enabled"] = False
+        bot.config["bot"][side]["risk"]["hsl"]["enabled"] = False
     original = bot.prepare_planning_universe
 
     async def prepare():
@@ -137,7 +137,7 @@ async def test_disabled_hsl_active_plan_owns_exact_bound_receipt(monkeypatch):
     bot, instance = planning_bot(empty=False)
     bot.approved_coins_minus_ignored_coins = {"long": {SYMBOL}, "short": set()}
     for side in ("long", "short"):
-        bot.config["bot"][side]["hsl"]["enabled"] = False
+        bot.config["bot"][side]["risk"]["hsl"]["enabled"] = False
     original = bot.calc_orders_to_cancel_and_create
     orders = []
 

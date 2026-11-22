@@ -18,6 +18,8 @@ REASONS = (
     "selected",
     "loss_gate_blocked",
     "superseded",
+    "no_valid_lot",
+    "unstuck_already_selected",
     "finalization_filtered",
     "inputs_unavailable",
     "waiting_ema",
@@ -31,6 +33,7 @@ REASONS = (
 NUMBERS = (
     "allowance",
     "exposure_ratio",
+    "projected_exposure_ratio",
     "exposure_trigger_ratio",
     "current_price",
     "ema_trigger_price",
@@ -59,7 +62,8 @@ def observe(bot, diagnostics, idx_to_symbol):
             item = {
                 "symbol": idx_to_symbol[row["symbol_idx"]],
                 "reason": reason,
-                "proposed": bool(row["proposed"]),
+                "proposed": row["proposed"],
+                "selected": row["selected"],
             }
             for key in NUMBERS:
                 value = row.get(key)
@@ -90,7 +94,7 @@ def observe(bot, diagnostics, idx_to_symbol):
             "samples": items[:3],
             "samples_omitted": max(0, len(items) - 3),
             "selected_symbol": next(
-                (item["symbol"] for item in items if item["reason"] == "selected"), None
+                (item["symbol"] for item in items if item["selected"]), None
             ),
         }
         if allowances:

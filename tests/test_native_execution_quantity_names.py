@@ -11,11 +11,14 @@ from test_limit_order_fill_buffer import _native_args
 from tools.migrate_config_v9 import migrate
 
 
-RETIRED_NATIVE = (
+OPTIONAL_NATIVE_DEFAULTS = (
     ("liquidation_threshold", "equity_floor_fraction", .05),
     ("market_order_near_touch_threshold", "market_order_near_touch_fraction", .001),
     ("market_order_slippage_pct", "market_order_slippage_fraction", .0005),
     ("limit_order_fill_buffer_pct", "limit_order_fill_buffer_fraction", 0.0),
+)
+RETIRED_NATIVE = (
+    *OPTIONAL_NATIVE_DEFAULTS,
     ("max_realized_loss_pct", "loss_gate_max_drawdown_fraction", 1.0),
 )
 
@@ -43,11 +46,11 @@ def test_omitted_current_native_optional_keys_keep_exact_explicit_default_result
     verify_loaded_runtime_extension()
     args = _native_args()
     args[-1]["market_orders_allowed"] = True
-    for _, current, default in RETIRED_NATIVE:
+    for _, current, default in OPTIONAL_NATIVE_DEFAULTS:
         args[-1][current] = default
     explicit = pbr.run_backtest(*args)
     assert len(explicit[0]) > 0
-    for _, current, _ in RETIRED_NATIVE:
+    for _, current, _ in OPTIONAL_NATIVE_DEFAULTS:
         args[-1].pop(current)
     omitted = pbr.run_backtest(*args)
     np.testing.assert_array_equal(explicit[0], omitted[0])

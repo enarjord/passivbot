@@ -16,11 +16,10 @@ def policy():
         "bot": {
             "global": {"universe": {"approved_coins": ["BTC", "ETH"], "ignored_coins": ["ETH"]}},
             "long": {"enabled": True, "risk": {"max_positions": 3, "total_wallet_exposure_limit_ratio": 1.5}},
-            "short": {"enabled": True, "risk": {"max_positions": 1, "total_wallet_exposure_limit_ratio": 0.0},
-                      "unstuck": {"close_fraction": 0.15}},
+            "short": {"enabled": True, "risk": {"unstuck": {"loss_allowance_fraction": 0.15}, "max_positions": 1, "total_wallet_exposure_limit_ratio": 0.0}},
         },
         "optimize": {"bounds": {
-            "long": {"unstuck": {"close_fraction": [0.02, 0.06]}},
+            "long": {"risk": {"unstuck": {"loss_allowance_fraction": [0.02, 0.06]}}},
             "short": {"risk": {"total_wallet_exposure_limit_ratio": [0.0, 0.0]}},
         }},
     }
@@ -94,11 +93,11 @@ def test_missing_side_can_be_omitted_without_activating_it():
 def test_disable_retains_profile_and_omission_prunes_side_policies():
     source = policy()
     source["coin_overrides"] = {"BTC": {"bot": {
-        "long": {"unstuck": {"close_fraction": 0.04}},
-        "short": {"unstuck": {"close_fraction": 0.12}},
+        "long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.04}}},
+        "short": {"risk": {"unstuck": {"loss_allowance_fraction": 0.12}}},
     }}}
-    source["optimize"]["fixed_runtime_overrides"] = {"bot.short.unstuck.close_fraction": 0.13}
-    source["backtest"] = {"scenarios": [{"label": "dormant", "overrides": {"bot.short.unstuck.close_fraction": 0.14}}]}
+    source["optimize"]["fixed_runtime_overrides"] = {"bot.short.risk.unstuck.loss_allowance_fraction": 0.13}
+    source["backtest"] = {"scenarios": [{"label": "dormant", "overrides": {"bot.short.risk.unstuck.loss_allowance_fraction": 0.14}}]}
     disabled = reshape_config(source, disabled_sides="disable")
     assert disabled.config["bot"]["short"] == {**source["bot"]["short"], "enabled": False}
     omitted = reshape_config(source, disabled_sides="omit")
@@ -116,7 +115,7 @@ def test_global_layout_retains_dormant_profile_and_active_side_bounds():
     result = reshape_config(source, disabled_sides="disable", bot_layout="global")
     assert result.config["bot"]["long"] == {"enabled": True}
     assert result.config["bot"]["short"]["enabled"] is False
-    assert result.config["bot"]["short"]["unstuck"]["close_fraction"] == 0.15
+    assert result.config["bot"]["short"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.15
     assert result.config["optimize"]["bounds"] == source["optimize"]["bounds"]
     after = load(result.config)
     assert before["bot"]["long"] == after["bot"]["long"]
@@ -126,7 +125,7 @@ def test_global_layout_retains_dormant_profile_and_active_side_bounds():
 @pytest.mark.parametrize("layout", ["global", "side"])
 def test_layout_rejects_global_bounds_instead_of_changing_coupling(layout):
     source = policy()
-    source["optimize"]["bounds"]["global"] = {"unstuck": {"close_fraction": [0.02, 0.08]}}
+    source["optimize"]["bounds"]["global"] = {"risk": {"unstuck": {"loss_allowance_fraction": [0.02, 0.08]}}}
     with pytest.raises(ValueError, match="global optimizer bounds"):
         reshape_config(source, bot_layout=layout)
 
@@ -186,7 +185,7 @@ def test_omitting_mirror_source_is_rejected_even_when_its_activation_is_false():
 
 def test_referenced_omitted_side_requires_resolved_export(tmp_path):
     source = policy()
-    (tmp_path / "coin.json").write_text(json.dumps({"bot": {"short": {"unstuck": {"close_fraction": 0.12}}}}))
+    (tmp_path / "coin.json").write_text(json.dumps({"bot": {"short": {"risk": {"unstuck": {"loss_allowance_fraction": 0.12}}}}}))
     source["coin_overrides"] = {"BTC": {"override_config_path": "coin.json"}}
     with pytest.raises(ValueError, match="resolved"):
         reshape_config(source, disabled_sides="omit", base_config_path=str(tmp_path / "source.json"))
@@ -194,7 +193,7 @@ def test_referenced_omitted_side_requires_resolved_export(tmp_path):
 
 def test_referenced_scenario_coin_policy_requires_resolved_export(tmp_path):
     source = policy()
-    (tmp_path / "coin.json").write_text(json.dumps({"bot": {"short": {"unstuck": {"close_fraction": 0.12}}}}))
+    (tmp_path / "coin.json").write_text(json.dumps({"bot": {"short": {"risk": {"unstuck": {"loss_allowance_fraction": 0.12}}}}}))
     source["backtest"] = {"scenarios": [{"label": "file", "overrides": {
         "coin_overrides": {"BTC": {"override_config_path": "coin.json"}},
     }}]}
@@ -243,7 +242,7 @@ def test_optimizer_scenario_context_matches_real_suite_transform_order():
         actual = audited["bot"]["short"]
         assert actual["risk"]["total_wallet_exposure_limit_ratio"] == expected["risk"]["total_wallet_exposure_limit_ratio"] == 0.2
         assert actual["strategy"]["trailing_martingale"]["close"]["threshold_base_fraction"] == expected["strategy"]["trailing_martingale"]["close"]["threshold_base_fraction"] == 0.001
-        assert actual["unstuck"]["ema_span_0_minutes"] == expected["unstuck"]["ema_span_0_minutes"] == 123.0
+        assert actual["risk"]["unstuck"]["ema_span_0_minutes"] == expected["risk"]["unstuck"]["ema_span_0_minutes"] == 123.0
 
 
 def test_scenario_activation_retains_completed_mirrored_capacity():

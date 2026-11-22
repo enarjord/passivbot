@@ -10,12 +10,12 @@ def _side_equity_inputs(strategy, sides, hsl):
     ]))
     if hsl != 'disabled':
         for side in ('long', 'short'):
-            inputs[0]['bot'][side]['hsl'].update(
+            inputs[0]['bot'][side]['risk']['hsl'].update(
                 drawdown_threshold_fraction=.002, drawdown_fraction_ema_span_minutes=2.5,
                 cooldown_after_red_minutes=5,
             )
         if hsl == 'portfolio':
-            inputs[0]['bot']['portfolio']['hsl'].update(
+            inputs[0]['bot']['portfolio']['risk']['hsl'].update(
                 drawdown_threshold_fraction=.002, drawdown_fraction_ema_span_minutes=2.5,
                 cooldown_after_red_minutes=5,
             )
@@ -31,8 +31,8 @@ def test_side_equity_stress_fixture_lowers_current_hsl_policy(strategy, hsl):
     from config.hsl import native_hsl_mode, native_hsl_policy
 
     config, _candles, markets, _btc, _timestamps = _side_equity_inputs(strategy, 'both', hsl)
-    owners = [config['bot']['portfolio']['hsl']] if hsl == 'portfolio' else [
-        config['bot'][side]['hsl'] for side in ('long', 'short')
+    owners = [config['bot']['portfolio']['risk']['hsl']] if hsl == 'portfolio' else [
+        config['bot'][side]['risk']['hsl'] for side in ('long', 'short')
     ]
     for policy in owners:
         assert policy['drawdown_threshold_fraction'] == .002

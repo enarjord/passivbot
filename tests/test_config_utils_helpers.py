@@ -75,7 +75,7 @@ def test_load_input_config_without_path_uses_schema_defaults():
     assert base_config_path == ""
     assert source == get_template_config()
     assert raw_snapshot == get_template_config()
-    assert source["bot"]["portfolio"]["hsl"]["scope"] == "coin"
+    assert source["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "coin"
 
 
 def test_hsl_signal_mode_accepts_coin():
@@ -90,7 +90,7 @@ def test_hsl_signal_mode_accepts_portfolio_and_rejects_retired_unified():
 
 @pytest.mark.parametrize(
     "flag",
-    ["--hsl-scope", "--bot.portfolio.hsl.scope", "--bot_portfolio_hsl_scope"],
+    ["--hsl-scope", "--bot.portfolio.risk.hsl.scope", "--bot_portfolio_risk_hsl_scope"],
 )
 def test_backtest_cli_accepts_hsl_signal_mode_override(flag):
     parser = argparse.ArgumentParser()
@@ -104,7 +104,7 @@ def test_backtest_cli_accepts_hsl_signal_mode_override(flag):
 
     update_config_with_args(config, args, allowed_keys=allowed_keys)
 
-    assert config["bot"]["portfolio"]["hsl"]["scope"] == "coin"
+    assert config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "coin"
 
 
 def test_default_example_config_loads_with_grouped_shape_and_live_execution_settings():
@@ -117,20 +117,16 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
         "enabled",
         "entry_cooldown",
         "forager",
-        "hsl",
         "risk",
         "strategy",
-        "unstuck",
         "universe",
     }
     assert set(loaded["bot"]["short"]) == {
         "enabled",
         "entry_cooldown",
         "forager",
-        "hsl",
         "risk",
         "strategy",
-        "unstuck",
         "universe",
     }
     assert "market_orders_allowed" not in loaded["backtest"]
@@ -138,7 +134,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
     assert "lookback_ema_span_minutes" not in loaded["backtest"]
     assert "market_orders_allowed" in loaded["bot"]["portfolio"]["execution"]
     assert "market_order_near_touch_fraction" in loaded["bot"]["portfolio"]["execution"]
-    assert loaded["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] > 0
+    assert loaded["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] > 0
     assert "risk_input_max_attempts" not in loaded["live"]
 
 
@@ -156,7 +152,7 @@ def test_default_trailing_martingale_long_example_matches_template_and_rust_defa
     assert raw["bot"]["long"] == {"enabled": True}
     assert raw["bot"]["short"] == {"enabled": False}
 
-    for section in ("entry_cooldown", "forager", "hsl", "risk", "unstuck"):
+    for section in ("entry_cooldown", "forager", "risk"):
         assert raw["bot"]["global"][section] == template_common[section]
 
     assert (
@@ -170,7 +166,7 @@ def test_starter_config_has_continuous_search_and_contains_its_seed():
 
     config = prepare_config(get_starter_config(), verbose=False)
     shape = build_optimization_shape(config)
-    assert sum(bound.low < bound.high for bound in shape.bounds) == 41
+    assert sum(bound.low < bound.high for bound in shape.bounds) == 40
     for (_, path), bound in zip(shape.key_paths, shape.bounds, strict=True):
         value = config
         for part in path:
@@ -178,9 +174,9 @@ def test_starter_config_has_continuous_search_and_contains_its_seed():
         assert bound.low <= value <= bound.high, path
         assert bound.low == bound.high or bound.step is None, path
 
-    assert config["optimize"]["bounds"]["portfolio"]["loss_gate"][
+    assert config["optimize"]["bounds"]["portfolio"]["risk"]["loss_realization"][
         "memory_ema_span_minutes"
-    ] == [43200.0, 43200.0]
+    ] == [10080, 129600]
 
 
 def test_shipped_example_configs_load_with_grouped_canonical_shape():
@@ -196,28 +192,22 @@ def test_shipped_example_configs_load_with_grouped_canonical_shape():
             "enabled",
             "entry_cooldown",
             "forager",
-            "hsl",
-            "risk",
+                "risk",
             "strategy",
-            "unstuck",
-            "universe",
+                "universe",
         }
         assert set(loaded["bot"]["short"]) == {
             "enabled",
             "entry_cooldown",
             "forager",
-            "hsl",
-            "risk",
+                "risk",
             "strategy",
-            "unstuck",
-            "universe",
+                "universe",
         }
-        expected_bounds = {"entry_cooldown", "forager", "risk", "strategy", "unstuck"}
-        if loaded["bot"]["portfolio"]["hsl"]["scope"] == "portfolio":
-            assert "hsl" in loaded["optimize"]["bounds"]["portfolio"]
-            assert "enabled" in loaded["bot"]["portfolio"]["hsl"]
-        else:
-            expected_bounds.add("hsl")
+        expected_bounds = {"entry_cooldown", "forager", "risk", "strategy"}
+        if loaded["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "portfolio":
+            assert "hsl" in loaded["optimize"]["bounds"]["portfolio"]["risk"]
+            assert "enabled" in loaded["bot"]["portfolio"]["risk"]["hsl"]
         for side in ("long", "short"):
             assert set(loaded["optimize"]["bounds"][side]) == expected_bounds
 
@@ -594,7 +584,7 @@ def test_normalize_coins_source_supports_explicit_all():
 
 def test_loss_gate_default_is_consistent_across_template_and_formatting():
     template = get_template_config()
-    assert template["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == pytest.approx(1.0)
+    assert template["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] == {"enabled": False}
     assert template["live"]["fills"]["fallback_fee_fraction"] == pytest.approx(0.0002)
     assert template["live"]["fills"]["max_abs_fee_fraction"] == pytest.approx(0.001)
 
@@ -607,14 +597,14 @@ def test_loss_gate_default_is_consistent_across_template_and_formatting():
         "coin_overrides": {},
     }
     formatted = format_config(sparse, verbose=False)
-    assert formatted["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == pytest.approx(1.0)
+    assert formatted["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] == {"enabled": False}
     assert formatted["live"]["fills"]["fallback_fee_fraction"] == pytest.approx(0.0002)
     assert formatted["live"]["fills"]["max_abs_fee_fraction"] == pytest.approx(0.001)
 
     loaded = load_config(
         "configs/examples/default_trailing_martingale_long.json", verbose=False
     )
-    assert loaded["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == pytest.approx(1.0)
+    assert loaded["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] == {"enabled": False}
     assert loaded["live"]["fills"]["fallback_fee_fraction"] == pytest.approx(0.0002)
     assert loaded["live"]["fills"]["max_abs_fee_fraction"] == pytest.approx(0.001)
 
@@ -1143,11 +1133,11 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     )
     assert (
         compiled["bot"]["long"]["unstuck_exposure_trigger_ratio"]
-        == config["bot"]["long"]["unstuck"]["exposure_trigger_ratio"]
+        == config["bot"]["long"]["risk"]["unstuck"]["exposure_trigger_ratio"]
     )
     assert (
         compiled["bot"]["long"]["hsl_drawdown_threshold_fraction"]
-        == config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
+        == config["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (
         compiled["bot"]["long"]["forager_volume_ema_span_minutes"]
@@ -1401,7 +1391,7 @@ def test_backtest_cli_start_date_override_creates_missing_backtest_section(
     args, allowed_config_keys = _parse_backtest_args(
         [
             str(path),
-            "--bot.long.hsl.drawdown_fraction_ema_span_minutes",
+            "--bot.long.risk.hsl.drawdown_fraction_ema_span_minutes",
             "1440",
             start_flag,
             "2025-10-11",
@@ -1413,7 +1403,7 @@ def test_backtest_cli_start_date_override_creates_missing_backtest_section(
     )
 
     assert source_config["backtest"]["start_date"] == "2025-10-11"
-    assert source_config["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == pytest.approx(
+    assert source_config["bot"]["long"]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] == pytest.approx(
         1440.0
     )
     assert (
@@ -1779,13 +1769,13 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     _assert_help_option_aliases(
         help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
-    assert "--loss-gate-max-drawdown-fraction FLOAT" in help_text
-    assert "--unstuck-memory-ema-span-minutes FLOAT" in help_text
-    assert "--loss-gate-memory-ema-span-minutes FLOAT" in help_text
+    assert "--loss-gate-max-realized-drawdown-fraction FLOAT" in help_text
+    assert "--realized-loss-memory-ema-span-minutes FLOAT" in help_text
+    assert "--loss-gate-enabled Y/N" in help_text
     assert "--realized-loss-gate-lookback-minutes" not in help_text
     assert "--pnls-max-lookback-days" not in help_text
     assert "--bot.long.entry_grid_inflation_enabled" not in help_text
-    assert "--bot.long.hsl.enabled" not in help_text
+    assert "--bot.long.risk.hsl.enabled" not in help_text
     assert "--optimize_population_size" not in help_text
     assert (
         "--optimize.bounds.long.strategy.trailing_martingale.close.threshold_base_fraction"
@@ -1810,13 +1800,13 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     _assert_help_option_aliases(
         help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
-    assert "--loss-gate-max-drawdown-fraction FLOAT" in help_text
-    assert "--bot.long.hsl.enabled Y/N" in help_text
-    assert "--bot.short.hsl.enabled Y/N" in help_text
-    assert "--bot.long.hsl.orange_tier_mode VALUE" not in help_text
-    assert "--bot.short.hsl.orange_tier_mode VALUE" not in help_text
-    assert "--bot.long.hsl.panic_close_order_type VALUE" in help_text
-    assert "--bot.short.hsl.panic_close_order_type VALUE" in help_text
+    assert "--loss-gate-max-realized-drawdown-fraction FLOAT" in help_text
+    assert "--bot.long.risk.hsl.enabled Y/N" in help_text
+    assert "--bot.short.risk.hsl.enabled Y/N" in help_text
+    assert "--bot.long.risk.hsl.orange_tier_mode VALUE" not in help_text
+    assert "--bot.short.risk.hsl.orange_tier_mode VALUE" not in help_text
+    assert "--bot.long.risk.hsl.panic_close_order_type VALUE" in help_text
+    assert "--bot.short.risk.hsl.panic_close_order_type VALUE" in help_text
 
 
 def test_optimize_fixed_params_cli_parses_csv_selectors():
@@ -1864,8 +1854,8 @@ def test_live_default_help_shows_curated_groups():
     _assert_help_option_aliases(
         help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
-    assert "--unstuck-memory-ema-span-minutes FLOAT" in help_text
-    assert "--loss-gate-memory-ema-span-minutes FLOAT" in help_text
+    assert "--realized-loss-memory-ema-span-minutes FLOAT" in help_text
+    assert "--loss-gate-enabled Y/N" in help_text
     assert "--realized-loss-gate-lookback-minutes" not in help_text
     assert "--pnls-max-lookback-days" not in help_text
     _assert_help_option_aliases(help_text, "--user", "-u", "VALUE")
@@ -1891,9 +1881,9 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     _assert_help_option_aliases(
         help_text, "--market-order-near-touch-fraction", "-montf", "FLOAT"
     )
-    assert "--loss-gate-max-drawdown-fraction FLOAT" in help_text
-    assert "--unstuck-memory-ema-span-minutes FLOAT" in help_text
-    assert "--loss-gate-memory-ema-span-minutes FLOAT" in help_text
+    assert "--loss-gate-max-realized-drawdown-fraction FLOAT" in help_text
+    assert "--realized-loss-memory-ema-span-minutes FLOAT" in help_text
+    assert "--loss-gate-enabled Y/N" in help_text
     assert "--realized-loss-gate-lookback-minutes" not in help_text
     assert "--pnls-max-lookback-days" not in help_text
     assert "--reducer-default MODE" in help_text
@@ -1928,11 +1918,11 @@ def test_backtest_help_all_describes_high_value_overrides():
     assert "balance_and_equity.npz retains every full-precision native observation" in help_text
     assert "Plot-only minutes per balance/equity sample" not in help_text
     assert "Default 180; null resolves to the native default" in help_text
-    assert "--bot.long.hsl.orange_tier_mode" not in help_text
+    assert "--bot.long.risk.hsl.orange_tier_mode" not in help_text
     assert "Allowed values: limit or market" in help_text
     assert "Allowed values: reduce_overweight or reduce_portfolio" in help_text
     assert "Scale coin HSL balance budget" in help_text
-    assert "Override bot.long.hsl.orange_tier_mode." not in help_text
+    assert "Override bot.long.risk.hsl.orange_tier_mode." not in help_text
     assert "Override bot.short.risk.we_excess_allowance_mode." not in help_text
     assert "Override backtest.dynamic_wel_by_tradability." not in help_text
 
@@ -2059,18 +2049,18 @@ def test_risk_cli_aliases_last_value_wins(legacy_last):
 
 
 
-def test_live_independent_risk_memory_and_gate_fraction_flags_parse():
+def test_live_shared_risk_memory_and_explicit_gate_flags_parse():
     config = project_template_config_for_cli(get_template_config(), "live")
     parser = argparse.ArgumentParser(prog="live")
     add_config_arguments(parser, config, command="live", help_all=False)
     parsed = parser.parse_args([
-        "--unstuck-memory-ema-span-minutes", "14.5",
-        "--loss-gate-memory-ema-span-minutes", "21.5",
-        "--loss-gate-max-drawdown-fraction", "0.1",
+        "--realized-loss-memory-ema-span-minutes", "14.5",
+        "--loss-gate-enabled", "y",
+        "--loss-gate-max-realized-drawdown-fraction", "0.1",
     ])
-    assert getattr(parsed, "bot.portfolio.unstuck.memory_ema_span_minutes") == 14.5
-    assert getattr(parsed, "bot.portfolio.loss_gate.memory_ema_span_minutes") == 21.5
-    assert getattr(parsed, "bot.portfolio.loss_gate.max_drawdown_fraction") == 0.1
+    assert getattr(parsed, "bot.portfolio.risk.loss_realization.memory_ema_span_minutes") == 14.5
+    assert getattr(parsed, "bot.portfolio.risk.loss_realization.loss_gate.enabled") is True
+    assert getattr(parsed, "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction") == 0.1
     with pytest.raises(SystemExit):
         parser.parse_args(["--lookback-ema-span-minutes", "14"])
 
@@ -2137,20 +2127,20 @@ def test_optimize_fixed_bot_runtime_overrides_parse():
 
     parsed = parser.parse_args(
         [
-            "--bot.short.hsl.enabled",
+            "--bot.short.risk.hsl.enabled",
             "y",
-            "--bot.short.hsl.panic_close_order_type",
+            "--bot.short.risk.hsl.panic_close_order_type",
             "market",
         ]
     )
 
-    assert getattr(parsed, "bot.short.hsl.enabled") is True
+    assert getattr(parsed, "bot.short.risk.hsl.enabled") is True
     with pytest.raises(SystemExit):
-        parser.parse_args(["--bot.long.hsl.restart_after_red_policy", "always"])
-    assert getattr(parsed, "bot.short.hsl.panic_close_order_type") == "market"
+        parser.parse_args(["--bot.long.risk.hsl.restart_after_red_policy", "always"])
+    assert getattr(parsed, "bot.short.risk.hsl.panic_close_order_type") == "market"
 
 
-def test_optimize_fixed_bot_runtime_overrides_apply_grouped_and_flat_aliases():
+def test_optimize_fixed_bot_runtime_overrides_use_canonical_paths():
     config = project_template_config_for_cli(get_template_config(), "optimize")
     parser = argparse.ArgumentParser(prog="optimize")
     group_map = {
@@ -2168,27 +2158,27 @@ def test_optimize_fixed_bot_runtime_overrides_apply_grouped_and_flat_aliases():
 
     parsed_grouped = parser.parse_args(
         [
-            "--bot.long.hsl.enabled",
+            "--bot.long.risk.hsl.enabled",
             "y",
-            "--bot.long.hsl.panic_close_order_type",
+            "--bot.long.risk.hsl.panic_close_order_type",
             "market",
         ]
     )
     update_config_with_args(target, parsed_grouped, allowed_keys=allowed_keys)
-    assert target["bot"]["long"]["hsl"]["enabled"] is True
-    assert target["bot"]["long"]["hsl"]["panic_close_order_type"] == "market"
+    assert target["bot"]["long"]["risk"]["hsl"]["enabled"] is True
+    assert target["bot"]["long"]["risk"]["hsl"]["panic_close_order_type"] == "market"
 
-    parsed_flat_aliases = parser.parse_args(
+    parsed_underscored = parser.parse_args(
         [
-            "--bot.short.hsl_enabled",
+            "--bot_short_risk_hsl_enabled",
             "y",
-            "--bot.short.hsl_panic_close_order_type",
+            "--bot_short_risk_hsl_panic_close_order_type",
             "market",
         ]
     )
-    update_config_with_args(target, parsed_flat_aliases, allowed_keys=allowed_keys)
-    assert target["bot"]["short"]["hsl"]["enabled"] is True
-    assert target["bot"]["short"]["hsl"]["panic_close_order_type"] == "market"
+    update_config_with_args(target, parsed_underscored, allowed_keys=allowed_keys)
+    assert target["bot"]["short"]["risk"]["hsl"]["enabled"] is True
+    assert target["bot"]["short"]["risk"]["hsl"]["panic_close_order_type"] == "market"
 
 
 def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
@@ -2209,8 +2199,8 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     parsed_market = parser.parse_args(["-moa", "y"])
     parsed_hedge = parser.parse_args(["-hm", "n"])
     parsed_near_touch = parser.parse_args(["-montf", "0.002"])
-    parsed_lookback = parser.parse_args(["--unstuck-memory-ema-span-minutes", "14.5"])
-    parsed_loss = parser.parse_args(["--loss-gate-max-drawdown-fraction", "0.75"])
+    parsed_lookback = parser.parse_args(["--realized-loss-memory-ema-span-minutes", "14.5"])
+    parsed_loss = parser.parse_args(["--loss-gate-max-realized-drawdown-fraction", "0.75"])
     parsed_fee_fallback = parser.parse_args(["--fallback-fee-fraction", "0"])
     parsed_fee_sanity = parser.parse_args(["--max-abs-fee-fraction", "0.002"])
     parsed_maker_fee = parser.parse_args(["--maker-fee-override-fraction", "0.0002"])
@@ -2221,10 +2211,10 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     assert getattr(
         parsed_near_touch, 'bot.portfolio.execution.market_order_near_touch_fraction'
     ) == pytest.approx(0.002)
-    assert getattr(parsed_lookback, "bot.portfolio.unstuck.memory_ema_span_minutes") == pytest.approx(
+    assert getattr(parsed_lookback, "bot.portfolio.risk.loss_realization.memory_ema_span_minutes") == pytest.approx(
         14.5
     )
-    assert getattr(parsed_loss, "bot.portfolio.loss_gate.max_drawdown_fraction") == pytest.approx(0.75)
+    assert getattr(parsed_loss, "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction") == pytest.approx(0.75)
     assert getattr(parsed_fee_fallback, "live.fills.fallback_fee_fraction") == pytest.approx(
         0.0
     )
@@ -2268,7 +2258,7 @@ def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_f
     assert "market_orders_allowed" in config["bot"]["portfolio"]["execution"]
     assert "market_order_near_touch_fraction" in config["bot"]["portfolio"]["execution"]
     assert "max_minutes" in config["bot"]["portfolio"]["warmup"]
-    assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] > 0
+    assert config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] > 0
     assert "user" not in config["live"].get("account", {})
 
 
@@ -2280,8 +2270,8 @@ def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_f
     assert "max_minutes" in config["bot"]["portfolio"]["warmup"]
     parser = argparse.ArgumentParser()
     add_config_arguments(parser, config, command="optimize")
-    parsed = parser.parse_args(["--unstuck-memory-ema-span-minutes", "17.5"])
-    assert getattr(parsed, "bot.portfolio.unstuck.memory_ema_span_minutes") == 17.5
+    parsed = parser.parse_args(["--realized-loss-memory-ema-span-minutes", "17.5"])
+    assert getattr(parsed, "bot.portfolio.risk.loss_realization.memory_ema_span_minutes") == 17.5
     assert "user" not in config["live"].get("account", {})
 
 

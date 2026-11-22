@@ -15,7 +15,7 @@ including when both sides use one common value.
 Side activation is explicit and never inherits: `bot.long.enabled` and `bot.short.enabled`
 each default to false; only an explicit true enables a side. Omitted or empty side objects stay
 disabled. `bot.global.enabled` is unsupported and rejected with a corrective error. Nested feature
-switches such as `bot.global.unstuck.enabled` still inherit. Both-disabled configs remain valid for
+switches such as `bot.global.risk.unstuck.enabled` still inherit. Both-disabled configs remain valid for
 held-position management. Disabled sides cannot open or DCA, even in forced-normal mode; capacity, approvals and readiness still gate enabled
 sides. Held closes and protection keep their existing sizing, risk and operational gates.
 Zero capacity does not set manual mode or fabricate a replacement budget. Numeric optimizer
@@ -186,15 +186,15 @@ V8 strategy contract.
 
 ## Auto-Unstucking
 
-Auto unstuck is controlled by `bot.<side>.unstuck.enabled`. When disabled, the
+Auto unstuck is controlled by `bot.<side>.risk.unstuck.enabled`. When disabled, the
 unstuck thresholds remain in the config but do not create orders.
 
-`bot.<side>.unstuck.ema_gating_enabled` controls only the EMA trigger/readiness check for
+`bot.<side>.risk.unstuck.ema_gating_enabled` controls only the EMA trigger/readiness check for
 auto-unstuck. It defaults to `true`. When false, auto-unstuck may trigger without EMA bands, but it
 still requires loss allowance, exposure threshold, close sizing, and valid market/exchange inputs.
 The field may be overridden for an individual coin+side through `coin_overrides`.
 
-`bot.<side>.unstuck.ema_span_0_minutes` and `ema_span_1_minutes` are positive floating-point EMA spans in
+`bot.<side>.risk.unstuck.ema_span_0_minutes` and `ema_span_1_minutes` are positive floating-point EMA spans in
 minutes, independent of the active strategy spans. The band contains these two close-price EMAs
 and the EMA at their geometric-mean span. Long unstucking requires price at or above the upper
 band times `1 + ema_distance_fraction` (rounded up to the price tick); short unstucking requires price at or
@@ -219,80 +219,49 @@ warns and fixes missing new unstuck bounds at the starting values. Set new bound
 pinned; remove those leaves deliberately to tune a shared global pair. Restart optimizer searches
 rather than resuming old checkpoints after this schema change.
 
-Apple MPS screening supports independent unstuck horizons and bounds for both supported strategies,
-including per-coin overrides and candle-interval scaling. Start a fresh GPU run after upgrading;
-older screening checkpoints use a different parameter layout.
-
-Auto-unstuck requires a positive remaining realized-loss allowance. It uses one continuous
-account-wide net-realized-PnL drawdown memory, with its global
-`bot.portfolio.unstuck.memory_ema_span_minutes` span. This memory includes ordinary/HSL closes, entry/exit
-fees and signed rebates; it excludes unrealized PnL and does not reset at HSL episode
-boundaries. For each elapsed minute and then each ordered realized event:
+Auto-unstuck requires positive remaining loss allowance. It shares the
+portfolio's account-wide net-realized drawdown with the loss gate. The memory
+includes fees, rebates, ordinary closes and panic fills. Elapsed minutes decay
+the memory even when no fills occur.
 
 ```text
-alpha = 2 / (bot.portfolio.unstuck.memory_ema_span_minutes + 1)
+alpha = 2 / (bot.portfolio.risk.loss_realization.memory_ema_span_minutes + 1)
 D_realized = (1 - alpha) * D_realized
-D_realized = max(0, D_realized - net_realized_PnL)
+D_realized = max(0, D_realized - net_realized_pnl)
 p = unstuck.loss_allowance_fraction * applicable_total_wallet_exposure_limit_ratio
 remaining_allowance = max(0, p * (raw_balance + D_realized) - D_realized)
 ```
 
-Queries do not reapply decay or fills. Profits repay remembered losses; excess profits
-create no negative loss credit. The global `bot.portfolio.loss_gate` consumes the same ordered net fills with its own
-`memory_ema_span_minutes` and separate drawdown accumulator. Its allowance uses
-`p = max_drawdown_fraction`, without TWEL multiplication. Each enabled filter consumes a fill
-once while the economic ledger records it once. Old rolling windows and loss percentages require
-explicit migration and joint retuning; see the [v9 migration guide](v8_to_v9_migration.md).
+The portfolio gate uses its cap as `p` with the same drawdown snapshot and no
+TWEL weighting. An unstuck close with both policies active spends its full
+estimated net loss from both headrooms. A per-coin pin at
+`coin_overrides.<coin>.bot.<side>.risk.unstuck.loss_allowance_fraction` changes
+the unstuck fraction for that coin and side.
 
-If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_fraction` is set, that
-coin+side uses the override fraction in this same account-wide allowance formula.
-The override does not create a per-slot budget or separate per-coin realized-PnL tracking.
-
-With auto-unstuck enabled and positive `loss_allowance_fraction`, `close_fraction`, `exposure_trigger_ratio` and side
-TWEL, positions must pass the exposure test and, when enabled, the EMA gate described above:
+Let `Q` be absolute position size, `E` average entry price times contract
+multiplier, `W` effective per-position WEL (including bounded excess
+allowance), `B` raw balance, and `T` the exposure trigger. A position
+qualifies only when `Q * E / (B * W) > T`. For an ordinary partial unstuck
+fill of size `q`, Rust evaluates:
 
 ```text
-effective_wel = wallet_exposure_limit_ratio * (1 + effective_we_excess_allowance_fraction)
-wallet_exposure = abs(position_size) * position_price * c_mult / balance
-eligible_exposure = wallet_exposure / effective_wel > unstuck.exposure_trigger_ratio
+B_after = B + projected_net_close_pnl(q)
+R_after = (Q - q) * E / (B_after * W)
 ```
 
-Here `position_price` is average entry price. The threshold is an eligibility trigger only;
-equality does not qualify. It is not a target remaining exposure, and Rust does not cap an
-unstuck close at the quantity needed to reach it.
+The greatest legal quantity must have positive `B_after` and reduce exposure
+without taking it below `T`. The loss budget can reduce the executable quantity
+further. The planner skips a proposal whose venue minimum would cross the
+exposure bound. It evaluates the actual quote, execution route and applicable
+fee and checks that the selected order remains a partial close.
 
-For the selected candidate, Rust uses current price rounded up to the price tick for a long
-close or down for a short close. Before quantity rounding and other constraints:
-
-```text
-close_qty_abs = balance * effective_wel * unstuck.close_fraction / (close_price * c_mult)
-```
-
-This sizes a fraction of the effective exposure budget at the close price, not a fraction of
-the current position. Rust rounds quantity down, applies exchange minimums and position sizing,
-and scales loss-making closes when their estimated loss exceeds the remaining allowance.
-Minimum sizing can exceed the remaining allowance; see the
-[loss-allowance contract](risk_management.md#auto-unstuck-loss-allowance-contract).
-
-At unchanged balance and effective WEL, the nominal reduction in `wallet_exposure / effective_wel`
-is `close_fraction * position_price / close_price`, before rounding and other constraints. For example,
-a long at 100% of effective WEL with `threshold = 0.90`, `close_fraction = 0.12`, entry price 110 and
-close price 100 would fall to about 86.8%, not 90%. Realized losses, fees or other balance changes
-also change the denominator of the post-fill exposure ratio.
-
-Rust implements the [unstuck calculation](https://github.com/enarjord/passivbot/blob/v9/passivbot-rust/src/risk.rs)
-and its [realized-loss budget](https://github.com/enarjord/passivbot/blob/v9/passivbot-rust/src/utils.rs).
-
-When multiple positions are eligible, auto-unstuck first tries the candidate with the highest
-[signed entry distance](ai/numeric_conventions.md#quantities). Favorable moves score positive,
-and among underwater positions the shallowest loss scores highest. The planner uses the ask for
-longs and the bid for shorts. Equal scores prioritize the lower symbol index. The
-[total exposure enforcer](#total-exposure-enforcer) prioritizes the lowest projected loss per
-unit of exposure, giving profitable and breakeven candidates a score of zero.
+Only one unstuck close can survive reducer arbitration per planning batch.
+Lossy reducers and ordinary closes use the fillability and price priority
+described in the [risk model](v9_risk_model.md).
 
 `unstuck.ema_distance_fraction` must keep the EMA-derived trigger price positive:
-- `bot.long.unstuck.ema_distance_fraction > -1.0`
-- `bot.short.unstuck.ema_distance_fraction < 1.0`
+- `bot.long.risk.unstuck.ema_distance_fraction > -1.0`
+- `bot.short.risk.unstuck.ema_distance_fraction < 1.0`
 
 Configs that cross those boundaries now hard-fail during validation instead of silently
 disabling auto-unstuck. For near-always-on EMA triggering on either side, use a value like

@@ -68,7 +68,7 @@ from optimization.gpu.mps_kernel import (
     MpsTrailingMartingaleMulticoinFusedRunner,
     _cached_library_with_miss,
     _decode_multicoin_fused_outputs,
-    _encode_loss_gate_max_drawdown_fraction,
+    _encode_loss_gate_policy,
     _pack_tm_parameter_matrix,
     _TM_DECIMAL_WORDS,
     _scale_directional_minute_parameters,
@@ -225,18 +225,28 @@ def test_tm_parameter_packing_preserves_positive_underflow_mode_per_side():
 
 
 
-@pytest.mark.parametrize(
-    "value", [0.0, 0.05, 0.999999999, float(np.nextafter(1.0, 0.0))]
-)
-def test_mps_realized_loss_fraction_matches_nearest_f32_cast(value):
-    encoded = _encode_loss_gate_max_drawdown_fraction(value)
-
-    assert encoded == float(np.float32(value))
+@pytest.mark.parametrize("cap", [None, 0.0, 0.05, float(np.nextafter(1.0, 0.0))])
+def test_mps_dormant_loss_gate_caps_have_identical_device_encoding(cap):
+    assert _encode_loss_gate_policy(False, cap) == _encode_loss_gate_policy(False, None) == 0.0
 
 
-@pytest.mark.parametrize("value", [1.0, 2.0, 1.0e100])
-def test_mps_disabled_realized_loss_limit_has_finite_float32_encoding(value):
-    assert _encode_loss_gate_max_drawdown_fraction(value) == 1.0
+@pytest.mark.parametrize("cap", [0.0, 0.05, float(np.nextafter(1.0, 0.0))])
+def test_mps_rejects_enabled_realized_loss_sizing(cap):
+    with pytest.raises(ValueError, match="use a CPU backend"):
+        _encode_loss_gate_policy(True, cap)
+
+
+@pytest.mark.parametrize("cap", [1.0, -0.1, float("inf"), float("nan")])
+def test_mps_rejects_invalid_dormant_gate_cap(cap):
+    with pytest.raises(ValueError, match="loss_gate_max_drawdown_fraction"):
+        _encode_loss_gate_policy(False, cap)
+
+
+def test_mps_requires_explicit_gate_boolean():
+    with pytest.raises(TypeError):
+        _encode_loss_gate_policy(cap=None)
+    with pytest.raises(ValueError, match="explicit boolean"):
+        _encode_loss_gate_policy(0.0, None)
 
 
 def test_decode_multicoin_fused_outputs_retains_account_positions_and_fill_facts():
@@ -2192,7 +2202,7 @@ def _tm_twel_enforcer_fields(
     enabled=False,
     unstuck_enabled=False,
     unstuck_ema_gating_enabled=True,
-    unstuck_close_fraction=0.1,
+    reserved_unstuck_sizing_slot=0.1,
     unstuck_ema_distance_fraction=0.0,
     unstuck_loss_allowance_fraction=0.1,
     unstuck_exposure_trigger_ratio=0.5,
@@ -2201,7 +2211,7 @@ def _tm_twel_enforcer_fields(
         float(enabled),
         float(unstuck_enabled),
         float(unstuck_ema_gating_enabled),
-        unstuck_close_fraction,
+        reserved_unstuck_sizing_slot,
         unstuck_ema_distance_fraction,
         unstuck_loss_allowance_fraction,
         unstuck_exposure_trigger_ratio,
@@ -2226,7 +2236,7 @@ _ADAPTIVE_DISABLED_VALUES = dict(
 _UNSTUCK_DISABLED_VALUES = {
     "unstuck_enabled": 0.0,
     "unstuck_ema_gating_enabled": 1.0,
-    "unstuck_close_fraction": 0.1,
+    "reserved_unstuck_sizing_slot": 0.1,
     "unstuck_ema_distance_fraction": 0.0,
     "unstuck_loss_allowance_fraction": 0.1,
     "unstuck_exposure_trigger_ratio": 0.5,
@@ -2633,8 +2643,8 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(strategy_kind, topo
         risk["we_excess_allowance_fraction"] = 0.0
         risk['position_exposure_enforcer']['enabled'] = False
         risk['total_exposure_enforcer']['enabled'] = False
-        config["bot"][side]["hsl"]["enabled"] = False
-        config["bot"][side]["unstuck"]["enabled"] = False
+        config["bot"][side]["risk"]["hsl"]["enabled"] = False
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
     for side in enabled_sides:
         # This fixture uses fixed price offsets; unused volatility-dependent
         # inputs must not require an hourly bootstrap before its short warmup.
@@ -2777,10 +2787,10 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
         risk["we_excess_allowance_fraction"] = 0.0
         risk['position_exposure_enforcer']['enabled'] = False
         risk['total_exposure_enforcer']['enabled'] = False
-        config["bot"][side]["hsl"]["enabled"] = enabled
-        config["bot"][side]["hsl"]["drawdown_threshold_fraction"] = 0.9
-        config["bot"][side]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.0
-        config["bot"][side]["unstuck"]["enabled"] = False
+        config["bot"][side]["risk"]["hsl"]["enabled"] = enabled
+        config["bot"][side]["risk"]["hsl"]["drawdown_threshold_fraction"] = 0.9
+        config["bot"][side]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.0
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
     for side in enabled_sides:
         # This fixture uses fixed price offsets; unused volatility-dependent
         # inputs must not require an hourly bootstrap before its short warmup.
@@ -2883,7 +2893,7 @@ def _multicoin_exposure_fixture(
     closes=(100.0, 120.0),
     highs=None,
     lows=None,
-    loss_gate_max_drawdown_fraction=1.0,
+    loss_gate_max_drawdown_fraction=None,
     first_valid_indices=(0, 0),
     last_valid_indices=None,
     equity_floor_fraction=0.05,
@@ -2978,13 +2988,13 @@ def _multicoin_exposure_fixture(
             "unstuck_ema_span_0_minutes": 2.0,
             "unstuck_ema_span_1_minutes": 3.0,
             **_HSL_DISABLED_VALUES,
-        "unstuck_memory_ema_span_minutes": 43200.0,
-        "loss_gate_memory_ema_span_minutes": 43200.0,
+        "realized_loss_memory_ema_span_minutes": 43200.0,
+        "reserved_realized_memory_slot": 0.0,
         }
         row = [values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
         runner = MpsEmaAnchorMulticoinRunner(
             runs[0],
-            data,
+            data, loss_gate_enabled=False,
             pnl_lookback_bars=1440 if interval_minutes == 1 else 0,
             core_metric_mask=core_mask,
             side=side,
@@ -3048,13 +3058,13 @@ def _multicoin_exposure_fixture(
             "unstuck_ema_span_0_minutes": 2.0,
             "unstuck_ema_span_1_minutes": 3.0,
             **_HSL_DISABLED_VALUES,
-        "unstuck_memory_ema_span_minutes": 43200.0,
-        "loss_gate_memory_ema_span_minutes": 43200.0,
+        "realized_loss_memory_ema_span_minutes": 43200.0,
+        "reserved_realized_memory_slot": 0.0,
         }
         row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
         runner = MpsTrailingMartingaleMulticoinRunner(
             runs[0],
-            data,
+            data, loss_gate_enabled=False,
             pnl_lookback_bars=1440 if interval_minutes == 1 else 0,
             core_metric_mask=core_mask,
             side=side,
@@ -3206,7 +3216,7 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(
         collect_coin_fill_counts=True,
     )
     generic = MpsTrailingMartingaleMulticoinRunner(
-        run, data, pnl_lookback_bars=1440, **kwargs,
+        run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, **kwargs,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -3222,7 +3232,7 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(
     }
     chunked = MpsTrailingMartingaleMulticoinRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         max_dispatch_candidate_bars=batch_size * 2 * 47,
         **kwargs,
@@ -3265,7 +3275,7 @@ def test_tm_multicoin_temporal_replay_interrupt_does_not_leak_partial_state():
 
     chunked = MpsTrailingMartingaleMulticoinRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         side="long",
         max_dispatch_candidate_bars=2 * 7,
@@ -3297,7 +3307,7 @@ def test_tm_multicoin_temporal_replay_preserves_unavailable_valuation():
     )
     chunked = MpsTrailingMartingaleMulticoinRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         side="long",
         max_dispatch_candidate_bars=2 * 7,
@@ -3340,7 +3350,7 @@ def test_tm_multicoin_temporal_replay_stops_on_fatal_marker(
 
     runner = MpsTrailingMartingaleMulticoinRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         side=side,
         pnl_lookback_bars=1440,
         max_dispatch_candidate_bars=2 * 7,
@@ -3561,8 +3571,8 @@ def test_mps_multicoin_forced_normal_service_matches_exact_active_symbols(
         risk["we_excess_allowance_fraction"] = 0.0
         risk['position_exposure_enforcer']['enabled'] = False
         risk['total_exposure_enforcer']['enabled'] = False
-        config["bot"][side]["hsl"]["enabled"] = False
-        config["bot"][side]["unstuck"]["enabled"] = False
+        config["bot"][side]["risk"]["hsl"]["enabled"] = False
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
     for side in enabled_sides:
         # This fixture uses fixed price offsets; unused volatility-dependent
         # inputs must not require an hourly bootstrap before its short warmup.
@@ -3655,7 +3665,7 @@ def test_mps_ema_multicoin_aggregated_interval_fused_smoke(interval_minutes):
         interval_minutes=interval_minutes,
         return_context=True,
     )
-    runner = MpsEmaAnchorMulticoinFusedRunner(run, data, pnl_lookback_bars=0, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
+    runner = MpsEmaAnchorMulticoinFusedRunner(run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=0, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
     synchronize()
@@ -3694,7 +3704,7 @@ def test_mps_tm_multicoin_aggregated_interval_fused_smoke(interval_minutes):
         interval_minutes=interval_minutes,
         return_context=True,
     )
-    runner = MpsTrailingMartingaleMulticoinFusedRunner(run, data, pnl_lookback_bars=0, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
+    runner = MpsTrailingMartingaleMulticoinFusedRunner(run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=0, side_activation={"long": True, "short": True}, filter_by_min_effective_cost={"long": False, "short": False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
 
     output = runner.run(np.asarray([row + row], dtype=np.float64))
     synchronize()
@@ -4451,7 +4461,7 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
             "twel_enforcer_reduce_portfolio": 1.0,
             "unstuck_enabled": 1.0,
             "unstuck_ema_gating_enabled": 0.0,
-            "unstuck_close_fraction": 0.1,
+            "reserved_unstuck_sizing_slot": 0.1,
             "unstuck_loss_allowance_fraction": 1.0,
             "unstuck_exposure_trigger_ratio": 0.1,
         }
@@ -5740,8 +5750,8 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         twel_enforcer_threshold_ratio=1.0,
         unstuck_ema_span_0_minutes=2.0,
         unstuck_ema_span_1_minutes=3.0,
-        unstuck_memory_ema_span_minutes=43200.0,
-        loss_gate_memory_ema_span_minutes=43200.0,
+        realized_loss_memory_ema_span_minutes=43200.0,
+        reserved_realized_memory_slot=0.0,
     )
     parameter_values.update(_UNSTUCK_DISABLED_VALUES)
     parameter_values.update(_HSL_DISABLED_VALUES)
@@ -5750,7 +5760,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
 
     runner = MpsEmaAnchorMulticoinRunner(
         runs[0],
-        data,
+        data, loss_gate_enabled=False,
         pnl_lookback_bars=1440,
         side=side,
         forager_score_hysteresis={"long": 0.02, "short": 0.02},
@@ -5761,7 +5771,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         filter_by_min_effective_cost={"long": False, "short": False},
     )
     assert runner.settings.cpu()[4].item() == pytest.approx(0.02)
-    assert runner.settings.cpu()[5].item() == float(np.float32(0.1))
+    assert runner.settings.cpu()[5].item() == 0.0
     assert runner.settings.cpu()[9].item() == 1.0
     assert runner.settings.cpu()[10].item() == pytest.approx(0.003)
     output = runner.run(np.array([row, row], dtype=np.float64))
@@ -5782,7 +5792,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     with pytest.raises(ValueError, match="finite and non-negative"):
         MpsEmaAnchorMulticoinRunner(
             runs[0],
-            data,
+            data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
             pnl_lookback_bars=1440,
             side=side,
             forager_score_hysteresis={"long": -0.01, "short": 0.02},
@@ -5792,7 +5802,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     with pytest.raises(ValueError, match="loss_gate_max_drawdown_fraction"):
         MpsEmaAnchorMulticoinRunner(
             runs[0],
-            data,
+            data, loss_gate_enabled=False,
             pnl_lookback_bars=1440,
             side=side,
             loss_gate_max_drawdown_fraction=float("nan"),
@@ -5803,7 +5813,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     with pytest.raises(ValueError, match="market_order_near_touch_fraction"):
         MpsEmaAnchorMulticoinRunner(
             runs[0],
-            data,
+            data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
             pnl_lookback_bars=1440,
             side=side,
             market_order_near_touch_fraction=float("nan"),
@@ -5818,7 +5828,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     )
     disabled[:, 11] = 0.0
     disabled_output = MpsEmaAnchorMulticoinRunner(
-        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=disabled,
+        runs[0], data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, side=side, coin_overrides=disabled,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -5846,7 +5856,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         30.0,
     ]
     exact_last_output = MpsEmaAnchorMulticoinRunner(
-        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=exact_last,
+        runs[0], data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, side=side, coin_overrides=exact_last,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -6197,7 +6207,7 @@ def test_mps_tm_fused_coin_overrides_resolve_ema_gates_per_side():
         row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
     runner = MpsTrailingMartingaleMulticoinFusedRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         long_coin_overrides=long_overrides,
         short_coin_overrides=short_overrides,
@@ -7086,7 +7096,7 @@ def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
     overrides = np.full((2, EMA_ANCHOR_COIN_OVERRIDE_COLS), np.nan, dtype=np.float32)
     resting_runner = MpsEmaAnchorMulticoinFusedRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         long_coin_overrides=overrides,
         short_coin_overrides=overrides,
@@ -7099,7 +7109,7 @@ def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
     )
     market_runner = MpsEmaAnchorMulticoinFusedRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         long_coin_overrides=overrides,
         short_coin_overrides=overrides,
@@ -7175,7 +7185,7 @@ def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
     )
     resting_runner = MpsTrailingMartingaleMulticoinFusedRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         long_coin_overrides=overrides,
         short_coin_overrides=overrides,
@@ -7188,7 +7198,7 @@ def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
     )
     market_runner = MpsTrailingMartingaleMulticoinFusedRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         long_coin_overrides=overrides,
         short_coin_overrides=overrides,
@@ -7266,7 +7276,7 @@ def test_mps_tm_multicoin_fused_recursive_market_entries_respect_position_mode(
     )
     runner = MpsTrailingMartingaleMulticoinFusedRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         long_coin_overrides=overrides,
         short_coin_overrides=overrides,
@@ -7350,7 +7360,7 @@ def test_mps_tm_multicoin_fused_recursive_market_closes_respect_position_mode(
     )
     runner = MpsTrailingMartingaleMulticoinFusedRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         long_coin_overrides=overrides,
         short_coin_overrides=overrides,
@@ -7429,7 +7439,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         forager_log_range_ema_span_minutes=60., forager_score_weights_ema_readiness=1.,
         n_positions=2., twel_entry_gate_enabled=1., twel_enforcer_threshold_ratio=1.,
         unstuck_ema_span_0_minutes=2., unstuck_ema_span_1_minutes=3.,
-        unstuck_memory_ema_span_minutes=43200., loss_gate_memory_ema_span_minutes=43200.)
+        realized_loss_memory_ema_span_minutes=43200., reserved_realized_memory_slot=43200.)
     candidate_values.update(_UNSTUCK_DISABLED_VALUES)
     candidate_values.update(_ADAPTIVE_DISABLED_VALUES)
     candidate_values.update(_HSL_DISABLED_VALUES)
@@ -7463,9 +7473,9 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         dtype=torch.float32,
         device=gpu_device(),
     )
-    abi_runner = MpsEmaAnchorMulticoinFusedRunner(runs[0], data, pnl_lookback_bars=1440,
+    abi_runner = MpsEmaAnchorMulticoinFusedRunner(runs[0], data, loss_gate_enabled=False, pnl_lookback_bars=1440,
         collect_coin_fill_counts=True, forager_score_hysteresis={"long": .02, "short": .02},
-        loss_gate_max_drawdown_fraction=1.0, side_activation={"long": True, "short": True},
+        loss_gate_max_drawdown_fraction=None, side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False})
     run_settings = abi_runner.settings
     from optimization.gpu.ema_bootstrap import pack_bootstrap_counts
@@ -7567,12 +7577,12 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     runner = MpsEmaAnchorMulticoinFusedRunner(
         runs[0],
-        data,
+        data, loss_gate_enabled=False,
         pnl_lookback_bars=1440,
         long_coin_overrides=override_matrix,
         short_coin_overrides=override_matrix,
         forager_score_hysteresis={"long": 0.02, "short": 0.02},
-        loss_gate_max_drawdown_fraction=1.0,
+        loss_gate_max_drawdown_fraction=None,
         collect_coin_fill_counts=True,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
@@ -7726,7 +7736,7 @@ def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
         )
     values.update(
         unstuck_ema_span_0_minutes=17.25, unstuck_ema_span_1_minutes=211.75,
-        unstuck_memory_ema_span_minutes=43200.0, loss_gate_memory_ema_span_minutes=43200.0,
+        realized_loss_memory_ema_span_minutes=43200.0, reserved_realized_memory_slot=0.0,
     )
     side_row = [values[key] for key in param_keys]
     params = np.asarray([side_row + side_row], dtype=np.float64)
@@ -7862,8 +7872,8 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "unstuck_ema_span_0_minutes": 2.0,
         "unstuck_ema_span_1_minutes": 3.0,
         **_HSL_DISABLED_VALUES,
-        "unstuck_memory_ema_span_minutes": 43200.0,
-        "loss_gate_memory_ema_span_minutes": 43200.0,
+        "realized_loss_memory_ema_span_minutes": 43200.0,
+        "reserved_realized_memory_slot": 0.0,
     }
 
     def side_row(signal_mode):
@@ -7898,9 +7908,9 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         dtype=torch.float32,
         device=gpu_device(),
     )
-    abi_runner = MpsTrailingMartingaleMulticoinFusedRunner(runs[0], data, pnl_lookback_bars=1440,
+    abi_runner = MpsTrailingMartingaleMulticoinFusedRunner(runs[0], data, loss_gate_enabled=False, pnl_lookback_bars=1440,
         collect_coin_fill_counts=True, forager_score_hysteresis={"long": .02, "short": .02},
-        loss_gate_max_drawdown_fraction=1.0, side_activation={"long": True, "short": True},
+        loss_gate_max_drawdown_fraction=None, side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False})
     run_settings = abi_runner.settings
     from optimization.gpu.ema_bootstrap import pack_bootstrap_counts
@@ -8003,12 +8013,12 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     runner = MpsTrailingMartingaleMulticoinFusedRunner(
         runs[0],
-        data,
+        data, loss_gate_enabled=False,
         pnl_lookback_bars=1440,
         long_coin_overrides=override_matrix,
         short_coin_overrides=override_matrix,
         forager_score_hysteresis={"long": 0.02, "short": 0.02},
-        loss_gate_max_drawdown_fraction=1.0,
+        loss_gate_max_drawdown_fraction=None,
         collect_coin_fill_counts=True,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
@@ -8042,7 +8052,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     with pytest.raises(ValueError, match="short override matrix shaped"):
         MpsTrailingMartingaleMulticoinFusedRunner(
             runs[0],
-            data,
+            data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
             pnl_lookback_bars=1440,
             short_coin_overrides=np.empty(
                 (coin_count, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS - 1),
@@ -8213,14 +8223,14 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "unstuck_ema_span_0_minutes": 2.0,
         "unstuck_ema_span_1_minutes": 3.0,
         **_HSL_DISABLED_VALUES,
-        "unstuck_memory_ema_span_minutes": 43200.0,
-        "loss_gate_memory_ema_span_minutes": 43200.0,
+        "realized_loss_memory_ema_span_minutes": 43200.0,
+        "reserved_realized_memory_slot": 0.0,
     }
     row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
     runner = MpsTrailingMartingaleMulticoinRunner(
         runs[0],
-        data,
+        data, loss_gate_enabled=False,
         pnl_lookback_bars=1440,
         side=side,
         forager_score_hysteresis={"long": 0.02, "short": 0.02},
@@ -8228,7 +8238,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
     )
-    assert runner.settings.cpu()[5].item() == float(np.float32(0.1))
+    assert runner.settings.cpu()[5].item() == 0.0
     output = runner.run(np.array([row, row], dtype=np.float64))
     synchronize()
 
@@ -8246,7 +8256,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     )
     disabled[:, 24] = 0.0
     disabled_output = MpsTrailingMartingaleMulticoinRunner(
-        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=disabled,
+        runs[0], data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, side=side, coin_overrides=disabled,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -8290,7 +8300,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         1.0,
     ]
     exact_last_output = MpsTrailingMartingaleMulticoinRunner(
-        runs[0], data, pnl_lookback_bars=1440, side=side, coin_overrides=exact_last,
+        runs[0], data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, side=side, coin_overrides=exact_last,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -8469,8 +8479,8 @@ def _tm_parameter_row():
     values.update(_HSL_DISABLED_VALUES)
     values.update(_ADAPTIVE_DISABLED_VALUES)
     values.update(unstuck_ema_span_0_minutes=2.0, unstuck_ema_span_1_minutes=3.0,
-                  unstuck_memory_ema_span_minutes=43200.0,
-                  loss_gate_memory_ema_span_minutes=43200.0)
+                  realized_loss_memory_ema_span_minutes=43200.0,
+                  reserved_realized_memory_slot=0.0)
     return [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
 
@@ -8506,179 +8516,8 @@ def test_tm_loss_gate_specialization_is_explicit_and_guarded():
 
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_single_side_multicoin_auto_unstuck_selects_only_one_coin(
-    strategy_kind, side
-):
-    count = 6
-    closes = np.full((count, 2), 100.0)
-    if side == "long":
-        closes[3:, 0] = 97.5
-        closes[3:, 1] = 98.5
-        highs = closes + 0.01
-        lows = closes.copy()
-    else:
-        closes[3:, 0] = 102.5
-        closes[3:, 1] = 101.5
-        highs = closes.copy()
-        lows = closes - 0.01
-    markets = [
-        ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0),
-        ProxyMarket(1.0, 0.01, 2.0, 0.0, 1.0, 0.0),
-    ]
-    runner, disabled = _multicoin_exposure_fixture(
-        strategy_kind,
-        side,
-        count=count,
-        markets=markets,
-        closes=closes,
-        highs=highs,
-        lows=lows,
-        loss_gate_max_drawdown_fraction=0.05,
-        market_orders_allowed=strategy_kind == "ema_anchor",
-        market_order_near_touch_fraction=0.001,
-        market_order_slippage_fraction=0.01,
-    )
-    keys = (
-        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
-        if strategy_kind == "ema_anchor"
-        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-    )
-    disabled[keys.index("entry_cooldown_minutes")] = 100.0
-    disabled[keys.index("twel_entry_gate_enabled")] = 0.0
-    if strategy_kind == "ema_anchor":
-        disabled[keys.index("offset_fraction")] = 0.01
-    else:
-        disabled[keys.index("entry_initial_ema_distance_fraction")] = 0.01
-        disabled[keys.index("entry_initial_qty_fraction")] = 1.0
-        disabled[keys.index("entry_threshold_base_fraction")] = 10.0
-        disabled[keys.index("entry_retracement_base_fraction")] = 0.0
-        disabled[keys.index("close_threshold_base_fraction")] = 0.5
-        disabled[keys.index("close_retracement_base_fraction")] = 0.0
-        disabled[keys.index("gate_initial")] = 1.0
-    enabled = list(disabled)
-    enabled[keys.index("unstuck_enabled")] = 1.0
-    enabled[keys.index("unstuck_ema_gating_enabled")] = 0.0
-    enabled[keys.index("unstuck_close_fraction")] = 0.1
-    enabled[keys.index("unstuck_loss_allowance_fraction")] = 0.2
-    enabled[keys.index("unstuck_exposure_trigger_ratio")] = 0.5
-    gated = list(enabled)
-    gated[keys.index("unstuck_ema_gating_enabled")] = 1.0
-    gated[keys.index("unstuck_ema_distance_fraction")] = 0.1
-    allowance_disabled = list(disabled)
-    allowance_disabled[keys.index("we_excess_allowance_fraction")] = 1.0
-    allowance_disabled[keys.index("twel_entry_gate_enabled")] = 1.0
-    allowance_disabled[keys.index("twel_enforcer_threshold_ratio")] = 0.5
-    allowance_enabled = list(enabled)
-    allowance_enabled[keys.index("we_excess_allowance_fraction")] = 1.0
-    allowance_enabled[keys.index("twel_entry_gate_enabled")] = 1.0
-    allowance_enabled[keys.index("twel_enforcer_threshold_ratio")] = 0.5
-
-    output = runner.run(
-        np.asarray(
-            [
-                disabled,
-                enabled,
-                gated,
-                allowance_disabled,
-                allowance_enabled,
-            ],
-            dtype=np.float64,
-        )
-    )
-    synchronize()
-    key = "psize" if side == "long" else "short_psize"
-    remaining = output[key].cpu().numpy()
-    open_positions = output["open_positions"].cpu().tolist()
-    assert open_positions[:3] == [2.0] * 3
-    assert remaining[0] > 1.0
-    # Coin one is less stuck and has a two-unit minimum. Selecting coin zero,
-    # or selecting both coins, would produce a different aggregate remainder.
-    assert remaining[1] == pytest.approx(remaining[0] - 2.0)
-    assert remaining[2] == pytest.approx(remaining[0])
-    # The bounded allowance doubles each 0.5 per-coin WEL to 1.0, while the
-    # side-wide entry gate caps exposure at 0.5. Exact Rust evaluates unstuck's
-    # threshold against the allowed limit, so the position does not exceed it.
-    assert open_positions[4] == open_positions[3]
-    assert remaining[4] == pytest.approx(remaining[3])
-
-    strict_runner, _ = _multicoin_exposure_fixture(
-        strategy_kind,
-        side,
-        count=count,
-        markets=markets,
-        closes=closes,
-        highs=highs,
-        lows=lows,
-        loss_gate_max_drawdown_fraction=0.0005,
-        market_orders_allowed=strategy_kind == "ema_anchor",
-        market_order_near_touch_fraction=0.001,
-        market_order_slippage_fraction=0.01,
-    )
-    strict_output = strict_runner.run(np.asarray([enabled], dtype=np.float64))
-    synchronize()
-    assert strict_output[key].item() == pytest.approx(remaining[0])
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-def test_mps_tm_multicoin_unstuck_finalization_keeps_ordinary_close_remainder():
-    count = 7
-    closes = np.full((count, 2), 100.0)
-    highs = np.full((count, 2), 100.0)
-    lows = np.full((count, 2), 100.0)
-    lows[3, 0] = 98.0
-    highs[4, 0] = 201.0
-    markets = [
-        ProxyMarket(0.5, 0.01, 0.5, 500.0, 1.0, 0.0),
-        ProxyMarket(0.5, 0.01, 0.5, 0.0, 1.0, 0.0),
-    ]
-    overrides = np.full(
-        (2, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS), np.nan, dtype=np.float32
-    )
-    overrides[1, 24] = 0.0
-    runner, candidate = _multicoin_exposure_fixture(
-        "trailing_martingale",
-        "long",
-        coin_overrides=overrides,
-        count=count,
-        markets=markets,
-        closes=closes,
-        highs=highs,
-        lows=lows,
-        loss_gate_max_drawdown_fraction=0.05,
-    )
-    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
-    values.update(
-        {
-            "entry_initial_ema_distance_fraction": 0.01,
-            "entry_initial_qty_fraction": 1.0,
-            "entry_threshold_base_fraction": 10.0,
-            "entry_retracement_base_fraction": 0.0,
-            "close_qty_fraction": 0.3,
-            "close_threshold_base_fraction": 1.0,
-            "close_retracement_base_fraction": 0.01,
-            "entry_cooldown_minutes": 100.0,
-            "gate_initial": 1.0,
-            "n_positions": 1.0,
-            "wel_enforcer_enabled": 1.0,
-            "wel_enforcer_threshold_ratio": 0.2,
-            "unstuck_enabled": 1.0,
-            "unstuck_ema_gating_enabled": 0.0,
-            "unstuck_close_fraction": 0.7,
-            "unstuck_loss_allowance_fraction": 0.2,
-            "unstuck_exposure_trigger_ratio": 0.5,
-        }
-    )
-    candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
-
-    output = runner.run(np.asarray([candidate], dtype=np.float64))
-    synchronize()
-
-    # As in the directional kernel regression above, the valid ordinary close
-    # keeps unstuck's finalized selection key below the larger WEL reducer.
-    assert output["psize"].item() < 3.0
 
 
 def _tm_multicoin_off_tick_reducer_case(
@@ -8762,7 +8601,7 @@ def _tm_multicoin_off_tick_reducer_case(
     overrides[1, 24] = 0.0
     runner = MpsTrailingMartingaleMulticoinRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         side=side,
         coin_overrides=overrides,
@@ -8901,228 +8740,8 @@ kernel void passivbot_tm_multicoin_market_wel_reservation_probe(
     )
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_market_unstuck_sizes_at_touch_without_reseeding_grid(
-    side,
-):
-    import passivbot_rust
-
-    probe_kernel = r"""
-kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
-    constant float* bars,
-    constant int* touch_ticks,
-    constant int* touch_nearest_ticks,
-    constant int* touch_min_qty_bits,
-    constant int* touch_min_qty_relation,
-    constant float* coin_settings,
-    constant float* coin_overrides,
-    constant float* params,
-    device float* output,
-    constant int& short_side_raw,
-    uint b [[thread_position_in_grid]]
-) {
-    if (b > 0) return;
-    bool short_side = short_side_raw != 0;
-    TrailingMartingaleMulticoinSideConfig config =
-        load_trailing_martingale_multicoin_side_config(params, 0);
-    TrailingMartingaleMulticoinSideState state;
-    init_trailing_martingale_multicoin_side_state(
-        state, config, coin_settings, coin_overrides, 1
-    );
-    state.selected[0] = true;
-    state.psize[0] = 10.0f;
-    state.pprice[0] = 100.0f;
-    state.position_open_k[0] = 0.0f;
-    state.position_last_fill_k[0] = 0.0f;
-    JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
-    generate_tm_multicoin_side_orders(
-        state, config, account,
-        bars, touch_ticks, touch_nearest_ticks,
-        touch_min_qty_bits, touch_min_qty_relation,
-        coin_settings, coin_overrides,
-        1, 1, short_side, true, 1, 1, 0, false, 1.0f,
-        true, 1.1f, 0.0f, 0, 0ul
-    );
-    output[0] = state.close_qty[0];
-    output[1] = state.close_grid_gen_psize[0];
-    output[2] = state.close_market[0] ? 1.0f : 0.0f;
-    output[3] = state.close_is_exposure_reducer[0] ? 1.0f : 0.0f;
-    output[4] = state.close_is_unstuck_reducer[0] ? 1.0f : 0.0f;
-    output[5] = state.close_gen_market_price[0];
-    output[6] = float(state.close_grid_max_rungs[0]);
-}
-"""
-    _, row = _multicoin_exposure_fixture(
-        "trailing_martingale", side, count=3, closes=(100.0, 100.0)
-    )
-    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
-    values.update(
-        {
-            "entry_initial_qty_fraction": 0.0,
-            "close_threshold_base_fraction": 10.0,
-            "close_threshold_exposure_ratio_coefficient": 0.0,
-            "close_retracement_base_fraction": 0.0,
-            "n_positions": 1.0,
-            "total_wallet_exposure_limit_ratio": 1.0,
-            "wel_enforcer_enabled": 0.0,
-            "twel_enforcer_enabled": 0.0,
-            "unstuck_enabled": 1.0,
-            "unstuck_ema_gating_enabled": 0.0,
-            "unstuck_close_fraction": 0.1,
-            "unstuck_loss_allowance_fraction": 0.2,
-            "unstuck_exposure_trigger_ratio": 0.5,
-        }
-    )
-    params = _tm_probe_tensor(
-        [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS],
-        dtype=torch.float32,
-        device=gpu_device(),
-    )
-    bars = torch.tensor(
-        [[[100.0, 100.0, 100.0, 1.0]], [[100.0, 100.0, 100.0, 1.0]]],
-        dtype=torch.float32,
-        device=gpu_device(),
-    )
-    touch_ticks = torch.full((2, 1, 2), 20_000, dtype=torch.int32, device=gpu_device())
-    touch_nearest_ticks = torch.full(
-        (2, 1), 20_000, dtype=torch.int32, device=gpu_device()
-    )
-    touch_min_qty_bits = torch.zeros((2, 1), dtype=torch.int32, device=gpu_device())
-    touch_min_qty_relation = torch.zeros(
-        (2, 1),
-        dtype=torch.int8 if gpu_device() == "cuda" else torch.int32,
-        device=gpu_device(),
-    )
-    coin_settings = torch.zeros((1, 15), dtype=torch.float32, device=gpu_device())
-    coin_settings[0, 0] = 0.001
-    coin_settings[0, 1] = 0.01
-    coin_settings[0, 2] = 0.001
-    coin_settings[0, 3] = 100.0
-    coin_settings[0, 4] = 1.0
-    coin_settings[0, 7] = 10.0
-    coin_overrides = _tm_probe_full(
-        (1, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS),
-        float("nan"),
-        dtype=torch.float32,
-        device=gpu_device(),
-    )
-    output = torch.zeros(7, dtype=torch.float32, device=gpu_device())
-    library = compile_shader(
-        passivbot_rust.mps_trailing_martingale_multicoin_source_py() + probe_kernel
-    )
-    library.passivbot_tm_multicoin_market_unstuck_reservation_probe(
-        bars,
-        touch_ticks,
-        touch_nearest_ticks,
-        touch_min_qty_bits,
-        touch_min_qty_relation,
-        coin_settings,
-        coin_overrides,
-        params,
-        output,
-        int(side == "short"),
-        threads=(1, 1, 1),
-    )
-    synchronize()
-
-    # The passive unstuck request is 0.5 at price 200. Market policy enlarges
-    # the emitted reducer to the executable-touch minimum of 1.0 at 100, but
-    # external unstuck does not reseed Rust's full-size strategy ladder.
-    assert output.cpu().tolist() == pytest.approx(
-        [1.0, 10.0, 1.0, 1.0, 1.0, 100.0, 500.0], abs=2.0e-4
-    )
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee_fraction(
-    side,
-):
-    count = 6
-    closes = np.full((count, 2), 100.0)
-    if side == "long":
-        closes[3:, 0] = 97.5
-        closes[3:, 1] = 98.5
-        highs = closes + 0.01
-        lows = closes.copy()
-    else:
-        closes[3:, 0] = 102.5
-        closes[3:, 1] = 101.5
-        highs = closes.copy()
-        lows = closes - 0.01
-
-    def run_case(*, slippage, taker_fee_fraction, loss_gate_max_drawdown_fraction=1.0):
-        markets = [
-            ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0, taker_fee_fraction),
-            ProxyMarket(1.0, 0.01, 2.0, 0.0, 1.0, 0.0, taker_fee_fraction),
-        ]
-        overrides = np.full(
-            (2, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS), np.nan, dtype=np.float32
-        )
-        # Exercise the effective per-coin runtime: the side template remains
-        # disabled while coin one alone enables auto-unstuck.
-        overrides[1, 28] = 1.0
-        runner, candidate = _multicoin_exposure_fixture(
-            "trailing_martingale",
-            side,
-            coin_overrides=overrides,
-            count=count,
-            markets=markets,
-            closes=closes,
-            highs=highs,
-            lows=lows,
-            market_orders_allowed=True,
-            market_order_near_touch_fraction=0.001,
-            market_order_slippage_fraction=slippage,
-            loss_gate_max_drawdown_fraction=loss_gate_max_drawdown_fraction,
-        )
-        values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
-        values.update(
-            {
-                "entry_initial_ema_distance_fraction": 0.01,
-                "entry_initial_qty_fraction": 1.0,
-                "entry_threshold_base_fraction": 10.0,
-                "entry_retracement_base_fraction": 0.0,
-                "close_threshold_base_fraction": 0.5,
-                "close_retracement_base_fraction": 0.0,
-                "entry_cooldown_minutes": 100.0,
-                "gate_initial": 1.0,
-                "unstuck_enabled": 0.0,
-                "unstuck_ema_gating_enabled": 0.0,
-                "unstuck_close_fraction": 0.1,
-                "unstuck_loss_allowance_fraction": 0.2,
-                "unstuck_exposure_trigger_ratio": 0.5,
-            }
-        )
-        output = runner.run(
-            np.asarray(
-                [[values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]],
-                dtype=np.float64,
-            )
-        )
-        synchronize()
-        return output
-
-    no_cost = run_case(slippage=0.0, taker_fee_fraction=0.0)
-    slipped = run_case(slippage=0.01, taker_fee_fraction=0.0)
-    charged = run_case(slippage=0.01, taker_fee_fraction=0.002)
-    strict = run_case(slippage=0.01, taker_fee_fraction=0.002, loss_gate_max_drawdown_fraction=0.0)
-    position_key = "psize" if side == "long" else "short_psize"
-
-    assert no_cost["fill_count"].item() > 2.0
-    assert slipped["fill_count"].item() == no_cost["fill_count"].item()
-    assert charged["fill_count"].item() == slipped["fill_count"].item()
-    assert slipped[position_key].item() == pytest.approx(
-        no_cost[position_key].item(), abs=2.0e-4
-    )
-    assert charged[position_key].item() == pytest.approx(
-        slipped[position_key].item(), abs=2.0e-4
-    )
-    assert strict[position_key].item() > charged[position_key].item()
-    assert slipped["balance"].item() < no_cost["balance"].item()
-    assert charged["balance"].item() < slipped["balance"].item()
-    assert strict["balance"].item() >= charged["balance"].item()
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -9635,7 +9254,7 @@ def test_mps_fused_dual_multicoin_exposure_repair(
     if strategy_kind == "ema_anchor":
         runner = MpsEmaAnchorMulticoinFusedRunner(
             run,
-            data,
+            data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
             pnl_lookback_bars=1440,
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_fraction=0.002,
@@ -9648,7 +9267,7 @@ def test_mps_fused_dual_multicoin_exposure_repair(
     else:
         runner = MpsTrailingMartingaleMulticoinFusedRunner(
             run,
-            data,
+            data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
             pnl_lookback_bars=1440,
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_fraction=0.002,
@@ -9703,7 +9322,7 @@ def test_mps_tm_fused_one_way_multicoin_market_exposure_repair(repair_kind):
     )
     runner = MpsTrailingMartingaleMulticoinFusedRunner(
         run,
-        data,
+        data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
         pnl_lookback_bars=1440,
         hedge_mode=False,
         market_orders_allowed=True,
@@ -9794,271 +9413,14 @@ def test_mps_tm_multicoin_total_exposure_repair_policy(side):
     assert (total_twe < 0.5).all()
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("market_orders_allowed", [False, True])
-def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(
-    side, market_orders_allowed
-):
-    overrides = np.full(
-        (2, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS), np.nan, dtype=np.float32
-    )
-    overrides[0, 24] = 0.1
-    runner_kwargs = {
-        "strategy_kind": "trailing_martingale",
-        "side": side,
-        "coin_overrides": overrides,
-        "count": 10,
-        "closes": (100.0, 100.0),
-        "market_orders_allowed": market_orders_allowed,
-        "market_order_near_touch_fraction": 1.1,
-        "market_order_slippage_fraction": 0.01,
-    }
-    ungated_runner, candidate = _multicoin_exposure_fixture(
-        loss_gate_max_drawdown_fraction=1.0, **runner_kwargs
-    )
-    gated_runner, _ = _multicoin_exposure_fixture(
-        loss_gate_max_drawdown_fraction=0.0, **runner_kwargs
-    )
-    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
-    values.update(
-        {
-            "entry_cooldown_minutes": 100.0,
-            "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold_ratio": 0.5,
-            "twel_enforcer_enabled": 1.0,
-            "twel_enforcer_reduce_portfolio": 1.0,
-        }
-    )
-    candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
-
-    ungated = ungated_runner.run(np.asarray([candidate], dtype=np.float64))
-    gated = gated_runner.run(np.asarray([candidate], dtype=np.float64))
-    synchronize()
-
-    size_key = "psize" if side == "long" else "short_psize"
-    assert ungated[size_key].item() < gated[size_key].item()
-    assert gated["open_positions"].item() == pytest.approx(2.0)
-    assert gated["balance"].item() >= ungated["balance"].item()
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("market_orders_allowed", [False, True])
-@pytest.mark.parametrize("max_loss_pct", [0.0, 0.1])
-def test_mps_tm_multicoin_fee_only_close_uses_loss_allowance(
-    side, market_orders_allowed, max_loss_pct
-):
-    markets = [
-        ProxyMarket(
-            0.001,
-            0.01,
-            0.001,
-            0.0,
-            1.0,
-            0.0 if market_orders_allowed else 0.001,
-            0.001,
-        )
-        for _ in range(2)
-    ]
-    runner_kwargs = {
-        "strategy_kind": "trailing_martingale",
-        "side": side,
-        "count": 10,
-        "closes": (100.0, 100.0),
-        "markets": markets,
-        "market_orders_allowed": market_orders_allowed,
-        "market_order_near_touch_fraction": 1.1,
-        "market_order_slippage_fraction": 0.001,
-    }
-    ungated_runner, candidate = _multicoin_exposure_fixture(
-        loss_gate_max_drawdown_fraction=1.0, **runner_kwargs
-    )
-    gated_runner, _ = _multicoin_exposure_fixture(
-        loss_gate_max_drawdown_fraction=max_loss_pct, **runner_kwargs
-    )
-    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
-    values.update(
-        {
-            "close_qty_fraction": 1.0,
-            "close_threshold_base_fraction": 0.0,
-            "close_threshold_exposure_ratio_coefficient": 0.0,
-            "entry_cooldown_minutes": 100.0,
-        }
-    )
-    candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
-
-    ungated = ungated_runner.run(np.asarray([candidate], dtype=np.float64))
-    gated = gated_runner.run(np.asarray([candidate], dtype=np.float64))
-    synchronize()
-
-    size_key = "psize" if side == "long" else "short_psize"
-    assert ungated[size_key].item() == pytest.approx(0.0)
-    if max_loss_pct == 0.0:
-        assert gated[size_key].item() > 0.0
-        assert gated["balance"].item() >= ungated["balance"].item()
-    else:
-        assert gated[size_key].item() == pytest.approx(0.0)
-        assert gated["balance"].item() == pytest.approx(ungated["balance"].item(), abs=0.002)
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_loss_gate_preserves_profitable_close_after_repair(side):
-    overrides = np.full(
-        (2, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS), np.nan, dtype=np.float32
-    )
-    overrides[0, 24] = 0.1
-    count = 10
-    blocked_highs = np.full((count, 2), 100.5)
-    blocked_lows = np.full((count, 2), 99.5)
-    recovery_highs = blocked_highs.copy()
-    recovery_lows = blocked_lows.copy()
-    if side == "long":
-        recovery_highs[7:, :] = 102.0
-    else:
-        recovery_lows[7:, :] = 98.0
-    common = {
-        "strategy_kind": "trailing_martingale",
-        "side": side,
-        "coin_overrides": overrides,
-        "count": count,
-        "closes": (100.0, 100.0),
-        "loss_gate_max_drawdown_fraction": 0.0,
-    }
-    blocked_runner, candidate = _multicoin_exposure_fixture(
-        highs=blocked_highs, lows=blocked_lows, **common
-    )
-    recovery_runner, _ = _multicoin_exposure_fixture(
-        highs=recovery_highs, lows=recovery_lows, **common
-    )
-    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
-    values.update(
-        {
-            "close_qty_fraction": 1.0,
-            "close_threshold_base_fraction": 0.01,
-            "close_threshold_exposure_ratio_coefficient": 0.0,
-            "entry_cooldown_minutes": 100.0,
-            "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold_ratio": 0.5,
-            "twel_enforcer_enabled": 1.0,
-            "twel_enforcer_reduce_portfolio": 1.0,
-        }
-    )
-    candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
-
-    blocked = blocked_runner.run(np.asarray([candidate], dtype=np.float64))
-    recovered = recovery_runner.run(np.asarray([candidate], dtype=np.float64))
-    synchronize()
-
-    size_key = "psize" if side == "long" else "short_psize"
-    assert blocked[size_key].item() > 0.0
-    assert recovered[size_key].item() == pytest.approx(0.0)
-    assert recovered["balance"].item() > blocked["balance"].item()
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_loss_gate_scans_past_blocked_recursive_rung(side):
-    count = 10
-    highs = np.full((count, 2), 100.5)
-    lows = np.full((count, 2), 99.5)
-    if side == "long":
-        highs[5:, 0] = 102.0
-    else:
-        lows[5:, 0] = 98.0
-    overrides = np.full(
-        (2, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS), np.nan, dtype=np.float32
-    )
-    overrides[1, 24] = 0.0
-    runner, candidate = _multicoin_exposure_fixture(
-        "trailing_martingale",
-        side,
-        coin_overrides=overrides,
-        count=count,
-        closes=(100.0, 100.0),
-        highs=highs,
-        lows=lows,
-        loss_gate_max_drawdown_fraction=0.0,
-    )
-    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
-    values.update(
-        {
-            "close_qty_fraction": 0.25,
-            "close_threshold_base_fraction": 0.015,
-            "close_threshold_exposure_ratio_coefficient": -0.025,
-            "entry_cooldown_minutes": 100.0,
-            "gate_initial": 1.0,
-            "n_positions": 1.0,
-        }
-    )
-    candidate = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
-
-    output = runner.run(np.asarray([candidate], dtype=np.float64))
-    synchronize()
-
-    size_key = "psize" if side == "long" else "short_psize"
-    # The first immutable recursive rungs are below break-even, but later
-    # rungs become profitable as their simulated exposure falls. Exact Rust
-    # filters the early rungs independently and retains those later closes.
-    assert output[size_key].item() < 5.0
-    assert output["balance"].item() > 1_000.0
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_loss_gate_does_not_reallocate_blocked_twel(side):
-    count = 10
-    closes = np.full((count, 2), 100.0)
-    if side == "long":
-        closes[5:, 1] = 102.0
-    else:
-        closes[5:, 1] = 98.0
-    highs = closes * 1.01
-    lows = closes * 0.99
-    markets = [ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001) for _ in range(2)]
-    overrides = np.full(
-        (2, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS), np.nan, dtype=np.float32
-    )
-    overrides[0, 24] = 0.6
-    overrides[1, 24] = 0.4
-    runner, candidate = _multicoin_exposure_fixture(
-        "trailing_martingale",
-        side,
-        coin_overrides=overrides,
-        count=count,
-        closes=closes,
-        highs=highs,
-        lows=lows,
-        markets=markets,
-        loss_gate_max_drawdown_fraction=0.0,
-    )
-    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
-    values.update(
-        {
-            "entry_cooldown_minutes": 100.0,
-            "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold_ratio": 0.5,
-            "twel_enforcer_reduce_portfolio": 1.0,
-        }
-    )
-    baseline = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
-    repaired_values = dict(values, twel_enforcer_enabled=1.0)
-    repaired = [
-        repaired_values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-    ]
-
-    output = runner.run(np.asarray([baseline, repaired], dtype=np.float64))
-    synchronize()
-
-    size_key = "psize" if side == "long" else "short_psize"
-    # Coin zero wins TWEL's equal-adverse tie and alone reaches the target, but
-    # its fee-only reducer is loss-gated. Exact Rust does not then reallocate
-    # that action to profitable coin one.
-    assert output["open_positions"].cpu().tolist() == pytest.approx([2.0, 2.0])
-    assert output[size_key][1].item() == pytest.approx(
-        output[size_key][0].item(), abs=2.0e-4
-    )
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -10102,97 +9464,8 @@ def test_mps_ema_multicoin_total_exposure_repair_policy(side):
     assert (total_twe < 0.5).all()
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_ema_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
-    overrides = np.full((2, EMA_ANCHOR_COIN_OVERRIDE_COLS), np.nan, dtype=np.float32)
-    overrides[0, 11] = 0.1
-    count = 70
-    closes = np.full((count, 2), 100.0)
-    highs = np.full((count, 2), 100.5)
-    lows = np.full((count, 2), 99.5)
-    if side == "long":
-        lows[62, :] = 98.0
-        closes[63:, :] = 98.0
-        highs[63:, :] = 98.0
-        lows[63:, :] = 97.9
-    else:
-        highs[62, :] = 102.0
-        closes[63:, :] = 102.0
-        highs[63:, :] = 102.1
-        lows[63:, :] = 102.0
-
-    runner_kwargs = {
-        "strategy_kind": "ema_anchor",
-        "side": side,
-        "coin_overrides": overrides,
-        "count": count,
-        "closes": closes,
-        "highs": highs,
-        "lows": lows,
-        "market_orders_allowed": True,
-        "market_order_near_touch_fraction": 0.001,
-        "market_order_slippage_fraction": 0.01,
-    }
-    ungated_runner, candidate = _multicoin_exposure_fixture(
-        loss_gate_max_drawdown_fraction=1.0, **runner_kwargs
-    )
-    gated_runner, _ = _multicoin_exposure_fixture(
-        loss_gate_max_drawdown_fraction=0.001, **runner_kwargs
-    )
-    values = dict(zip(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, candidate))
-    values.update(
-        {
-            "offset_fraction": 0.01,
-            "entry_cooldown_minutes": 100.0,
-            "twel_entry_gate_enabled": 0.0,
-            "twel_enforcer_threshold_ratio": 0.5,
-            "twel_enforcer_enabled": 1.0,
-            "twel_enforcer_reduce_portfolio": 1.0,
-        }
-    )
-    candidate = [values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
-
-    ungated = ungated_runner.run(np.asarray([candidate], dtype=np.float64))
-    gated = gated_runner.run(np.asarray([candidate], dtype=np.float64))
-    synchronize()
-
-    size_key = "psize" if side == "long" else "short_psize"
-    assert ungated[size_key].item() < gated[size_key].item()
-    # Both paths keep the same symbol open, but the shared loss allowance
-    # blocks part of the lossy repair and therefore retains more quantity.
-    assert ungated["open_positions"].item() == pytest.approx(1.0)
-    assert gated["open_positions"].item() == pytest.approx(1.0)
-    assert gated["balance"].item() >= ungated["balance"].item()
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_ema_multicoin_loss_gate_blocks_fee_only_ordinary_close(side):
-    markets = [ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001) for _ in range(2)]
-    runner_kwargs = {
-        "strategy_kind": "ema_anchor",
-        "side": side,
-        "count": 70,
-        "closes": (100.0, 100.0),
-        "markets": markets,
-    }
-    ungated_runner, candidate = _multicoin_exposure_fixture(
-        loss_gate_max_drawdown_fraction=1.0, **runner_kwargs
-    )
-    gated_runner, _ = _multicoin_exposure_fixture(
-        loss_gate_max_drawdown_fraction=0.0, **runner_kwargs
-    )
-    candidate[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")] = 100.0
-
-    ungated = ungated_runner.run(np.asarray([candidate], dtype=np.float64))
-    gated = gated_runner.run(np.asarray([candidate], dtype=np.float64))
-    synchronize()
-
-    size_key = "psize" if side == "long" else "short_psize"
-    assert ungated[size_key].item() == pytest.approx(0.0)
-    assert gated[size_key].item() > 0.0
-    assert gated["balance"].item() >= ungated["balance"].item()
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -10245,7 +9518,7 @@ def test_mps_tm_multicoin_rejects_held_tails_before_twel_repair(side):
     ] = 0.0
     with pytest.raises(ValueError, match="held-position valuation"):
         MpsTrailingMartingaleMulticoinRunner(
-            runs[1], data, pnl_lookback_bars=1440, side=side,
+            runs[1], data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, side=side,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
             forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -10302,7 +9575,7 @@ def test_mps_ema_multicoin_rejects_held_tails_before_twel_repair(side):
     baseline[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_enabled")] = 0.0
     with pytest.raises(ValueError, match="held-position valuation"):
         MpsEmaAnchorMulticoinRunner(
-            runs[1], data, pnl_lookback_bars=1440, side=side,
+            runs[1], data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, side=side,
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
             forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -10449,7 +9722,7 @@ def test_mps_tm_multicoin_grid_can_fill_without_off_tick_reducer(side):
     )
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
-        run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
+        run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -10508,7 +9781,7 @@ def test_mps_tm_multicoin_small_excess_reducer_crosses_strict_target(side):
     )
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
-        run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
+        run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -10566,7 +9839,7 @@ def test_mps_tm_multicoin_short_post_repair_grid_uses_negative_target_tick():
     )
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
-        run, data, pnl_lookback_bars=1440, side="short", coin_overrides=overrides,
+        run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, side="short", coin_overrides=overrides,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -10734,7 +10007,7 @@ def test_mps_tm_multicoin_finalized_reducer_tie_keeps_nearer_wel(side):
     )
     overrides[1, 24] = 0.0
     output = MpsTrailingMartingaleMulticoinRunner(
-        run, data, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
+        run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, side=side, coin_overrides=overrides,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -10854,7 +10127,7 @@ def test_mps_trailing_martingale_multicoin_drops_subminimum_final_touch_close(
     row.extend([43200.0, 43200.0])
 
     output = MpsTrailingMartingaleMulticoinRunner(
-        runs[0], data, pnl_lookback_bars=1440, side=side,
+        runs[0], data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, pnl_lookback_bars=1440, side=side,
         side_activation={"long": True, "short": True},
         filter_by_min_effective_cost={"long": False, "short": False},
         forager_score_hysteresis={"long": 0.0, "short": 0.0},
@@ -10917,93 +10190,6 @@ kernel void unstuck_band_probe(constant float* inputs, device float* output,
     np.testing.assert_allclose(output.cpu().numpy(), expected, rtol=2e-6, atol=2e-5)
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("interval_minutes", [1, 5])
-def test_mps_independent_unstuck_horizons_change_reducer_only(
-    strategy_kind, side, interval_minutes
-):
-    count = 6
-    closes = np.full((count, 2), 100.0)
-    closes[3:] = 98.0 if side == "long" else 102.0
-    runner, row, run, _ = _multicoin_exposure_fixture(
-        strategy_kind,
-        side,
-        count=count,
-        closes=closes,
-        highs=closes + 0.01,
-        lows=closes - 0.01,
-        interval_minutes=interval_minutes,
-        return_context=True,
-    )
-    keys = (
-        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
-        if strategy_kind == "ema_anchor"
-        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-    )
-    values = dict(zip(keys, row))
-    values.update(
-        entry_cooldown_minutes=1000.0,
-        unstuck_enabled=1.0,
-        unstuck_ema_gating_enabled=1.0,
-        unstuck_close_fraction=0.1,
-        unstuck_loss_allowance_fraction=0.2,
-        unstuck_exposure_trigger_ratio=0.5,
-        unstuck_ema_distance_fraction=-0.01,
-        twel_entry_gate_enabled=0.0,
-    )
-    if strategy_kind == "ema_anchor":
-        values["offset_fraction"] = 0.01
-    else:
-        values.update(
-            entry_initial_ema_distance_fraction=0.01, gate_initial=1.0, close_threshold_base_fraction=0.5
-        )
-    rows = []
-    for enabled, span in [
-        (True, 0.5),
-        (True, 100000.5),
-        (False, 0.5),
-        (False, 100000.5),
-    ]:
-        values.update(
-            unstuck_enabled=float(enabled),
-            unstuck_ema_span_0_minutes=span,
-            unstuck_ema_span_1_minutes=span,
-        )
-        packed = [values[key] for key in keys]
-        rows.append(packed)
-    output = runner.run(np.asarray(rows, dtype=np.float64))
-    positions = output["psize" if side == "long" else "short_psize"].cpu().numpy()
-    assert abs(positions[0]) < abs(positions[1])
-    assert positions[1] == positions[2] == positions[3]
-    # Disabled unstuck horizons cannot change strategy entries, closes or metrics.
-    for result in output.values():
-        np.testing.assert_array_equal(result[2].cpu().numpy(), result[3].cpu().numpy())
-    cols = (
-        EMA_ANCHOR_COIN_OVERRIDE_COLS
-        if strategy_kind == "ema_anchor"
-        else TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
-    )
-    overrides = np.full((2, cols), np.nan)
-    ema_start = (EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
-                 if strategy_kind == "ema_anchor"
-                 else TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN)
-    overrides[:, ema_start:ema_start + 2] = 0.5  # Pin both unstuck spans.
-    pinned_runner, _ = _multicoin_exposure_fixture(
-        strategy_kind,
-        side,
-        count=count,
-        closes=closes,
-        highs=closes + 0.01,
-        lows=closes - 0.01,
-        interval_minutes=interval_minutes,
-        coin_overrides=overrides,
-    )
-    pinned = pinned_runner.run(np.asarray([rows[1]], dtype=np.float64))
-    assert pinned[
-        "psize" if side == "long" else "short_psize"
-    ].item() == pytest.approx(positions[0])
 
 
 @pytest.mark.parametrize("span", [0.0, -1.0, float("nan"), float("inf"), 1e100, 1e-100])

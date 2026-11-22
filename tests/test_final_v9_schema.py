@@ -73,8 +73,8 @@ def test_migration_reuses_scenario_validation_only_without_optimizer_transforms(
 def test_canonical_defaults_and_sparse_defaults_load():
     complete = prepare_config(get_template_config(), verbose=False)
     sparse = prepare_config({"config_version": "v9.0.0", "bot": {}, "live": {}}, verbose=False)
-    assert complete["bot"]["portfolio"]["hsl"] == {"scope": "coin"}
-    assert sparse["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 85511.137
+    assert complete["bot"]["portfolio"]["risk"]["hsl"] == {"scope": "coin"}
+    assert sparse["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 85511.137
     assert sparse["bot"]["long"]["enabled"] is False
     assert sparse["bot"]["short"]["enabled"] is False
     assert sparse["bot"]["long"]["risk"] == complete["bot"]["long"]["risk"]
@@ -160,21 +160,21 @@ def test_authored_patch_accepts_one_object_or_distinct_canonical_siblings(struct
 
 def test_coin_hsl_span_and_budget_scaling_override_are_local():
     config = get_template_config()
-    config["coin_overrides"] = {"BTC": {"bot": {"long": {"hsl": {
+    config["coin_overrides"] = {"BTC": {"bot": {"long": {"risk": {"hsl": {
         "memory_ema_span_minutes": 19.5, "scale_budget_with_excess_allowance": True,
-    }}}}}
+    }}}}}}
     result = parse_overrides(prepare_config(config, verbose=False), verbose=False)
-    policy = result["coin_overrides"]["BTC"]["bot"]["long"]["hsl"]
+    policy = result["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["hsl"]
     assert policy["memory_ema_span_minutes"] == 19.5
     assert policy["scale_budget_with_excess_allowance"] is True
-    assert result["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == 43200.0
+    assert result["bot"]["long"]["risk"]["hsl"]["memory_ema_span_minutes"] == 43200.0
 
 
 @pytest.mark.parametrize("patch", [
     {"bot": {"long": {"risk": {"max_positions": 2}}}},
     {"bot": {"long": {"risk": {"total_wallet_exposure_limit_ratio": 2.0}}}},
-    {"bot": {"portfolio": {'unstuck': {'memory_ema_span_minutes': 1.0}}}},
-    {"bot": {"portfolio": {'loss_gate': {'max_drawdown_fraction': 0.2}}}},
+    {"bot": {"portfolio": {"risk": {'unstuck': {'memory_ema_span_minutes': 1.0}}}}},
+    {"bot": {"portfolio": {"risk": {"loss_realization": {"loss_gate": {"max_realized_drawdown_fraction": 0.2}}}}}},
 ])
 def test_aggregate_controls_cannot_be_coin_overridden(patch):
     config = get_template_config()
@@ -185,37 +185,37 @@ def test_aggregate_controls_cannot_be_coin_overridden(patch):
 
 def test_omitted_memory_dimensions_fix_effective_config_values():
     config = get_template_config()
-    config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 71.5
-    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 83.5
-    config["bot"]["long"]["hsl"] = {"memory_ema_span_minutes": 19.5}
+    config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] = 71.5
+    config["bot"]["long"]["risk"] = {"hsl": {"memory_ema_span_minutes": 19.5}}
     result = prepare_config(config, verbose=False)
     bounds = result["optimize"]["bounds"]
-    assert bounds["portfolio"]["unstuck"]["memory_ema_span_minutes"] == [71.5, 71.5]
-    assert bounds["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == [83.5, 83.5]
-    assert bounds["long"]["hsl"]["memory_ema_span_minutes"] == [19.5, 19.5]
+    assert bounds["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == [71.5, 71.5]
+    assert bounds["long"]["risk"]["hsl"]["memory_ema_span_minutes"] == [19.5, 19.5]
 
 
-def test_independent_gate_only_memory_contributes_to_bootstrap():
+def test_gate_only_memory_contributes_to_bootstrap():
     config = get_expanded_config_prototype()
     for side in ("long", "short"):
-        config["bot"][side]["unstuck"]["enabled"] = False
-    config["bot"]["portfolio"]["loss_gate"].update(max_drawdown_fraction=0.1, memory_ema_span_minutes=17.5)
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
+    config["bot"]["portfolio"]["risk"]["loss_realization"] = {
+        "loss_gate": {"enabled": True, "max_realized_drawdown_fraction": 0.1},
+        "memory_ema_span_minutes": 17.5,
+    }
     config = prepare_config(config, verbose=False)
     assert risk_memory_spans(config) == (17.5,)
     assert risk_bootstrap_horizon_minutes(config) == (87.5, False)
 
 
-def test_explicit_v8_conversion_reports_renames_and_independent_memories():
+def test_explicit_v8_conversion_reports_renames_and_memory_policy():
     source = v8_config()
     before = deepcopy(source)
     result = migrate(source, memory_span_minutes=123.5)
     assert source == before
     bot = result.config["bot"]
     assert bot["long"]["risk"]["max_positions"] == 7
-    assert bot["long"]["hsl"]["memory_ema_span_minutes"] == 123.5
-    assert bot["short"]["hsl"]["memory_ema_span_minutes"] == 123.5
-    assert bot["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 123.5
-    assert bot["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 123.5
+    assert bot["long"]["risk"]["hsl"]["memory_ema_span_minutes"] == 123.5
+    assert bot["short"]["risk"]["hsl"]["memory_ema_span_minutes"] == 123.5
+    assert bot["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 123.5
     assert "volume_drop_pct" not in json.dumps(result.config)
     assert any("volume_drop_pct" in change["path"] for change in result.changes)
     assert migrate(result.config).changes == []
@@ -229,7 +229,7 @@ def test_legacy_gate_windows_require_ack_and_are_never_converted_as_spans(window
         migrate(source, memory_span_minutes=123.5)
     result = migrate(source, memory_span_minutes=123.5,
                      acknowledge_realized_loss_gate_memory_change=True)
-    assert result.config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 123.5
+    assert result.config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 123.5
     assert any(change["old"] == window and "retired rolling gate window" in change["reason"]
                for change in result.changes)
 
@@ -243,37 +243,36 @@ def test_explicit_converter_rejects_conflicting_renamed_values():
 
 def test_converter_explicit_independent_span_choices_do_not_widen_search():
     result = migrate(v8_config(), memory_span_minutes=123.5, memory_span_choices={
-        "bot.portfolio.unstuck.memory_ema_span_minutes": 71.5,
-        "bot.portfolio.loss_gate.memory_ema_span_minutes": 83.5,
-        "bot.long.hsl.memory_ema_span_minutes": 19.5,
+        "bot.portfolio.risk.loss_realization.memory_ema_span_minutes": 71.5,
+        "bot.long.risk.hsl.memory_ema_span_minutes": 19.5,
     })
-    assert result.config["bot"]["short"]["hsl"]["memory_ema_span_minutes"] == 123.5
-    assert result.config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 71.5
+    assert result.config["bot"]["short"]["risk"]["hsl"]["memory_ema_span_minutes"] == 123.5
+    assert result.config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 71.5
     effective = prepare_config(result.config, verbose=False)
-    assert effective["optimize"]["bounds"]["long"]["hsl"]["memory_ema_span_minutes"] == [19.5, 19.5]
+    assert effective["optimize"]["bounds"]["long"]["risk"]["hsl"]["memory_ema_span_minutes"] == [19.5, 19.5]
 
 
 def test_portfolio_memory_and_smoothing_are_separate_from_scope():
     config = get_expanded_config_prototype()
-    policy = deepcopy(config["bot"]["long"]["hsl"])
+    policy = deepcopy(config["bot"]["long"]["risk"]["hsl"])
     policy.update(scope="portfolio", memory_ema_span_minutes=17.5,
                   drawdown_fraction_ema_span_minutes=9.5, enabled=True)
-    config["bot"]["portfolio"]["hsl"] = policy
+    config["bot"]["portfolio"]["risk"]["hsl"] = policy
     for side in ("long", "short"):
-        config["optimize"]["bounds"][side].pop("hsl")
+        config["optimize"]["bounds"][side]["risk"].pop("hsl")
     result = prepare_config(config, verbose=False)
-    assert result["bot"]["portfolio"]["hsl"] == policy
-    assert result["optimize"]["bounds"]["portfolio"]["hsl"]["memory_ema_span_minutes"] == [17.5, 17.5]
+    assert result["bot"]["portfolio"]["risk"]["hsl"] == policy
+    assert result["optimize"]["bounds"]["portfolio"]["risk"]["hsl"]["memory_ema_span_minutes"] == [17.5, 17.5]
 
 
 def test_referenced_coin_patch_unknowns_fail_during_prepare(tmp_path):
     path = tmp_path / "coin.json"
-    path.write_text(json.dumps({"bot": {"long": {"hsl": {"wrong_memory": 4.0}}}}))
+    path.write_text(json.dumps({"bot": {"long": {"risk": {"hsl": {"wrong_memory": 4.0}}}}}))
     config = get_template_config()
     config["coin_overrides"] = {"BTC": {"override_config_path": str(path)}}
     with pytest.raises(
         ValueError,
-        match=r"config\.bot\.long\.hsl\.wrong_memory is an unknown configuration field",
+        match=r"config\.bot\.long\.risk\.hsl\.wrong_memory is an unknown configuration field",
     ):
         prepare_config(config, verbose=False)
 
@@ -288,7 +287,8 @@ def test_scenario_retired_gate_control_is_converted_and_acknowledged():
     result = migrate(source, memory_span_minutes=123.5,
                      acknowledge_realized_loss_gate_memory_change=True)
     assert result.config["backtest"]["scenarios"][0]["overrides"] == {
-        "bot.portfolio.loss_gate.max_drawdown_fraction": 0.1,
+        "bot.portfolio.risk.loss_realization.loss_gate.enabled": True,
+        "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction": 0.1,
     }
 
 
@@ -323,9 +323,9 @@ def test_invalid_intermediate_schema_never_creates_migration_output(tmp_path):
 def test_coin_only_unstuck_enablement_requires_global_memory_history():
     config = get_expanded_config_prototype()
     for side in ("long", "short"):
-        config["bot"][side]["unstuck"]["enabled"] = False
-    config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 71.5
-    config["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"enabled": True}}}}}
+        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
+    config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] = 71.5
+    config["coin_overrides"] = {"BTC": {"bot": {"long": {"risk": {"unstuck": {"enabled": True}}}}}}
     config = prepare_config(config, verbose=False)
     assert risk_memory_spans(config) == (71.5,)
     assert risk_bootstrap_horizon_minutes(config) == (357.5, False)
@@ -344,10 +344,10 @@ def test_local_wallet_limit_is_validated_without_inventing_a_global_field(tmp_pa
 def test_explicit_file_conversion_preserves_sparse_override_inheritance(tmp_path):
     config = v8_config()
     path = tmp_path / "coin.json"
-    path.write_text(json.dumps({"bot": {"long": {"unstuck": {"close_fraction": 0.02}}}}))
+    path.write_text(json.dumps({"bot": {"long": {"unstuck": {"loss_allowance_pct": 0.02}}}}))
     config["coin_overrides"] = {"BTC": {"override_config_path": str(path)}}
     result = migrate(config, memory_span_minutes=123.5, base_config_path=str(tmp_path / "base.json"))
-    assert result.config["coin_overrides"]["BTC"] == {"bot": {"long": {"unstuck": {"close_fraction": 0.02}}}}
+    assert result.config["coin_overrides"]["BTC"] == {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.02}}}}}
 
 
 def test_released_pymoo_fallback_is_explicitly_materialized():
@@ -447,32 +447,32 @@ def test_clean_export_preserves_explicit_global_portfolio_policy_and_fixed_span(
     from config_utils import sanitize_prepared_config_for_dump
 
     source = generated_template(get_template_config(), "portfolio")
-    source["bot"]["portfolio"]["hsl"].update(enabled=True, memory_ema_span_minutes=123.5,
+    source["bot"]["portfolio"]["risk"]["hsl"].update(enabled=True, memory_ema_span_minutes=123.5,
                                         drawdown_fraction_ema_span_minutes=7.5)
     prepared = prepare_config(source, verbose=False)
     exported = sanitize_prepared_config_for_dump(prepared)
-    assert exported["bot"]["portfolio"]["hsl"] == prepared["bot"]["portfolio"]["hsl"]
+    assert exported["bot"]["portfolio"]["risk"]["hsl"] == prepared["bot"]["portfolio"]["risk"]["hsl"]
     loaded = prepare_config(exported, verbose=False)
-    assert loaded["optimize"]["bounds"]["portfolio"]["hsl"]["memory_ema_span_minutes"] == [123.5, 123.5]
-    assert loaded["bot"]["portfolio"]["hsl"] == prepared["bot"]["portfolio"]["hsl"]
+    assert loaded["optimize"]["bounds"]["portfolio"]["risk"]["hsl"]["memory_ema_span_minutes"] == [123.5, 123.5]
+    assert loaded["bot"]["portfolio"]["risk"]["hsl"] == prepared["bot"]["portfolio"]["risk"]["hsl"]
 
 
 @pytest.mark.parametrize("command", ["live", "backtest", "optimize"])
-def test_cli_independent_global_risk_controls_use_canonical_paths(command):
+def test_cli_shared_global_risk_controls_use_canonical_paths(command):
     import argparse
     from config_utils import add_config_arguments, project_template_config_for_cli, update_config_with_args
 
     config = get_template_config()
     parser = argparse.ArgumentParser(allow_abbrev=False)
     add_config_arguments(parser, project_template_config_for_cli(config, command), command=command)
-    args = parser.parse_args(["--unstuck-memory-ema-span-minutes", "17.5",
-                              "--loss-gate-memory-ema-span-minutes", "23.5",
-                              "--loss-gate-max-drawdown-fraction", "0.12", "--hsl-scope", "coin"])
+    args = parser.parse_args(["--realized-loss-memory-ema-span-minutes", "17.5",
+                              "--loss-gate-enabled", "y",
+                              "--loss-gate-max-realized-drawdown-fraction", "0.12", "--hsl-scope", "coin"])
     update_config_with_args(config, args)
-    assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 17.5
-    assert config["bot"]["portfolio"]["loss_gate"] == {"memory_ema_span_minutes": 23.5,
-                                                 "max_drawdown_fraction": 0.12}
-    assert config["bot"]["portfolio"]["hsl"]["scope"] == "coin"
+    realization = config["bot"]["portfolio"]["risk"]["loss_realization"]
+    assert realization["memory_ema_span_minutes"] == 17.5
+    assert realization["loss_gate"] == {"enabled": True, "max_realized_drawdown_fraction": 0.12}
+    assert config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "coin"
     for retired in ("--lookback-ema-span-minutes", "--hsl-signal-mode", "--max-realized-loss-pct"):
         with pytest.raises(SystemExit):
             parser.parse_args([retired, "1"])
@@ -554,9 +554,8 @@ def test_best_effort_infers_memory_and_reports_each_guess(days, span, caplog):
     original = deepcopy(config)
     result = migrate(config, best_effort=True)
     assert config == original
-    assert result.config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == span
-    assert result.config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == span
-    assert result.config["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == span
+    assert result.config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == span
+    assert result.config["bot"]["long"]["risk"]["hsl"]["memory_ema_span_minutes"] == span
     guesses = [item for item in result.changes if item.get("best_effort")]
     assert guesses == [dict(path="live.pnls_max_lookback_days", old=days, new=span,
                             reason=guesses[0]["reason"], best_effort=True)]
@@ -567,7 +566,7 @@ def test_best_effort_missing_window_uses_reported_canonical_default(caplog):
     config = v8_config()
     del config["live"]["pnls_max_lookback_days"]
     result = migrate(config, best_effort=True)
-    assert result.config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert result.config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 43200.0
     assert "missing rolling window" in caplog.text
 
 
@@ -650,7 +649,7 @@ def test_best_effort_explicit_choices_take_precedence():
     config["backtest"]["ew_half_life_days"] = 17.0
     result = migrate(config, best_effort=True, memory_span_minutes=99.5,
                      metric_replacements={"adg_strategy_eq_w": "cagr_fraction_strategy_equity"})
-    assert result.config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 99.5
+    assert result.config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 99.5
     assert result.config["optimize"]["scoring"] == [{"metric": "cagr_fraction_strategy_equity", "goal": "max"}]
     assert result.config["backtest"]["ew_half_life_days"] == 17.0
     assert not any(item["path"] == "live.pnls_max_lookback_days" and item.get("best_effort")
@@ -673,23 +672,27 @@ def test_best_effort_scenario_and_fixed_windows_keep_distinct_spans():
         "backtest.scenarios[0].overrides.live.pnls_max_lookback_days": 61.5})
     fixed = result.config["optimize"]["fixed_runtime_overrides"]
     scenario = result.config["backtest"]["scenarios"][0]["overrides"]
-    assert fixed["bot.portfolio.unstuck.memory_ema_span_minutes"] == 6480.0
-    assert scenario["bot.portfolio.unstuck.memory_ema_span_minutes"] == 61.5
+    assert fixed["bot.portfolio.risk.loss_realization.memory_ema_span_minutes"] == 6480.0
+    assert scenario["bot.portfolio.risk.loss_realization.memory_ema_span_minutes"] == 61.5
     assert any(item["path"] == "optimize.fixed_runtime_overrides.live.pnls_max_lookback_days"
                and item.get("best_effort") for item in result.changes)
 
 
-def test_best_effort_requires_permanent_stop_ack_but_infers_loss_gate_policy(caplog):
+def test_best_effort_requires_both_permanent_stop_and_gate_acknowledgments(caplog):
     config = v8_config()
     config["bot"]["long"]["hsl"]["restart_after_red_policy"] = "never"
     config["live"]["max_realized_loss_pct"] = 0.05
     with pytest.raises(ValueError, match="acknowledge-permanent-stop-removal"):
-        migrate(config, best_effort=True)
-    result = migrate(config, best_effort=True, acknowledge_never_removal=True)
-    assert result.config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == 0.05
-    assert "restart_after_red_policy" not in result.config["bot"]["long"]["hsl"]
+        migrate(config, best_effort=True, memory_span_minutes=43200.0,
+                acknowledge_realized_loss_gate_memory_change=True)
+    with pytest.raises(ValueError, match="acknowledge-realized-loss-gate-memory-change"):
+        migrate(config, best_effort=True, memory_span_minutes=43200.0, acknowledge_never_removal=True)
+    result = migrate(config, best_effort=True, memory_span_minutes=43200.0,
+                     acknowledge_never_removal=True, acknowledge_realized_loss_gate_memory_change=True)
+    gate = result.config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]
+    assert gate == {"enabled": True, "max_realized_drawdown_fraction": 0.05}
+    assert "restart_after_red_policy" not in result.config["bot"]["long"]["risk"]["hsl"]
     assert "remove permanent stop" not in caplog.text
-    assert "decaying realized-loss memory" in caplog.text
 
 
 def test_best_effort_deap_builds_reported_pymoo_policy(caplog):
@@ -1094,13 +1097,14 @@ def test_memory_decision_provenance_is_unique_for_root_scenario_and_fixed(conver
 def test_gate_report_does_not_claim_explicit_consent_without_it(acknowledge):
     config = v8_config()
     config["live"]["max_realized_loss_pct"] = 0.05
-    result = migrate(config, best_effort=True,
-                     acknowledge_realized_loss_gate_memory_change=acknowledge)
+    if not acknowledge:
+        with pytest.raises(ValueError, match="acknowledge-realized-loss-gate-memory-change"):
+            migrate(config, best_effort=True, memory_span_minutes=43200.0)
+        return
+    result = migrate(config, best_effort=True, memory_span_minutes=43200.0,
+                     acknowledge_realized_loss_gate_memory_change=True)
     consent = [item for item in result.changes if "acknowledged shared realized-loss memory" in item["reason"]]
-    assert len(consent) == (1 if acknowledge else 0)
-    inferred = [item for item in result.changes if "adopt independent decaying realized-loss memory" in item["reason"]]
-    assert bool(inferred) is not acknowledge
-    assert all(item["best_effort"] for item in inferred)
+    assert len(consent) == 1 and not consent[0].get("best_effort", False)
 
 
 @pytest.mark.parametrize("acknowledge", [False, True])
@@ -1184,7 +1188,7 @@ def test_best_effort_internal_metadata_does_not_drive_inference(converter, key):
     result = converter(config, best_effort=True)
     assert key not in result.config
     assert prepare_config(result.config, verbose=False)["backtest"]["ew_half_life_days"] == 180.0
-    assert result.config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert result.config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 43200.0
     guesses = [item for item in result.changes if item.get("best_effort")]
     assert {item["path"] for item in guesses} == {key, "live.pnls_max_lookback_days"}
 

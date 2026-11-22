@@ -64,15 +64,19 @@ def test_ema_anchor_file_loads_with_preserved_inputs(tmp_path):
         "bot": {
             "portfolio": {
                 "strategy_kind": "ema_anchor",
-                "hsl": {"scope": "coin"},
-                "unstuck": {"memory_ema_span_minutes": 43200.0},
-                "loss_gate": {"max_drawdown_fraction": 1.0},
+                "risk": {
+                    "hsl": {"scope": "coin"},
+                    "loss_realization": {"memory_ema_span_minutes": 43200.0, "loss_gate": {"enabled": False}},
+                },
             },
             "global": {
                 "universe": {"approved_coins": ["BTC", "SOL"]},
-                "risk": {"max_positions": 2, "total_wallet_exposure_limit_ratio": 1.0},
-                "hsl": {"enabled": False},
-                "unstuck": {"ema_span_0_minutes": 48.0, "ema_span_1_minutes": 288.0},
+                "risk": {
+                    "max_positions": 2,
+                    "total_wallet_exposure_limit_ratio": 1.0,
+                    "hsl": {"enabled": False},
+                    "unstuck": {"ema_span_0_minutes": 48.0, "ema_span_1_minutes": 288.0},
+                },
                 "strategy": {"ema_anchor": strategy},
             },
             "long": {"enabled": True},
@@ -92,17 +96,17 @@ def test_ema_anchor_file_loads_with_preserved_inputs(tmp_path):
     assert authored["config_version"] == config["config_version"] == CONFIG_SCHEMA_VERSION
     assert config['bot']["portfolio"]['strategy_kind'] == "ema_anchor"
     assert config["live"]["account"]["user"] == "example"
-    assert config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 43200.0
     assert config["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] == 129600.0
-    assert config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == 1.0
-    assert config["bot"]["portfolio"]["hsl"]["scope"] == "coin"
+    assert config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] == {"enabled": False}
+    assert config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "coin"
     assert require_side_universe_sources(config, 'approved_coins') == {
         "long": ["BTC", "SOL"], "short": ["BTC", "SOL"],
     }
     for key, expected in backtest.items():
         assert config["backtest"][key] == expected
     for side in ("long", "short"):
-        assert config["bot"][side]["hsl"]["enabled"] is False
+        assert config["bot"][side]["risk"]["hsl"]["enabled"] is False
         assert config["bot"][side]["risk"]["max_positions"] == 2.0
         assert config["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] == 1.0
         for key, expected in strategy.items():
@@ -113,8 +117,8 @@ def test_ema_anchor_file_loads_with_preserved_inputs(tmp_path):
         )
         for key, expected in strategy.items():
             assert native_strategy[key] == expected
-        assert config["bot"][side]["unstuck"]["ema_span_0_minutes"] == 48.0
-        assert config["bot"][side]["unstuck"]["ema_span_1_minutes"] == 288.0
+        assert config["bot"][side]["risk"]["unstuck"]["ema_span_0_minutes"] == 48.0
+        assert config["bot"][side]["risk"]["unstuck"]["ema_span_1_minutes"] == 288.0
     assert json.loads(path.read_text()) == original
 
 
@@ -138,7 +142,7 @@ def test_prepare_config_preserves_fixed_runtime_override_mapping():
     source = get_template_config()
     source["optimize"]["fixed_runtime_overrides"] = {
         "bot.long.strategy.trailing_martingale.entry.threshold_base_fraction": 0.123,
-        "bot.short.hsl.drawdown_threshold_fraction": 0.1,
+        "bot.short.risk.hsl.drawdown_threshold_fraction": 0.1,
     }
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -153,7 +157,7 @@ def test_prepare_config_preserves_fixed_runtime_override_mapping():
 @pytest.mark.parametrize("path", [
     "bot.long.unstuck_ema_span_0",
     "bot.long.strategy.trailing_martingale.ema_span_0_minutes",
-    "long.unstuck.ema_span_0_minutes",
+    "long.risk.unstuck.ema_span_0_minutes",
     "bot.long.strategy.entry.ema_span_0_minutes",
     "long.strategy.entry.ema_span_0_minutes",
 ])
@@ -170,7 +174,7 @@ def test_authored_patches_reject_retired_paths_and_selector_shorthand(location, 
 @pytest.mark.parametrize("location", ["fixed", "scenario"])
 def test_authored_patches_accept_literal_canonical_paths(location):
     source = get_template_config()
-    patch = {"bot.long.unstuck.ema_span_0_minutes": 12.5,
+    patch = {"bot.long.risk.unstuck.ema_span_0_minutes": 12.5,
              "bot.long.strategy.trailing_martingale.entry.ema_span_0_minutes": 25.0}
     if location == "fixed":
         source["optimize"]["fixed_runtime_overrides"] = patch
@@ -208,13 +212,13 @@ def test_authored_coin_sources_reject_unknown_shapes(source):
 
 @pytest.mark.parametrize("location", ["fixed", "scenario"])
 @pytest.mark.parametrize(
-    "path,value", [("bot.long.unstuck.ema_span_0_minutes", 12.5), ("live.account.leverage", 3)]
+    "path,value", [("bot.long.risk.unstuck.ema_span_0_minutes", 12.5), ("live.account.leverage", 3)]
 )
 def test_authored_patches_accept_sparse_local_coin_paths(location, path, value):
     source = get_template_config()
     source["coin_overrides"] = {
         "BTC": {
-            "bot": {"long": {"unstuck": {"ema_span_0_minutes": 60.25}}},
+            "bot": {"long": {"risk": {"unstuck": {"ema_span_0_minutes": 60.25}}}},
             "live": {"account": {"leverage": 3}},
         }
     }
@@ -226,8 +230,8 @@ def test_authored_patches_accept_sparse_local_coin_paths(location, path, value):
     assert prepare_config(source, verbose=False)
 
 
-@pytest.mark.parametrize("path", ["bot.long.unstuck_ema_span_0", "bot.portfolio.loss_gate.memory_ema_span_minutes",
-                                  "bot.long.risk.max_positions", "bot.long.hsl.ema_span_minutes"])
+@pytest.mark.parametrize("path", ["bot.long.unstuck_ema_span_0", "bot.portfolio.risk.loss_realization.memory_ema_span_minutes",
+                                  "bot.long.risk.max_positions", "bot.long.risk.hsl.ema_span_minutes"])
 @pytest.mark.parametrize("location", ["fixed", "scenario"])
 def test_authored_coin_path_pins_reject_aliases_and_global_policy(path, location):
     source = get_template_config()
@@ -246,7 +250,7 @@ def test_canonical_portfolio_hsl_rejects_live_balance_override(location):
     from config.hsl import require_live_balance_support
 
     config = get_expanded_config_prototype()
-    config["bot"]["portfolio"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": True}
+    config["bot"]["portfolio"]["risk"]["hsl"] = {**config["bot"]["long"]["risk"]["hsl"], "scope": "portfolio", "enabled": True}
     override = 100.0 if location == "runtime" else None
     if location == "config":
         config["live"]["account"]["balance_override"] = 100.0
@@ -261,7 +265,7 @@ def test_portfolio_metric_validation_reads_canonical_global_controller(enabled):
     from config.hsl import validate_optimizer_metrics
 
     config = get_expanded_config_prototype()
-    config["bot"]["portfolio"]["hsl"] = {**config["bot"]["long"]["hsl"], "scope": "portfolio", "enabled": enabled}
+    config["bot"]["portfolio"]["risk"]["hsl"] = {**config["bot"]["long"]["risk"]["hsl"], "scope": "portfolio", "enabled": enabled}
     if enabled:
         validate_optimizer_metrics(config, ["hsl_triggers_per_year"])
     else:
@@ -354,7 +358,7 @@ def test_trailing_martingale_ema_gate_mode_is_fixed_config_not_optimizer_bound()
     source["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "ema_gate_mode"
     ] = "REENTRY"
-    source["bot"]["short"]["unstuck"]["ema_gating_enabled"] = False
+    source["bot"]["short"]["risk"]["unstuck"]["ema_gating_enabled"] = False
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
@@ -364,7 +368,7 @@ def test_trailing_martingale_ema_gate_mode_is_fixed_config_not_optimizer_bound()
         ]
         == "reentry"
     )
-    assert prepared["bot"]["short"]["unstuck"]["ema_gating_enabled"] is False
+    assert prepared["bot"]["short"]["risk"]["unstuck"]["ema_gating_enabled"] is False
     assert "ema_gate_mode" not in json.dumps(prepared["optimize"]["bounds"])
     spec = pbr.get_strategy_spec("trailing_martingale")
     assert any(
@@ -581,11 +585,11 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
     )
     assert (
         compiled["bot"]["long"]["unstuck_exposure_trigger_ratio"]
-        == canonical["bot"]["long"]["unstuck"]["exposure_trigger_ratio"]
+        == canonical["bot"]["long"]["risk"]["unstuck"]["exposure_trigger_ratio"]
     )
     assert (
         compiled["bot"]["long"]["hsl_drawdown_threshold_fraction"]
-        == canonical["bot"]["long"]["hsl"]["drawdown_threshold_fraction"]
+        == canonical["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"]
     )
     assert (
         compiled["bot"]["long"]["forager_volume_ema_span_minutes"]
@@ -933,13 +937,11 @@ def test_prepare_config_rejects_malformed_config_version():
 
 def test_prepare_config_preserves_independent_memory_spans():
     source = get_expanded_config_prototype()
-    source["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 30.5
-    source["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 60.5
-    source["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = 90.5
+    source["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] = 30.5
+    source["bot"]["long"]["risk"]["hsl"]["memory_ema_span_minutes"] = 90.5
     prepared = prepare_config(source, verbose=False)
-    assert prepared["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 30.5
-    assert prepared["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 60.5
-    assert prepared["bot"]["long"]["hsl"]["memory_ema_span_minutes"] == 90.5
+    assert prepared["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 30.5
+    assert prepared["bot"]["long"]["risk"]["hsl"]["memory_ema_span_minutes"] == 90.5
     assert "lookback_ema_span_minutes" not in prepared["live"]
 
 
@@ -959,16 +961,16 @@ def test_prepare_config_rejects_retired_all_history_gate_window():
 
 def test_prepare_config_rejects_invalid_memory_ema_span_minutes_string():
     source = get_template_config()
-    source["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = "everything"
-    with pytest.raises(ValueError, match="bot.portfolio.unstuck.memory_ema_span_minutes must be a finite number"):
+    source["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] = "everything"
+    with pytest.raises(ValueError, match="bot.portfolio.risk.loss_realization.memory_ema_span_minutes must be a finite number"):
         prepare_config(source, verbose=False)
 
 
 @pytest.mark.parametrize(
     ("pside", "value", "expected"),
     [
-        ("long", -1.0, r"bot\.long\.unstuck\.ema_distance_fraction must be > -1\.0"),
-        ("short", 1.0, r"bot\.short\.unstuck\.ema_distance_fraction must be < 1\.0"),
+        ("long", -1.0, r"bot\.long\.risk\.unstuck\.ema_distance_fraction must be > -1\.0"),
+        ("short", 1.0, r"bot\.short\.risk\.unstuck\.ema_distance_fraction must be < 1\.0"),
     ],
 )
 def test_prepare_config_rejects_invalid_unstuck_ema_dist(pside, value, expected):
@@ -983,7 +985,7 @@ def test_prepare_config_rejects_invalid_unstuck_ema_dist(pside, value, expected)
         "live": {},
         "optimize": {"bounds": {}},
     }
-    source["bot"][pside]["unstuck"] = {"ema_distance_fraction": value}
+    source["bot"][pside].setdefault("risk", {})["unstuck"] = {"ema_distance_fraction": value}
 
     with pytest.raises(ValueError, match=expected):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -1114,17 +1116,17 @@ def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match
 
 def test_prepare_config_preserves_fractional_hsl_ema_span():
     source = get_expanded_config_prototype()
-    source["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.25
+    source["bot"]["long"]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] = 1.25
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert prepared["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == pytest.approx(1.25)
+    assert prepared["bot"]["long"]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] == pytest.approx(1.25)
 
 
 def test_prepare_config_rejects_retired_hsl_terminal_threshold():
     source = get_expanded_config_prototype()
-    source["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.20
-    source["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.10
+    source["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] = 0.20
+    source["bot"]["long"]["risk"]["hsl"]["no_restart_drawdown_threshold"] = 0.10
 
     with pytest.raises(ValueError, match="removed in v9"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -1133,12 +1135,12 @@ def test_prepare_config_rejects_retired_hsl_terminal_threshold():
 @pytest.mark.parametrize(
     ("group", "field", "value", "match"),
     [
-        ("hsl", "drawdown_threshold_fraction", 0.0, r"bot\.long\.hsl\.drawdown_threshold_fraction"),
+        ("hsl", "drawdown_threshold_fraction", 0.0, r"bot\.long\.risk\.hsl\.drawdown_threshold_fraction"),
         (
             "hsl",
             "cooldown_after_red_minutes",
             -1.0,
-            r"bot\.long\.hsl\.cooldown_after_red_minutes",
+            r"bot\.long\.risk\.hsl\.cooldown_after_red_minutes",
         ),
         (
             "risk",
@@ -1148,15 +1150,15 @@ def test_prepare_config_rejects_retired_hsl_terminal_threshold():
         ),
         (
             "unstuck",
-            "close_fraction",
-            1.01,
-            r"bot\.long\.unstuck\.close_fraction must be finite and <= 1\.0",
+            "loss_allowance_fraction",
+            -1.01,
+            r"bot\.long\.risk\.unstuck\.loss_allowance_fraction must be finite and >= 0\.0",
         ),
         (
             "unstuck",
             "loss_allowance_fraction",
             float("nan"),
-            r"bot\.long\.unstuck\.loss_allowance_fraction must be finite",
+            r"bot\.long\.risk\.unstuck\.loss_allowance_fraction must be finite",
         ),
     ],
 )
@@ -1164,7 +1166,8 @@ def test_prepare_config_rejects_invalid_hsl_risk_unstuck_numerics(
     group, field, value, match
 ):
     source = get_expanded_config_prototype()
-    source["bot"]["long"][group][field] = value
+    risk = source["bot"]["long"]["risk"]
+    (risk if group == "risk" else risk[group])[field] = value
 
     with pytest.raises((TypeError, ValueError), match=match):
         prepare_config(source, verbose=False, target="canonical", runtime=None)

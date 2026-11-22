@@ -32,6 +32,14 @@ class BybitBot(CCXTBot):
 
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
+    def _realized_close_exact_lookup_routes(self, symbol, exchange_order_id, client_order_id):
+        if getattr(self.cca, "has", {}).get("fetchCanceledAndClosedOrders") is True:
+            identity = (
+                {"orderId": exchange_order_id}
+                if exchange_order_id else {"orderLinkId": client_order_id}
+            )
+            yield self.cca.fetch_canceled_and_closed_orders, (symbol, None, 2, identity), True
+
     @staticmethod
     def _strict_position_idx(raw_position_idx) -> int:
         if isinstance(raw_position_idx, bool):

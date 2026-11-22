@@ -8,18 +8,18 @@ supported GPU execution and live fact reconstruction. See the exact
 
 ## Scopes and budgets
 
-| `bot.portfolio.hsl.scope` | Scope and RED closes | Current base budget | Policy |
+| `bot.portfolio.risk.hsl.scope` | Scope and RED closes | Current base budget | Policy |
 |---|---|---|---|
-| `coin` | One symbol/position-side pair | Raw balance / that side's applicable slot count | `bot.long.hsl`, `bot.short.hsl`; coin patches allowed |
-| `position_side` | Every position on one side | Raw balance | `bot.long.hsl`, `bot.short.hsl` |
-| `portfolio` | All positions | Raw balance | Explicit `bot.portfolio.hsl` |
+| `coin` | One symbol/position-side pair | Raw balance / that side's applicable slot count | `bot.long.risk.hsl`, `bot.short.risk.hsl`; coin patches allowed |
+| `position_side` | Every position on one side | Raw balance | `bot.long.risk.hsl`, `bot.short.risk.hsl` |
+| `portfolio` | All positions | Raw balance | Explicit `bot.portfolio.risk.hsl` |
 
 Portfolio protection includes existing exposure on disabled entry sides. A hedged scope is
 flat only when gross inventory is zero. Replacing a constituent while an aggregate remains
 exposed does not start a new episode. Coin mode does not invent slots for an inactive side.
 TWEL does not directly multiply the HSL budget.
 
-`bot.<side>.hsl.scale_budget_with_excess_allowance` defaults to `false`. In coin mode only,
+`bot.<side>.risk.hsl.scale_budget_with_excess_allowance` defaults to `false`. In coin mode only,
 `true` multiplies its slot budget by bounded authored exposure headroom:
 
 ```text

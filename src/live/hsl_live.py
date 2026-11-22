@@ -23,7 +23,7 @@ from ccxt.base.errors import (
 )
 
 from live import hsl_runtime as runtime
-from live import position_fill_sync
+from live import position_fill_sync, realized_close_admission
 from live.console_health import observe_ordinary_acceptance, observe_ordinary_outer_cycle
 from live.diagnostic_safety import log_process_recovery
 from live.events import run_diagnostic_step
@@ -39,15 +39,15 @@ _EXCHANGE_BACKPRESSURE_ERRORS = (DDoSProtection, OnMaintenance, RateLimitExceede
 
 
 def policy(bot, side, symbol=None):
-    if bot.config["bot"]["portfolio"]["hsl"]["scope"] == "portfolio":
-        return dict(bot.config["bot"]["portfolio"]["hsl"])
-    result = dict(bot.config["bot"][side]["hsl"])
-    if symbol is not None and bot.config["bot"]["portfolio"]["hsl"]["scope"] == "coin":
+    if bot.config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "portfolio":
+        return dict(bot.config["bot"]["portfolio"]["risk"]["hsl"])
+    result = dict(bot.config["bot"][side]["risk"]["hsl"])
+    if symbol is not None and bot.config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "coin":
         result.update(
             bot.coin_overrides.get(symbol, {})
             .get("bot", {})
             .get(side, {})
-            .get("hsl", {})
+            .get("risk", {}).get("hsl", {})
         )
     return result
 
@@ -119,6 +119,10 @@ def connector_write(action):
                         return deferred()
                     if not instance.admit(order):
                         return deferred()
+                    if action == "create" and not realized_close_admission.permits(bot, order):
+                        from live.event_bus import ReasonCodes
+
+                        return deferred(ReasonCodes.REALIZED_CLOSE_ADMISSION_DEFERRED)
 
                     def recheck(order):
                         return (
@@ -126,6 +130,7 @@ def connector_write(action):
                             and active_ordinary_cancel_wave(bot) is cancel_wave
                             and active_ordinary_create_wave(bot) is create_wave
                             and instance.admit(order)
+                            and (action != "create" or realized_close_admission.permits(bot, order))
                             and (
                                 ordinary_wave is None or ordinary_wave.permits(bot, order, action)
                             )
@@ -144,7 +149,7 @@ def connector_write(action):
                                 lambda: ordinary_wave.record_submission(order)
                             )
                         surfaces = {"balance", "positions", "open_orders"}
-                        if create_wave is not None:
+                        if create_wave is not None or bot._orchestrator_uses_realized_pnl():
                             surfaces.add("fills")
                         needs_confirmation = True
                         try:
@@ -154,6 +159,8 @@ def connector_write(action):
                                 )
                             else:
                                 result = await operation(bot, order)
+                            if action == "create" and transport.submitted:
+                                realized_close_admission.result(bot, order, response=result)
                             if batch is not None:
                                 if action == "create":
                                     batch.needs_refresh = not bot.did_create_order(result)
@@ -170,7 +177,9 @@ def connector_write(action):
                         except position_fill_sync.WriteDeferred:
                             needs_confirmation = False
                             raise
-                        except BaseException:
+                        except BaseException as exc:
+                            if action == "create" and transport.submitted:
+                                realized_close_admission.result(bot, order, error=exc)
                             if batch is not None:
                                 batch.needs_refresh = True
                             raise
@@ -366,7 +375,7 @@ class OrdinaryCreateWave:
             or self.members[index].order is not order
             or getattr(bot, "_current_planning_snapshot", None) is not self.snapshot
             or runtime.enabled(bot)
-            or not bot._loss_gate_max_drawdown_fraction() >= 1.0
+            or not realized_close_admission.wave_allowed(bot)
             or bot.live_value("time_in_force") != "post_only"
             or (self.continuing and asyncio.get_running_loop().time() >= self.deadline)
         ):
@@ -1210,6 +1219,7 @@ class Owner:
         )
 
     async def _ordinary_preparation_account(self):
+        await realized_close_admission.recover(self.bot)
         account = self.account_facts()
         required_fills = account[3]
         task = getattr(self, "_fill_task", None)

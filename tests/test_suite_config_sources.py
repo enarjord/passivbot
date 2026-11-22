@@ -165,7 +165,7 @@ def test_optimizer_suite_rejects_partial_legacy_backtest_suite(tmp_path: Path):
 
 
 @pytest.mark.parametrize("wrapped", [False, True])
-@pytest.mark.parametrize("selector", ["long.unstuck.ema_span_0_minutes", "bot.long.strategy.entry.ema_span_0_minutes"])
+@pytest.mark.parametrize("selector", ["long.risk.unstuck.ema_span_0_minutes", "bot.long.strategy.entry.ema_span_0_minutes"])
 def test_external_suite_rejects_authored_selector_shorthand_before_projection(tmp_path, wrapped, selector):
     section = {"scenarios": [{"label": "bad", "overrides": {selector: 17.5}}]}
     document = {"backtest": section} if wrapped else section
@@ -205,9 +205,9 @@ def test_external_suite_canonical_coin_patch_uses_base_strategy_context(tmp_path
 
 def test_external_suite_canonical_coin_patch_uses_base_scope_context(tmp_path):
     base = get_template_config()
-    base["bot"]["portfolio"]["hsl"]["scope"] = "position_side"
+    base["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "position_side"
     section = {"scenarios": [{"label": "scope", "overrides": {"coin_overrides": {
-        "BTC": {"bot": {"long": {"hsl": {"enabled": True}}}},
+        "BTC": {"bot": {"long": {"risk": {"hsl": {"enabled": True}}}}},
     }}}]}
     path = tmp_path / "suite.json"
     path.write_text(json.dumps(section))

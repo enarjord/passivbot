@@ -46,7 +46,7 @@ def test_runner_requires_complete_finite_numeric_pair(monkeypatch, invalid):
     kernel, run, data = cpu_data(monkeypatch)
     with pytest.raises((TypeError, ValueError), match="forager_score_hysteresis"):
         kernel.MpsEmaAnchorMulticoinFusedRunner(
-            run, data, filter_by_min_effective_cost={"long": False, "short": False},
+            run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, filter_by_min_effective_cost={"long": False, "short": False},
             side_activation={"long": True, "short": True}, forager_score_hysteresis=invalid)
 
 
@@ -133,7 +133,7 @@ def test_explicit_neutral_pair_preserves_other_runner_validation(monkeypatch, fi
     kernel, run, data = cpu_data(monkeypatch)
     with pytest.raises(ValueError, match=field):
         kernel.MpsEmaAnchorMulticoinRunner(
-            run, data, side="long", forager_score_hysteresis={"long": 0.0, "short": 0.0},
+            run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, side="long", forager_score_hysteresis={"long": 0.0, "short": 0.0},
             side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False},
             **{field: float("nan")})
@@ -143,7 +143,7 @@ def test_runner_hysteresis_pair_cannot_be_omitted(monkeypatch):
     kernel, run, data = cpu_data(monkeypatch)
     with pytest.raises(TypeError, match="forager_score_hysteresis"):
         kernel.MpsEmaAnchorMulticoinFusedRunner(
-            run, data, side_activation={"long": True, "short": True},
+            run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, side_activation={"long": True, "short": True},
             filter_by_min_effective_cost={"long": False, "short": False})
 
 
@@ -165,5 +165,5 @@ def test_runner_minimum_cost_pair_cannot_be_omitted(monkeypatch):
     kernel, run, data = cpu_data(monkeypatch)
     with pytest.raises(TypeError, match="filter_by_min_effective_cost"):
         kernel.MpsEmaAnchorMulticoinFusedRunner(
-            run, data, side_activation={"long": True, "short": True},
+            run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None, side_activation={"long": True, "short": True},
             forager_score_hysteresis={"long": 0.0, "short": 0.0})

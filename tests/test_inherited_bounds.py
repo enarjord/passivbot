@@ -182,22 +182,22 @@ def test_current_registry_hsl_bindings_follow_explicit_scope(kind, scope):
     policy = resolve_bot_policy({"portfolio": portfolio}, real_catalog())
     plan = build_bound_plan(policy, {}, strategy_kind=kind, hsl_scope=scope)
     side_hsl = [binding for binding in plan.bindings
-                if binding.authoring_path[1] != "portfolio" and binding.authoring_path[2] == "hsl"]
+                if binding.authoring_path[1] != "portfolio" and binding.authoring_path[2:4] == ("risk", "hsl")]
     assert bool(side_hsl) is (scope != "portfolio")
     portfolio_hsl = [binding for binding in plan.bindings
-                     if binding.authoring_path[1:3] == ("portfolio", "hsl")]
+                     if binding.authoring_path[1:4] == ("portfolio", "risk", "hsl")]
     assert bool(portfolio_hsl) is (scope == "portfolio")
     if scope != "portfolio":
         with pytest.raises(ValueError, match=f"inactive in {scope} HSL scope"):
             build_bound_plan(
-                policy, {"portfolio": {"hsl": {"drawdown_threshold_fraction": [0.1, 0.2]}}},
+                policy, {"portfolio": {"risk": {"hsl": {"drawdown_threshold_fraction": [0.1, 0.2]}}}},
                 strategy_kind=kind, hsl_scope=scope,
             )
     if scope == "portfolio":
         for side in ("global", "long", "short"):
             with pytest.raises(ValueError, match="inactive in portfolio HSL scope"):
                 build_bound_plan(
-                    policy, {side: {"hsl": {"drawdown_threshold_fraction": [0.1, 0.2]}}},
+                    policy, {side: {"risk": {"hsl": {"drawdown_threshold_fraction": [0.1, 0.2]}}}},
                     strategy_kind=kind, hsl_scope=scope,
                 )
 

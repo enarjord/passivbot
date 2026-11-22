@@ -86,8 +86,7 @@ def test_legacy_fixture_requires_explicit_v9_migration():
         prepare_config(source, verbose=False)
     migrated = _prepare_explicitly_migrated(source)
     assert migrated["config_version"] == "v9.0.0"
-    assert migrated["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
-    assert migrated["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 43200.0
+    assert migrated["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 43200.0
 
 
 @pytest.mark.parametrize(
@@ -102,12 +101,12 @@ def test_legacy_composed_spans_and_roundtrip(kind, caplog):
     }
     with caplog.at_level(logging.INFO):
         prepared = _prepare_explicitly_migrated(c)
-    assert prepared["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 101.25
-    assert prepared["bot"]["long"]["unstuck"]["ema_span_1_minutes"] == 902.75
-    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"] == {
+    assert prepared["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 101.25
+    assert prepared["bot"]["long"]["risk"]["unstuck"]["ema_span_1_minutes"] == 902.75
+    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"] == {
         "ema_span_0_minutes": 17.5
     }
-    assert prepared["coin_overrides"]["ETH"]["bot"]["short"]["unstuck"] == {
+    assert prepared["coin_overrides"]["ETH"]["bot"]["short"]["risk"]["unstuck"] == {
         "ema_span_1_minutes": 211.25
     }
     resolved = parse_overrides(prepared, verbose=False)
@@ -116,7 +115,7 @@ def test_legacy_composed_spans_and_roundtrip(kind, caplog):
     assert reloaded["coin_overrides"] == resolved["coin_overrides"]
     assert "1-to-1 optimizer-search migration is impossible" in caplog.text
     assert "Preserved 2 coin-specific" in caplog.text
-    assert prepared["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0_minutes"] == [
+    assert prepared["optimize"]["bounds"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == [
         101.25,
         101.25,
     ]
@@ -124,15 +123,15 @@ def test_legacy_composed_spans_and_roundtrip(kind, caplog):
 
 def test_explicit_global_spans_are_inherited_by_strategy_overrides():
     c = get_expanded_config_prototype()
-    c["bot"]["long"]["unstuck"].update(ema_span_0_minutes=300.5, ema_span_1_minutes=700.25)
+    c["bot"]["long"]["risk"]["unstuck"].update(ema_span_0_minutes=300.5, ema_span_1_minutes=700.25)
     c["coin_overrides"] = {
         "BTC": {
             "bot": {"long": {"strategy": {"trailing_martingale": {"entry": {"ema_span_0_minutes": 17.5}}}}}
         }
     }
     resolved = parse_overrides(prepare_config(c, verbose=False), verbose=False)
-    assert "unstuck" not in resolved["coin_overrides"]["BTC"]["bot"]["long"]
-    assert resolved["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 300.5
+    assert "unstuck" not in resolved["coin_overrides"]["BTC"]["bot"]["long"].get("risk", {})
+    assert resolved["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 300.5
 
 
 @pytest.mark.parametrize("file_canonical", [False, True])
@@ -168,7 +167,7 @@ def test_file_inline_precedence_migration(tmp_path, file_canonical, inline_canon
     resolved = parse_overrides(
         _load_explicitly_migrated_file(path), verbose=False
     )
-    assert resolved["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"] == {
+    assert resolved["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"] == {
         "ema_span_0_minutes": 19.5,
         "ema_span_1_minutes": 601.5,
     }
@@ -191,11 +190,11 @@ def test_partial_explicit_spans_and_bounds_win():
         }
     }
     prepared = parse_overrides(_prepare_explicitly_migrated(c), verbose=False)
-    assert prepared["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 81.5
-    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"] == {
+    assert prepared["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 81.5
+    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"] == {
         "ema_span_1_minutes": 77.5
     }
-    assert prepared["optimize"]["bounds"]["long"]["unstuck"]["ema_span_1_minutes"] == [
+    assert prepared["optimize"]["bounds"]["long"]["risk"]["unstuck"]["ema_span_1_minutes"] == [
         10,
         1000,
         0.25,
@@ -206,10 +205,10 @@ def test_partial_explicit_spans_and_bounds_win():
 @pytest.mark.parametrize("coin_override", [False, True])
 def test_invalid_spans_rejected(value, coin_override):
     c = get_expanded_config_prototype()
-    target = c["bot"]["long"]["unstuck"]
+    target = c["bot"]["long"]["risk"]["unstuck"]
     if coin_override:
-        c["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {}}}}}
-        target = c["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]
+        c["coin_overrides"] = {"BTC": {"bot": {"long": {"risk": {"unstuck": {}}}}}}
+        target = c["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]
     target["ema_span_0_minutes"] = value
     with pytest.raises((ValueError, TypeError)):
         parse_overrides(prepare_config(c, verbose=False), verbose=False)
@@ -221,10 +220,10 @@ def test_defaults_and_runtime_mapping():
         "configs/examples/default_trailing_martingale_long.json", verbose=False
     )
     for side in ("long", "short"):
-        assert c["bot"][side]["unstuck"] == example["bot"][side]["unstuck"]
+        assert c["bot"][side]["risk"]["unstuck"] == example["bot"][side]["risk"]["unstuck"]
         assert (
-            c["optimize"]["bounds"]["long"]["unstuck"]
-            == example["optimize"]["bounds"][side]["unstuck"]
+            c["optimize"]["bounds"]["long"]["risk"]["unstuck"]
+            == example["optimize"]["bounds"][side]["risk"]["unstuck"]
         )
     runtime = compile_runtime_config(
         prepare_config(c, verbose=False), runtime="backtest"
@@ -253,7 +252,7 @@ def test_unstuck_spans_extend_per_coin_and_optimizer_warmup():
         ):
             (strategy["entry"] if key in ("ema_span_0_minutes", "ema_span_1_minutes") else strategy)[key] = 1.0
     c["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"unstuck": {"ema_span_0_minutes": 40_000.25}}}}
+        "BTC": {"bot": {"long": {"risk": {"unstuck": {"ema_span_0_minutes": 40_000.25}}}}}
     }
     prepared = parse_overrides(prepare_config(c, verbose=False), verbose=False)
     assert compute_per_coin_warmup_minutes(prepared)["BTC"] == 80_001
@@ -270,7 +269,7 @@ def test_legacy_scenario_span_override_migrates():
     ]
     prepared = _prepare_explicitly_migrated(c)
     assert (
-        prepared["backtest"]["scenarios"][0]["overrides"]["bot.long.unstuck.ema_span_0_minutes"]
+        prepared["backtest"]["scenarios"][0]["overrides"]["bot.long.risk.unstuck.ema_span_0_minutes"]
         == 401.5
     )
 
@@ -325,15 +324,15 @@ def test_released_scenario_span_inference_survives_public_path_projection(
         assert "Cannot copy zero strategy span" in caplog.text
     else:
         expected = 91.5 if mode == "explicit" else 401.5
-    assert migrated[f"bot.{side}.unstuck.{key}_minutes"] == expected
-    assert isinstance(migrated[f"bot.{side}.unstuck.{key}_minutes"], float)
+    assert migrated[f"bot.{side}.risk.unstuck.{key}_minutes"] == expected
+    assert isinstance(migrated[f"bot.{side}.risk.unstuck.{key}_minutes"], float)
 
 
 def test_optimizer_paths_keep_strategy_and_unstuck_spans_separate():
     from optimization.config_adapter import get_optimization_key_paths
 
     paths = dict(get_optimization_key_paths(get_expanded_config_prototype()))
-    assert paths["long_unstuck_ema_span_0_minutes"] == ("bot", "long", "unstuck", "ema_span_0_minutes")
+    assert paths["long_unstuck_ema_span_0_minutes"] == ("bot", "long", "risk", "unstuck", "ema_span_0_minutes")
     assert paths["long_entry_ema_span_0_minutes"] == (
         "bot",
         "long",
@@ -349,7 +348,7 @@ def test_optimizer_rejects_nonpositive_or_nonfinite_span_bounds(bounds):
     from optimization.config_adapter import get_optimization_key_paths
 
     c = get_expanded_config_prototype()
-    c["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0_minutes"] = bounds
+    c["optimize"]["bounds"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] = bounds
     with pytest.raises(ValueError):
         get_optimization_key_paths(c)
 
@@ -372,7 +371,7 @@ def test_legacy_coin_flags_file_spans_are_preserved(tmp_path):
     resolved = parse_overrides(
         _load_explicitly_migrated_file(path), verbose=False
     )
-    assert resolved["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"] == {
+    assert resolved["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"] == {
         "ema_span_0_minutes": 41.25,
         "ema_span_1_minutes": 111.5,
     }
@@ -382,7 +381,7 @@ def test_zero_span_on_disabled_legacy_side_warns_and_gets_positive_default(caplo
     c = legacy_config()
     c["bot"]["short"]["strategy"]["trailing_martingale"]["ema_span_0"] = 0
     prepared = _prepare_explicitly_migrated(c)
-    assert prepared["bot"]["short"]["unstuck"]["ema_span_0_minutes"] > 0
+    assert prepared["bot"]["short"]["risk"]["unstuck"]["ema_span_0_minutes"] > 0
     assert "Cannot copy zero strategy span" in caplog.text
     assert "review spans before enabling" in caplog.text
 
@@ -392,8 +391,8 @@ def test_missing_legacy_bounds_warn_about_implicitly_coupled_search(caplog):
     c["optimize"]["bounds"] = {}
     prepared = _prepare_explicitly_migrated(c)
     assert "1-to-1 optimizer-search migration is impossible" in caplog.text
-    value = prepared["bot"]["long"]["unstuck"]["ema_span_0_minutes"]
-    assert prepared["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0_minutes"] == [
+    value = prepared["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"]
+    assert prepared["optimize"]["bounds"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == [
         value,
         value,
     ]
@@ -408,7 +407,7 @@ def test_zero_span_on_disabled_legacy_coin_override_warns_and_migrates(caplog):
     }
     prepared = parse_overrides(_prepare_explicitly_migrated(c), verbose=False)
     assert (
-        prepared["coin_overrides"]["BTC"]["bot"]["short"]["unstuck"]["ema_span_0_minutes"] > 0
+        prepared["coin_overrides"]["BTC"]["bot"]["short"]["risk"]["unstuck"]["ema_span_0_minutes"] > 0
     )
     assert (
         "Cannot copy zero strategy span to coin_overrides.BTC.bot.short.unstuck.ema_span_0"
@@ -425,7 +424,7 @@ def test_omitted_legacy_bounds_are_fixed_after_hydration(omitted, caplog):
         del c["optimize"]
     c["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 403.5
     prepared = _prepare_explicitly_migrated(c)
-    assert prepared["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0_minutes"] == [
+    assert prepared["optimize"]["bounds"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == [
         403.5,
         403.5,
     ]
@@ -445,7 +444,7 @@ def test_inactive_coin_wel_zero_span_migrates(caplog):
         }
     }
     prepared = parse_overrides(_prepare_explicitly_migrated(c), verbose=False)
-    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"] > 0
+    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] > 0
     assert "Cannot copy zero strategy span" in caplog.text
 
 
@@ -479,7 +478,7 @@ def test_nested_scenario_spans_migrate_and_explicit_unstuck_wins(explicit):
     overrides = _normalize_scenario_overrides(
         prepared["backtest"]["scenarios"][0]["overrides"]
     )
-    assert overrides["bot.long.unstuck.ema_span_0_minutes"] == (91.5 if explicit else 400.5)
+    assert overrides["bot.long.risk.unstuck.ema_span_0_minutes"] == (91.5 if explicit else 400.5)
 
 
 @pytest.mark.parametrize("toggle", ["enabled", "ema_gating_enabled"])
@@ -492,17 +491,17 @@ def test_disabled_unstuck_warmup_ignores_values_and_bounds_but_honors_coin_activ
     c['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     for side in ("long", "short"):
-        c["bot"][side]["unstuck"][toggle] = False
+        c["bot"][side]["risk"]["unstuck"][toggle] = False
     baseline = compute_backtest_warmup_minutes(c)
     baseline_coin = compute_per_coin_warmup_minutes(c)["__default__"]
     for side in ("long", "short"):
-        c["bot"][side]["unstuck"].update(ema_span_0_minutes=400_000.0, ema_span_1_minutes=500_000.0)
-        c["optimize"]["bounds"][side]["unstuck"].update(
+        c["bot"][side]["risk"]["unstuck"].update(ema_span_0_minutes=400_000.0, ema_span_1_minutes=500_000.0)
+        c["optimize"]["bounds"][side]["risk"]["unstuck"].update(
             ema_span_0_minutes=[10, 600_000], ema_span_1_minutes=[10, 700_000]
         )
     assert compute_backtest_warmup_minutes(c) == baseline
     assert compute_per_coin_warmup_minutes(c)["__default__"] == baseline_coin
-    c["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {toggle: True}}}}}
+    c["coin_overrides"] = {"BTC": {"bot": {"long": {"risk": {"unstuck": {toggle: True}}}}}}
     assert compute_backtest_warmup_minutes(c) == 700_000
     assert compute_per_coin_warmup_minutes(c)["BTC"] == 500_000
 
@@ -553,8 +552,8 @@ def test_legacy_fixed_strategy_bound_preserves_optimizer_unstuck_span(key, bound
     c["bot"]["long"]["strategy"]["trailing_martingale"][key] = 401.5
     c["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"][key] = bound
     prepared = _prepare_explicitly_migrated(c)
-    assert prepared["bot"]["long"]["unstuck"][f"{key}_minutes"] == 401.5
-    assert prepared["optimize"]["bounds"]["long"]["unstuck"][f"{key}_minutes"] == [199.25, 199.25]
+    assert prepared["bot"]["long"]["risk"]["unstuck"][f"{key}_minutes"] == 401.5
+    assert prepared["optimize"]["bounds"]["long"]["risk"]["unstuck"][f"{key}_minutes"] == [199.25, 199.25]
 
 
 @pytest.mark.parametrize("bound", [0, [0], [0, 0]])
@@ -564,35 +563,35 @@ def test_legacy_inactive_zero_fixed_bound_gets_positive_fallback(caplog, bound):
         "ema_span_0"
     ] = bound
     prepared = _prepare_explicitly_migrated(c)
-    assert prepared["optimize"]["bounds"]["short"]["unstuck"]["ema_span_0_minutes"][0] > 0
+    assert prepared["optimize"]["bounds"]["short"]["risk"]["unstuck"]["ema_span_0_minutes"][0] > 0
     assert "optimize.bounds.short.unstuck.ema_span_0" in caplog.text
 
 
-@pytest.mark.parametrize("control", ["loss_allowance_fraction", "close_fraction", "exposure_trigger_ratio"])
+@pytest.mark.parametrize("control", ["loss_allowance_fraction", "exposure_trigger_ratio"])
 def test_inactive_unstuck_warmup_respects_optimizer_reactivation_and_coin_pins(control):
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_expanded_config_prototype()
     c['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
-    c["bot"]["short"]["unstuck"]["enabled"] = False
-    c["bot"]["long"]["unstuck"][control] = 0.0
-    c["optimize"]["bounds"]["long"]["unstuck"][control] = [0, 0, 1]
+    c["bot"]["short"]["risk"]["unstuck"]["enabled"] = False
+    c["bot"]["long"]["risk"]["unstuck"][control] = 0.0
+    c["optimize"]["bounds"]["long"]["risk"]["unstuck"][control] = [0, 0, 1]
     baseline = compute_backtest_warmup_minutes(c)
     baseline_coin = compute_per_coin_warmup_minutes(c)["__default__"]
-    c["bot"]["long"]["unstuck"].update(ema_span_0_minutes=400_000, ema_span_1_minutes=500_000)
-    c["optimize"]["bounds"]["long"]["unstuck"].update(
+    c["bot"]["long"]["risk"]["unstuck"].update(ema_span_0_minutes=400_000, ema_span_1_minutes=500_000)
+    c["optimize"]["bounds"]["long"]["risk"]["unstuck"].update(
         ema_span_0_minutes=[10, 600_000], ema_span_1_minutes=[10, 700_000]
     )
     assert compute_backtest_warmup_minutes(c) == baseline
     assert compute_per_coin_warmup_minutes(c)["__default__"] == baseline_coin
-    c["optimize"]["bounds"]["long"]["unstuck"][control] = [0, 0.1]
-    c["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {control: 0}}}}}
+    c["optimize"]["bounds"]["long"]["risk"]["unstuck"][control] = [0, 0.1]
+    c["coin_overrides"] = {"BTC": {"bot": {"long": {"risk": {"unstuck": {control: 0}}}}}}
     assert compute_backtest_warmup_minutes(c) == 700_000
     assert compute_per_coin_warmup_minutes(c)["__default__"] == 500_000
     assert compute_per_coin_warmup_minutes(c)["BTC"] == baseline_coin
-    c["optimize"]["bounds"]["long"]["unstuck"][control] = [0, 0]
-    c["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"][control] = 0.1
+    c["optimize"]["bounds"]["long"]["risk"]["unstuck"][control] = [0, 0]
+    c["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"][control] = 0.1
     assert compute_backtest_warmup_minutes(c) == 700_000
     assert compute_per_coin_warmup_minutes(c)["BTC"] == 500_000
 
@@ -613,16 +612,16 @@ def test_zero_exposure_unstuck_warmup_reserves_only_reactivatable_sides(side, bo
     c['bot']["portfolio"]['warmup']['activation_span_fraction'] = 1.0
     c['bot']["portfolio"]['warmup']['max_minutes'] = 1000000
     opposite = "short" if side == "long" else "long"
-    c["bot"][opposite]["unstuck"]["enabled"] = False
+    c["bot"][opposite]["risk"]["unstuck"]["enabled"] = False
     c["bot"][side]["risk"]["total_wallet_exposure_limit_ratio"] = 0
-    c["bot"][side]["unstuck"].update(
-        enabled=True, loss_allowance_fraction=0.1, close_fraction=0.1, exposure_trigger_ratio=0.9
+    c["bot"][side]["risk"]["unstuck"].update(
+        enabled=True, loss_allowance_fraction=0.1, exposure_trigger_ratio=0.9
     )
     c["optimize"]["bounds"][side]["risk"]["total_wallet_exposure_limit_ratio"] = bound
     baseline = compute_backtest_warmup_minutes(c)
     baseline_coin = compute_per_coin_warmup_minutes(c)["__default__"]
-    c["bot"][side]["unstuck"].update(ema_span_0_minutes=400_000, ema_span_1_minutes=500_000)
-    c["optimize"]["bounds"][side]["unstuck"].update(
+    c["bot"][side]["risk"]["unstuck"].update(ema_span_0_minutes=400_000, ema_span_1_minutes=500_000)
+    c["optimize"]["bounds"][side]["risk"]["unstuck"].update(
         ema_span_0_minutes=[10, 600_000, None], ema_span_1_minutes=[10, 700_000, None]
     )
     assert compute_backtest_warmup_minutes(c) == baseline
@@ -697,11 +696,11 @@ def test_inactive_scenario_zero_span_migration_uses_positive_fallback(
     scenario_overrides = _normalize_scenario_overrides(
         prepared["backtest"]["scenarios"][0]["overrides"]
     )
-    assert scenario_overrides["bot.short.unstuck.ema_span_0_minutes"] > 0
+    assert scenario_overrides["bot.short.risk.unstuck.ema_span_0_minutes"] > 0
     scenario = deepcopy(prepared)
     _apply_config_overrides(scenario, scenario_overrides)
     assert (
-        prepare_config(scenario, verbose=False)["bot"]["short"]["unstuck"]["ema_span_0_minutes"]
+        prepare_config(scenario, verbose=False)["bot"]["short"]["risk"]["unstuck"]["ema_span_0_minutes"]
         > 0
     )
     assert "scenario 'inactive'" in caplog.text
@@ -724,7 +723,7 @@ def test_zero_wel_coin_does_not_require_unstuck_warmup_band(side):
             "bot": {
                 side: {
                     "wallet_exposure_limit_ratio": 0,
-                    "unstuck": {"ema_span_0_minutes": 500_000.5},
+                    "risk": {"unstuck": {"ema_span_0_minutes": 500_000.5}},
                 }
             }
         }
@@ -746,8 +745,8 @@ def test_zero_slot_unstuck_warmup_preserves_optimizer_reactivation(side):
     c["optimize"]["bounds"][side]["risk"]["max_positions"] = [0, 0]
     baseline = compute_backtest_warmup_minutes(c)
     baseline_coin = compute_per_coin_warmup_minutes(c)["__default__"]
-    c["bot"][side]["unstuck"].update(ema_span_0_minutes=400_000, ema_span_1_minutes=500_000)
-    c["optimize"]["bounds"][side]["unstuck"].update(
+    c["bot"][side]["risk"]["unstuck"].update(ema_span_0_minutes=400_000, ema_span_1_minutes=500_000)
+    c["optimize"]["bounds"][side]["risk"]["unstuck"].update(
         ema_span_0_minutes=[10, 600_000], ema_span_1_minutes=[10, 700_000]
     )
     assert compute_backtest_warmup_minutes(c) == baseline

@@ -35,7 +35,7 @@ def _flat_inputs(strategy, sides):
         # Resting entries stay strictly outside every flat candle. No fills are
         # an explicit witness, rather than an assumption about strategy defaults.
         bot = config["bot"][side]
-        bot["unstuck"]["enabled"] = False
+        bot["risk"]["unstuck"]["enabled"] = False
         if strategy == "ema_anchor":
             bot["strategy"][strategy]["offset_fraction"] = .01
         else:
@@ -145,17 +145,17 @@ def _red_delist_inputs(strategy, side, prior_partial):
     config = generated_template(config, "portfolio")
     config["bot"]["portfolio"]["strategy_kind"] = strategy
     config["bot"]["portfolio"]["execution"]["market_orders_allowed"] = False
-    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 1.0
+    config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] = {"enabled": False}
     config["backtest"].update(hsl_detailed_report=True, market_order_slippage_fraction=0.0,
                               maker_fee_override_fraction=0.0, taker_fee_override_fraction=0.0)
-    config["bot"]["portfolio"]["hsl"].update(
+    config["bot"]["portfolio"]["risk"]["hsl"].update(
         enabled=True, drawdown_threshold_fraction=.002,
         drawdown_fraction_ema_span_minutes=1.0, cooldown_after_red_minutes=10000.0,
         panic_close_order_type="limit")
     set_risk_memory_spans(config, 1440.0)
     for direction in ("long", "short"):
         bot = config["bot"][direction]
-        bot["hsl"]["enabled"] = False
+        bot["risk"]["hsl"]["enabled"] = False
         bot["risk"]["total_exposure_enforcer"]["enabled"] = False
         bot["risk"]["position_exposure_enforcer"]["enabled"] = False
         bot["entry_cooldown"]["base_duration_minutes"] = 10000.0

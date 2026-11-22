@@ -24,8 +24,8 @@ def coupled_inputs(manager, strategy, *, pinned=True, coupled=True):
     config['bot']["portfolio"]['strategy_kind'] = strategy
     for side in ("long", "short"):
         config["bot"][side]["strategy"] = deepcopy(fixture["bot"][side]["strategy"])
-        config["bot"][side]["unstuck"].update(
-            enabled=True, ema_gating_enabled=True, exposure_trigger_ratio=0.0, loss_allowance_fraction=0.1,
+        config["bot"][side]["risk"]["unstuck"].update(
+            enabled=False, ema_gating_enabled=True, exposure_trigger_ratio=0.0, loss_allowance_fraction=0.1,
         )
         config["optimize"]["bounds"][side]["strategy"] = {strategy: {}}
     strategy_bounds = {"ema_span_0_minutes": [2.0, 20.0]}
@@ -33,14 +33,14 @@ def coupled_inputs(manager, strategy, *, pinned=True, coupled=True):
         strategy_bounds = {"entry": strategy_bounds}
     config["optimize"]["bounds"]["long"]["strategy"][strategy] = strategy_bounds
     config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"] if coupled else []
-    config["coin_overrides"] = {"COIN01": {"bot": {"long": {"unstuck": {"close_fraction": 0.05}}}}}
+    config["coin_overrides"] = {"COIN01": {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.05}}}}}}
     if pinned:
         pin = {"ema_span_0_minutes": 7.5}
         if strategy == "trailing_martingale":
             pin = {"entry": pin}
         config["coin_overrides"]["COIN02"] = {"bot": {"long": {"strategy": {strategy: pin}}}}
     if not coupled:
-        config["coin_overrides"]["COIN01"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = 9.0
+        config["coin_overrides"]["COIN01"]["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] = 9.0
     columns = deepcopy(config["backtest"]["coins"])
     config = prepare_config(clean_config(config), verbose=False)
     config["backtest"]["coins"] = columns
@@ -70,6 +70,37 @@ def registry_for(base, suite):
     })
 
 
+@pytest.mark.parametrize(
+    "policy, error",
+    [
+        ("gate", "realized-loss close sizing"),
+        ("side_unstuck", "unstuck exposure sizing"),
+        ("coin_unstuck", "unstuck exposure sizing"),
+    ],
+)
+def test_gpu_rejects_unsupported_v9_close_sizing(policy, error):
+    from config.gpu import validate_gpu_backtest_config
+    from tools.gpu_parity import build_parser, fixture_inputs
+
+    config, *_ = fixture_inputs(build_parser().parse_args([
+        "--fixture", "trailing_martingale", "--sides", "long", "--coins", "2", "--bars", "128",
+    ]))
+    gate = config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]
+    gate.update(enabled=False, max_realized_drawdown_fraction=0.0)
+    validate_gpu_backtest_config(config)
+
+    if policy == "gate":
+        gate["enabled"] = True
+    elif policy == "side_unstuck":
+        config["bot"]["long"]["risk"]["unstuck"]["enabled"] = True
+    else:
+        config["coin_overrides"] = {
+            "COIN00": {"bot": {"long": {"risk": {"unstuck": {"enabled": True}}}}},
+        }
+    with pytest.raises(ValueError, match=error):
+        validate_gpu_backtest_config(config)
+
+
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("suite", [False, True])
 @pytest.mark.parametrize("pinned", [False, True])
@@ -93,10 +124,10 @@ def test_coupled_coin_spans_reuse_views_but_preserve_request_identity(monkeypatc
             for _identity, dataset in registered:
                 runtime = json.loads(dataset.config_json)
                 assert "optimize" not in runtime and "_optimizer_anchor" not in runtime
-                inherited = runtime["coin_overrides"]["COIN01"]["bot"]["long"]["unstuck"]
+                inherited = runtime["coin_overrides"]["COIN01"]["bot"]["long"]["risk"]["unstuck"]
                 assert "ema_span_0_minutes" not in inherited and "ema_span_1_minutes" not in inherited
                 if pinned:
-                    pin = runtime["coin_overrides"]["COIN02"]["bot"]["long"]["unstuck"]
+                    pin = runtime["coin_overrides"]["COIN02"]["bot"]["long"]["risk"]["unstuck"]
                     assert pin["ema_span_0_minutes"] == 7.5 and "ema_span_1_minutes" not in pin
             if pinned:
                 pin = base.config["coin_overrides"]["COIN02"]["bot"]["long"]["strategy"][strategy]
@@ -114,7 +145,7 @@ def test_uncoupled_coin_spans_remain_dataset_owned(monkeypatch, strategy):
         base = coupled_inputs(manager, strategy, coupled=False)
         with registry_for(base, False) as registry:
             registry.planner.prepare("original", candidate(base, 2.0))
-            base.config["coin_overrides"]["COIN01"]["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = 10.0
+            base.config["coin_overrides"]["COIN01"]["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] = 10.0
             with pytest.raises(ValueError, match="dataset-owned execution inputs"):
                 registry.planner.prepare("changed", candidate(base, 2.0))
 

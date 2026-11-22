@@ -52,7 +52,6 @@ def bot_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
         "risk_twel_enforcer_threshold_ratio",
         "risk_we_excess_allowance_fraction",
         "unstuck_enabled",
-        "unstuck_close_fraction",
         "unstuck_ema_gating_enabled",
         "unstuck_ema_distance_fraction",
         "unstuck_ema_span_0_minutes",

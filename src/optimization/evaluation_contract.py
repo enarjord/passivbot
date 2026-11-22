@@ -15,7 +15,7 @@ from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
 from config.prefilter import PREFILTER_VERSION, prefilter_enabled, resolve_prefilter
 from config.metrics import CORE_METRIC_DEFINITION_VERSION
 
-CONTRACT_VERSION = 11
+CONTRACT_VERSION = 12
 CONTRACT_KEY = "optimizer_evaluation_contract"
 CONTRACT_CACHE_KEY = "_optimizer_evaluation_contract"
 
@@ -90,7 +90,7 @@ def build_evaluation_contract(config: dict) -> dict:
         ]:
             for side in ("long", "short"):
                 for key in ("ema_span_0_minutes", "ema_span_1_minutes"):
-                    bot.get(side, {}).get("unstuck", {}).pop(key, None)
+                    bot.get(side, {}).get("risk", {}).get("unstuck", {}).pop(key, None)
     for key in bounds:
         path = resolve_optimizer_key_path(effective, key)
         if path is not None:
@@ -128,7 +128,7 @@ def build_evaluation_contract(config: dict) -> dict:
         "age_admission": "side_initial_entry_v1",
         "side_activation": "explicit_side_initial_and_dca_v1",
         "forager_hysteresis": {"abi": 1, "policy": hysteresis},
-        "risk_model": "v9_independent_loss_memories_currency_drawdown_ratio_ema_finite_cooldown",
+        "risk_model": "v9_shared_realized_loss_memory_close_allocation_hsl_drawdown_ema",
         "coupled_unstuck_ema_spans": coupled,
         "implementation": deepcopy(evaluation_implementation_identity()),
         "prepared_data": deepcopy(config.get("_optimizer_prepared_dataset_identity")),

@@ -45,12 +45,12 @@ def test_actual_registry_and_fast_planner_fan_out_global_gene(kind, independent_
     raw["bot"]["global"].pop("enabled")
     for side in ("long", "short"):
         raw["bot"][side] = {"enabled": original["bot"][side]["enabled"]}
-    raw["optimize"]["bounds"] = {"global": {"unstuck": {"close_fraction": [0.02, 0.08]}}}
+    raw["optimize"]["bounds"] = {"global": {"risk": {"unstuck": {"loss_allowance_fraction": [0.02, 0.08]}}}}
     if independent_short:
-        raw["optimize"]["bounds"]["short"] = {"unstuck": {"close_fraction": [0.04, 0.09]}}
+        raw["optimize"]["bounds"]["short"] = {"risk": {"unstuck": {"loss_allowance_fraction": [0.04, 0.09]}}}
     if topology_search:
         raw["bot"]["short"]["risk"] = {"total_wallet_exposure_limit_ratio": 1.0}
-        raw["optimize"]["bounds"]["global"]["risk"] = {"total_wallet_exposure_limit_ratio": [0.0, 1.0]}
+        raw["optimize"]["bounds"]["global"]["risk"]["total_wallet_exposure_limit_ratio"] = [0.0, 1.0]
     config = prepare_config(raw, verbose=False)
     config["backtest"]["coins"] = deepcopy(original["backtest"]["coins"])
     manager = SharedArrayManager()
@@ -67,25 +67,25 @@ def test_actual_registry_and_fast_planner_fan_out_global_gene(kind, independent_
         vector = config_to_individual(evaluator.config, evaluator.bounds,
                                       optimization_shape=evaluator.optimization_shape)
         keys = [key for key, _ in evaluator.key_paths]
-        vector[keys.index("bot.global.unstuck.close_fraction")] = 0.07
+        vector[keys.index("bot.global.risk.unstuck.loss_allowance_fraction")] = 0.07
         if independent_short:
-            vector[keys.index("bot.short.unstuck.close_fraction")] = 0.055
+            vector[keys.index("bot.short.risk.unstuck.loss_allowance_fraction")] = 0.055
         if topology_search:
             vector[keys.index("bot.global.risk.total_wallet_exposure_limit_ratio")] = 1.0
         first = planner.prepare("first", vector)
         assert len(first.requests) == 1
         parameters = first.requests[0].parameters
-        assert parameters["long_unstuck_close_fraction"] == 0.07
-        assert parameters["short_unstuck_close_fraction"] == (0.055 if independent_short else 0.07)
+        assert parameters["long_unstuck_loss_allowance_fraction"] == 0.07
+        assert parameters["short_unstuck_loss_allowance_fraction"] == (0.055 if independent_short else 0.07)
         assert not any(key.startswith("bot.global") for key in parameters)
         # The second call exercises the exact owned-class projection cache.
-        vector[keys.index("bot.global.unstuck.close_fraction")] = 0.06
+        vector[keys.index("bot.global.risk.unstuck.loss_allowance_fraction")] = 0.06
         if topology_search:
             vector[keys.index("bot.global.risk.total_wallet_exposure_limit_ratio")] = 0.0
         second = planner.prepare("second", vector)
-        assert second.requests[0].parameters["long_unstuck_close_fraction"] == 0.06
+        assert second.requests[0].parameters["long_unstuck_loss_allowance_fraction"] == 0.06
         assert len(registry.bindings) == (2 if topology_search else 1)
-        assert "unstuck" not in universe_source_view(second.record_config)["bot"].get("long", {})
+        assert "unstuck" not in universe_source_view(second.record_config)["bot"].get("long", {}).get("risk", {})
     finally:
         if registry is not None:
             registry.close()

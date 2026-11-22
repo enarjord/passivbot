@@ -32,7 +32,7 @@ def runtime_metadata(key):
 def source_config():
     config = get_expanded_config_prototype()
     config["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"unstuck": {"exposure_trigger_ratio": 0.7}}}}
+        "BTC": {"bot": {"long": {"risk": {"unstuck": {"exposure_trigger_ratio": 0.7}}}}}
     }
     return config
 
@@ -53,7 +53,7 @@ def test_runtime_metadata_survives_coin_policy_validation_without_mutation(key):
     assert parsed[key] == before[key]
     if isinstance(config[key], dict):
         assert parsed[key] is not config[key]
-    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"][
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"][
         "exposure_trigger_ratio"
     ] == 0.7
 
@@ -89,7 +89,7 @@ def test_internal_unknown_fields_are_not_hidden_by_runtime_projection(key):
 def test_runtime_metadata_does_not_authorize_unknown_coin_patch_fields():
     config = prepared_config()
     config["_optimizer_prepared_dataset_identity"] = {"sentinel": True}
-    config["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["_optimizer_typo"] = True
+    config["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["_optimizer_typo"] = True
     before = deepcopy(config)
 
     with pytest.raises(ValueError, match="_optimizer_typo.*not overridable"):
@@ -128,7 +128,7 @@ def test_evaluation_contract_retains_prepared_identity_and_normalized_coin_polic
         "key_paths": [fixed_path],
         "anchors": [[{"path": fixed_path, "value": fixed_value}]],
     }
-    assert first["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"][
+    assert first["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"][
         "exposure_trigger_ratio"
     ] == 0.7
     changed = deepcopy(config)

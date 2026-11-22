@@ -453,15 +453,13 @@ mod tests {
     }
 
     #[test]
-    fn realized_memory_consumers_have_separate_rates_and_one_economic_ledger() {
+    fn realized_memory_consumers_share_one_rate_and_economic_ledger() {
         let source = MPS_MULTICOIN_COMMON_SOURCE;
-        assert!(source.contains("RealizedDecayMemory unstuck_memory"));
-        assert!(source.contains("RealizedDecayMemory loss_gate_memory"));
-        assert!(source.contains("if (account.unstuck_memory.enabled)"));
-        assert!(source.contains("if (account.loss_gate_memory.enabled)"));
+        assert!(source.contains("RealizedDecayMemory realized_memory"));
+        assert!(source.contains("if (account.realized_memory.enabled)"));
         assert_eq!(
             source.matches("hsl_decay_realized_fill(net_pnl,").count(),
-            2
+            1
         );
         assert_eq!(source.matches("account.balance = next;").count(), 1);
         assert_eq!(
@@ -470,7 +468,7 @@ mod tests {
                 .count(),
             1
         );
-        assert!(source.contains("account.balance, fraction, account.loss_gate_memory.drawdown"));
+        assert!(source.contains("account.balance, fraction, account.realized_memory.drawdown"));
     }
 
     #[test]

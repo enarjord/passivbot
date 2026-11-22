@@ -40,9 +40,9 @@ async def test_candidate_native_surfaces_recover_without_admitted_ordinary_plan(
     bot.config = get_expanded_config_prototype()
     bot.config['live']['candles']['max_ohlcv_fetches_per_minute'] = 8
     bot.config['bot']['portfolio']['warmup']['max_minutes'] = None
-    bot.config['bot']['portfolio']['hsl']['scope'] = 'coin'
+    bot.config['bot']['portfolio']['risk']['hsl']['scope'] = 'coin'
     for side in ('long', 'short'):
-        bot.config['bot'][side]['hsl']['enabled'] = False
+        bot.config['bot'][side]['risk']['hsl']['enabled'] = False
     bot.coin_overrides = {}
     bot.stop_signal_received = bot._shutdown_in_progress = False
     bot.ws_enabled = False

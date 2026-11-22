@@ -31,7 +31,9 @@ policy = dict(enabled=False, drawdown_threshold_fraction=0.1, ema_span_minutes=3
 payload = SimpleNamespace(
     strategy_params_list=[{"long": {"offset_fraction": 0.125}}],
     bot_params_list=[{"long": {"n_positions": 1}}],
-    backtest_params={"coins": ["COIN"], "dynamic_wel_by_tradability": True, "lookback_ema_span_minutes": 1440.0,
+    backtest_params={"coins": ["COIN"], "dynamic_wel_by_tradability": True,
+                     "realized_loss_memory_ema_span_minutes": 1440.0,
+                     "loss_gate_enabled": False, "loss_gate_max_drawdown_fraction": None,
                      "equity_hard_stop_loss": {"engine": "hsl", "mode": "coin",
                                                "coins": {"COIN": [policy, policy]}}},
 )
@@ -70,8 +72,8 @@ def test_canonical_coin_unstuck_trigger_matches_cpu_payload(strategy, side, trig
     for coin in coins:
         markets[coin]["symbol"] = f"{coin}/USDT:USDT"
     global_trigger = 0.5
-    config["bot"][side]["unstuck"]["exposure_trigger_ratio"] = global_trigger
-    patch = {"bot": {side: {"unstuck": {"exposure_trigger_ratio": trigger}}}}
+    config["bot"][side]["risk"]["unstuck"]["exposure_trigger_ratio"] = global_trigger
+    patch = {"bot": {side: {"risk": {"unstuck": {"exposure_trigger_ratio": trigger}}}}}
     config["coin_overrides"] = {coins[0]: patch}
     payload = build_backtest_payload(candles, markets, config, "binance", btc, timestamps)
     assert payload.bot_params_list[0][side]["unstuck_exposure_trigger_ratio"] == trigger

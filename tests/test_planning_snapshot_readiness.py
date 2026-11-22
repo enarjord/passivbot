@@ -137,8 +137,8 @@ async def run_fake(tmp_path, monkeypatch, exercise):
     canonical = prepare_config(load_fake_hsl_config(), target="canonical", runtime=None, verbose=False)
     cfg = generated_template(mutable_runtime_fixture(canonical), "coin")
     for side in ("long", "short"):
-        cfg["bot"][side]["hsl"]["enabled"] = False
-        cfg["bot"][side]["unstuck"]["enabled"] = False
+        cfg["bot"][side]["risk"]["hsl"]["enabled"] = False
+        cfg["bot"][side]["risk"]["unstuck"]["enabled"] = False
     config = tmp_path / "config.json"
     config.write_text(json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")}))
     scenario = hjson.loads((REPO_ROOT / "scenarios/fake_live/hsl_long_red_restart.hjson").read_text())

@@ -1175,9 +1175,6 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
             "configured_loss_allowance_fraction": float(
                 self.bot_value(pside, "unstuck_loss_allowance_fraction") or 0.0
             ),
-            "configured_close_fraction": float(
-                self.bot_value(pside, "unstuck_close_fraction") or 0.0
-            ),
             "configured_exposure_trigger_ratio": float(
                 self.bot_value(pside, "unstuck_exposure_trigger_ratio") or 0.0
             ),
@@ -1216,6 +1213,16 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
         out["sides"][pside] = side_payload
     from live.unstuck_diagnostics import snapshot
     out["decision"] = snapshot(self, utc_ms())
+    from config.risk_memory import require_loss_realization_policy
+    span, enabled, cap = require_loss_realization_policy(self.config)
+    memory = getattr(self, "_realized_loss_memory_diagnostics", None)
+    out["loss_realization"] = {
+        "memory_ema_span_minutes": span,
+        "loss_gate_enabled": enabled,
+        "loss_gate_max_drawdown_fraction": cap,
+        "drawdown": memory["drawdown"] if memory is not None else None,
+    }
+    out["close_allocation"] = getattr(self, "_monitor_close_allocation", None)
     return out
 
 
@@ -1381,6 +1388,13 @@ def _update_monitor_runtime_hints(
     self._monitor_runtime_m1_log_range_emas = deepcopy(m1_log_range_emas)
     self._monitor_runtime_h1_log_range_emas = deepcopy(h1_log_range_emas)
     self._monitor_runtime_indicator_captured_at_ms = captured_at_ms
+    allocations = (diagnostics or {}).get("close_allocations", [])
+    self._monitor_close_allocation = {
+        "count": len(allocations),
+        "sample": [
+            {**row, "symbol": idx_to_symbol[row["symbol_idx"]]} for row in allocations[:12]
+        ],
+    }
     self._monitor_runtime_unstuck_hints = self._build_monitor_runtime_unstuck_hints(
         idx_to_symbol,
         orders,

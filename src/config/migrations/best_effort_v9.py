@@ -3,7 +3,9 @@
 from copy import deepcopy
 import logging
 
-from config.risk_memory import DEFAULT_LOOKBACK_EMA_SPAN_MINUTES, normalize_lookback_ema_span_minutes
+from config.risk_memory import normalize_lookback_ema_span_minutes
+
+DEFAULT_LOOKBACK_EMA_SPAN_MINUTES = 43_200.0
 from config.result_records import (
     RESULT_METADATA_KEYS,
     RESULT_RUNTIME_BACKTEST_KEYS,

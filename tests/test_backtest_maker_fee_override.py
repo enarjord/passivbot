@@ -155,27 +155,32 @@ def test_prep_backtest_args_uses_market_orders_allowed_from_live():
     assert backtest_params["market_orders_allowed"] is True
 
 
-def test_prep_backtest_args_preserves_independent_risk_memory_without_rolling_gate_transport():
+def test_prep_backtest_args_transports_shared_realized_memory_once():
     config = _base_config()
-    config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 1234.5
-    config["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 2345.5
+    config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] = 1234.5
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
-    assert backtest_params["unstuck_memory_ema_span_minutes"] == 1234.5
-    assert backtest_params["loss_gate_memory_ema_span_minutes"] == 2345.5
+    assert backtest_params["realized_loss_memory_ema_span_minutes"] == 1234.5
+    assert backtest_params["loss_gate_enabled"] is False
+    assert backtest_params["loss_gate_max_drawdown_fraction"] is None
+    assert "unstuck_memory_ema_span_minutes" not in backtest_params
+    assert "loss_gate_memory_ema_span_minutes" not in backtest_params
     assert "lookback_ema_span_minutes" not in backtest_params
     assert "realized_loss_gate_lookback_minutes" not in backtest_params
     assert "pnls_max_lookback_days" not in backtest_params
 
 
-def test_prep_backtest_args_preserves_active_gate_ratio_and_its_span():
+def test_prep_backtest_args_preserves_active_gate_cap_and_shared_span():
     config = _base_config()
-    config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.1
+    config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] = {
+        "enabled": True, "max_realized_drawdown_fraction": 0.1,
+    }
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    assert backtest_params["loss_gate_enabled"] is True
     assert backtest_params["loss_gate_max_drawdown_fraction"] == 0.1
     assert "realized_loss_gate_lookback_minutes" not in backtest_params
-    assert backtest_params["loss_gate_memory_ema_span_minutes"] == 43200.0
+    assert backtest_params["realized_loss_memory_ema_span_minutes"] == 85511.137
     assert "pnls_max_lookback_days" not in backtest_params
 
 
@@ -278,17 +283,19 @@ def test_zero_coin_wallet_override_preserves_side_total_exposure():
 
 def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
     config = _multi_coin_config()
-    config["bot"]["portfolio"]["hsl"]["scope"] = "coin"
-    config["bot"]["long"]["hsl"]["enabled"] = False
-    config["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] = 0.2
+    config["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "coin"
+    config["bot"]["long"]["risk"]["hsl"]["enabled"] = False
+    config["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] = 0.2
     config["coin_overrides"] = {
         "BTC/USDT:USDT": {
             "bot": {
                 "long": {
-                    "hsl": {
-                        "enabled": True,
-                        "drawdown_threshold_fraction": 0.01,
-                    }
+                    "risk": {
+                        "hsl": {
+                            "enabled": True,
+                            "drawdown_threshold_fraction": 0.01,
+                        },
+                    },
                 }
             }
         }
@@ -435,8 +442,8 @@ def test_log_backtest_execution_settings_emits_summary(caplog):
     assert "market_order_near_touch_fraction =" in caplog.text
     assert "(bot.portfolio.execution)" in caplog.text
     assert "market_order_near_touch_threshold =" not in caplog.text
-    assert "unstuck_memory_ema_span_minutes" in caplog.text
-    assert "loss_gate_memory_ema_span_minutes" in caplog.text
+    assert "realized_loss_memory_ema_span_minutes" in caplog.text
+    assert "gate_enabled=False gate_cap=None" in caplog.text
     assert "realized_loss_gate_lookback_minutes" not in caplog.text
     assert "pnls_max_lookback_days" not in caplog.text
 

@@ -28,9 +28,10 @@ def test_both_shared_account_strategies_bootstrap_once_at_the_usable_boundary():
         assert f"update_{prefix}_multicoin_side_indicators" in source
 
 
-def test_risk_memories_keep_their_zero_seed_contract():
+def test_shared_realized_memory_keeps_its_zero_seed_contract():
     source = COMMON.read_text()
-    assert "account.unstuck_memory.drawdown = account.loss_gate_memory.drawdown = 0.0f" in source
+    assert "account.realized_memory.drawdown = 0.0f" in source
+    assert "account.realized_memory.enabled = false" in source
 
 
 @pytest.mark.parametrize("span,kind,k,first,values,hours,expected", [

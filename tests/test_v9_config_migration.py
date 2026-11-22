@@ -54,8 +54,10 @@ def test_v8_gate_window_removal_requires_separate_ack_and_explicit_memory(window
         migrate(source, memory_span_minutes=12.5)
     result = migrate(source, memory_span_minutes=12.5,
                      acknowledge_realized_loss_gate_memory_change=True)
-    assert result.config["bot"]["portfolio"]["loss_gate"] == {
-        "max_drawdown_fraction": fraction, "memory_ema_span_minutes": 12.5}
+    assert result.config["bot"]["portfolio"]["risk"]["loss_realization"] == {
+        "loss_gate": {"enabled": True, "max_realized_drawdown_fraction": fraction},
+        "memory_ema_span_minutes": 12.5,
+    }
     assert "realized_loss_gate_lookback_minutes" not in json.dumps(result.config)
     assert any(item["path"] == "live.realized_loss_gate_lookback_minutes" and item["old"] == window
                for item in result.changes)
@@ -220,7 +222,7 @@ def test_v8_equal_shared_aliases_keep_file_then_inline_precedence(tmp_path, inli
         "bot": {"long": {"unstuck_enabled": inline_value, "unstuck": {"enabled": inline_value}}},
     }}
     result = migrate(source, memory_span_minutes=123.5, base_config_path=str(tmp_path / "base.json"))
-    assert result.config["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["enabled"] is inline_value
+    assert result.config["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["enabled"] is inline_value
 
 
 @pytest.mark.parametrize("section,old,new,old_value,new_value", [
@@ -352,7 +354,7 @@ def test_v8_active_gate_requires_both_memory_choice_and_semantic_ack():
         migrate_v8_to_v9(source, memory_span_minutes=12.5)
     output = migrate_v8_to_v9(source, memory_span_minutes=12.5,
                              acknowledge_realized_loss_gate_memory_change=True).config
-    assert output["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 12.5
+    assert output["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 12.5
     assert "realized_loss_gate_lookback_minutes" not in output["live"]
 
 
@@ -439,8 +441,8 @@ def test_spans_and_bootstrap_are_independent_float_settings():
     cfg = get_template_config()
     prepared = prepare_config(cfg, verbose=False)
     assert prepared["config_version"] == "v9.0.0"
-    assert prepared["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 85511.137
-    assert isinstance(prepared["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"], float)
+    assert prepared["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 85511.137
+    assert isinstance(prepared["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"], float)
     assert risk_bootstrap_horizon_minutes(prepared) == (129600.0, True)
     assert "realized_loss_gate_lookback_minutes" not in prepared["live"]
     with pytest.raises(ValueError):
@@ -515,10 +517,10 @@ def test_migration_requires_a_memory_choice_and_does_not_mutate_input():
         migrate_v8_to_v9(source)
     result = migrate_v8_to_v9(source, memory_span_minutes=1234.5)
     assert source == before
-    assert result.config["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 1234.5
+    assert result.config["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 1234.5
     assert "realized_loss_gate_lookback_minutes" not in result.config["live"]
     assert "pnls_max_lookback_days" not in result.config["live"]
-    assert "restart_after_red_policy" not in result.config["bot"]["long"]["hsl"]
+    assert "restart_after_red_policy" not in result.config["bot"]["long"]["risk"]["hsl"]
     assert result.warnings and result.changes
     assert migrate_v8_to_v9(result.config).config == result.config
     assert migrate_v8_to_v9(result.config).changes == []
@@ -643,9 +645,9 @@ def test_distinct_scenario_window_requires_path_specific_choice():
     result = migrate_v8_to_v9(source, memory_span_minutes=43200,
                              memory_span_choices={path: 1200.5})
     patch = result.config["backtest"]["scenarios"][0]["overrides"]
-    assert patch["bot.portfolio.unstuck.memory_ema_span_minutes"] == 1200.5
+    assert patch["bot.portfolio.risk.loss_realization.memory_ema_span_minutes"] == 1200.5
     assert "live.realized_loss_gate_lookback_minutes" not in patch
-    assert patch["bot.portfolio.hsl.scope"] == "portfolio"
+    assert patch["bot.portfolio.risk.hsl.scope"] == "portfolio"
 
 
 def test_legacy_all_history_is_removed_without_infinite_risk_memory():
@@ -653,7 +655,7 @@ def test_legacy_all_history_is_removed_without_infinite_risk_memory():
     source["live"]["pnls_max_lookback_days"] = "all"
     output = migrate_v8_to_v9(source, memory_span_minutes=43200).config
     assert "realized_loss_gate_lookback_minutes" not in output["live"]
-    assert output["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 43200.0
+    assert output["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 43200.0
 
 
 def test_old_bounds_are_not_converted_as_equivalent_policy():
@@ -668,8 +670,8 @@ def test_retired_controls_are_reported_by_migration_and_rejected_at_runtime():
     source["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.5
     result = migrate_v8_to_v9(source, memory_span_minutes=43200)
     assert any(item["path"].endswith("no_restart_drawdown_threshold") for item in result.changes)
-    assert "no_restart_drawdown_threshold" not in result.config["bot"]["long"]["hsl"]
-    result.config["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.5
+    assert "no_restart_drawdown_threshold" not in result.config["bot"]["long"]["risk"]["hsl"]
+    result.config["bot"]["long"]["risk"]["hsl"]["no_restart_drawdown_threshold"] = 0.5
     with pytest.raises(ValueError, match="(?:removed in v9|retired)"):
         require_v9_runtime_config(result.config)
 
@@ -703,7 +705,7 @@ def test_cli_dry_run_default_output_and_atomic_backup(tmp_path):
     assert main([str(source), "--lookback-ema-span-minutes", "1234.5"]) == 0
     assert source.read_bytes() == original
     output = tmp_path / "config.v9.json"
-    assert json.loads(output.read_text())["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 1234.5
+    assert json.loads(output.read_text())["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 1234.5
     with pytest.raises(SystemExit):
         main([str(source), "--lookback-ema-span-minutes", "1234.5"])
     assert source.read_bytes() == original
@@ -741,7 +743,7 @@ def test_move_output_materializes_file_with_inline_precedence(tmp_path):
                      base_config_path=str(source_dir / "base.json"))
     assert coin_file.read_bytes() == original
     assert "override_config_path" not in result.config["coin_overrides"]["AAA"]
-    assert result.config["coin_overrides"]["AAA"]["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] == 0.22
+    assert result.config["coin_overrides"]["AAA"]["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] == 0.22
     coin_file.unlink()
     assert prepare_config(result.config, base_config_path=str(output_dir / "moved.json"), verbose=False)
 
@@ -831,7 +833,7 @@ def test_referenced_null_aliases_preserve_file_then_inline_enablement(
         output = parse_overrides(prepare_config(
             output, base_config_path=str(tmp_path / "moved.json"), verbose=False,
         ), verbose=False)
-        assert output["coin_overrides"]["AAA"]["bot"]["long"]["hsl"]["enabled"] is False
+        assert output["coin_overrides"]["AAA"]["bot"]["long"]["risk"]["hsl"]["enabled"] is False
     else:
         with pytest.raises(ValueError, match="no v9 policy equivalent"):
             migrate(source, **kwargs)
@@ -862,7 +864,7 @@ def test_scenario_inline_null_uses_provenance_after_file_aliases_are_canonicaliz
     output = prepare_config(output, verbose=False)
     _set_patch(output, output["backtest"]["scenarios"][0]["overrides"], scenario=True)
     output = parse_overrides(prepare_config(output, verbose=False), verbose=False)
-    assert output["coin_overrides"]["AAA"]["bot"]["long"]["hsl"]["enabled"] is False
+    assert output["coin_overrides"]["AAA"]["bot"]["long"]["risk"]["hsl"]["enabled"] is False
     assert source == before
     assert coin_file.read_bytes() == original_bytes
 
@@ -885,8 +887,8 @@ def test_explicit_v8_converter_canonicalizes_inline_shared_coin_leaves(location)
     if location == "scenario":
         output = output["backtest"]["scenarios"][0]["overrides"]
     side = output["coin_overrides"]["AAA"]["bot"]["long"]
-    assert side["hsl"]["enabled"] is False
-    assert side["unstuck"]["ema_span_0_minutes"] == 51.25
+    assert side["risk"]["hsl"]["enabled"] is False
+    assert side["risk"]["unstuck"]["ema_span_0_minutes"] == 51.25
     assert "hsl_enabled" not in side and "unstuck_ema_span_0" not in side
     assert any("unstuck_ema_span_0" in row["path"] or
                "unstuck_ema_span_0" in json.dumps(row["old"])
@@ -1040,10 +1042,12 @@ def test_optimizer_mirror_audits_referenced_short_null_after_fixed_overrides(
         if file_enabled is None:
             assert "enabled" not in patch.get("bot", {}).get("short", {}).get("hsl", {})
         else:
-            assert patch["bot"]["short"]["hsl"]["enabled"] is False
+            assert patch["bot"]["short"]["risk"]["hsl"]["enabled"] is False
         assert "restart_after_red_policy" not in json.dumps(output)
-        assert output["bot"]["short"]["hsl"]["enabled"] is False
-        assert output["optimize"]["fixed_runtime_overrides"] == fixed
+        assert output["bot"]["short"]["risk"]["hsl"]["enabled"] is False
+        assert output["optimize"]["fixed_runtime_overrides"] == {
+            key.replace(".hsl.", ".risk.hsl."): value for key, value in fixed.items()
+        }
     else:
         with pytest.raises(ValueError, match="no v9 policy equivalent"):
             migrate(source, **kwargs)
@@ -1071,7 +1075,7 @@ def test_optimizer_mirror_precedes_scenario_enablement_when_auditing_referenced_
     if scenario_disables_short:
         output = migrate(source, **kwargs).config
         patch = output["backtest"]["scenarios"][0]["overrides"]
-        assert patch["bot.short.hsl.enabled"] is False
+        assert patch["bot.short.risk.hsl.enabled"] is False
         assert "enabled" not in patch["coin_overrides"]["AAA"].get(
             "bot", {}).get("short", {}).get("hsl", {})
         assert "restart_after_red_policy" not in json.dumps(output)
@@ -1119,7 +1123,7 @@ def test_referenced_never_requires_ack_despite_later_disabled_policy(tmp_path, n
     with pytest.raises(ValueError, match="acknowledge-never-removal"):
         migrate(source, **kwargs)
     output = migrate(source, acknowledge_never_removal=True, **kwargs).config
-    assert output["coin_overrides"]["AAA"]["bot"]["long"]["hsl"]["enabled"] is False
+    assert output["coin_overrides"]["AAA"]["bot"]["long"]["risk"]["hsl"]["enabled"] is False
     assert "restart_after_red_policy" not in json.dumps(output)
     assert source == before
     assert coin_file.read_bytes() == original_bytes
@@ -1183,9 +1187,9 @@ def test_legacy_coin_flag_files_are_materialized_with_flags_and_authorization(
     assert patch["live"]["account"]["leverage"] == 4.0
     assert patch["bot"]["long"]["wallet_exposure_limit_ratio"] == 0.37
     assert patch["bot"]["short"]["wallet_exposure_limit_ratio"] == 0.21
-    assert patch["bot"]["long"]["hsl"]["enabled"]
-    assert patch["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] == 0.19
-    assert "restart_after_red_policy" not in patch["bot"]["long"]["hsl"]
+    assert patch["bot"]["long"]["risk"]["hsl"]["enabled"]
+    assert patch["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] == 0.19
+    assert "restart_after_red_policy" not in patch["bot"]["long"]["risk"]["hsl"]
     assert output["coin_overrides"]["BBB"]["live"] == {
         "modes": {"long": "tp_only"},
         "account": {"leverage": 3.0},
@@ -1278,9 +1282,9 @@ def test_inline_cooldown_canonicalization_keeps_removed_hsl_policy_authorization
         _migrate_file_and_inline_cooldown(tmp_path, file_patch, inline, "root")
     actual = _migrate_file_and_inline_cooldown(tmp_path, file_patch, inline, "root", acknowledge=True)
     assert actual["entry_cooldown"]["base_duration_minutes"] == 7.0
-    assert actual["hsl"]["enabled"] is False
+    assert actual["risk"]["hsl"]["enabled"] is False
     assert "hsl_restart_after_red_policy" not in actual
-    assert "restart_after_red_policy" not in actual["hsl"]
+    assert "restart_after_red_policy" not in actual["risk"]["hsl"]
 
 
 def _synthetic_migration(monkeypatch, config=None):
@@ -1380,9 +1384,9 @@ def test_live_rejects_cooldown_longer_than_reconstructible_history_cap():
     from config.hsl import require_live_runtime_support
 
     cfg = get_expanded_config_prototype()
-    cfg["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 1.0
+    cfg["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] = 1.0
     cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 100.0
-    cfg["bot"]["long"]["hsl"].update(enabled=True, cooldown_after_red_minutes=200.0)
+    cfg["bot"]["long"]["risk"]["hsl"].update(enabled=True, cooldown_after_red_minutes=200.0)
     prepared = prepare_config(cfg, verbose=False)
     # This is a live history capability boundary, not an offline-model limit.
     assert compile_runtime_config(prepared, runtime="backtest")
@@ -1398,8 +1402,8 @@ def test_live_history_cap_checks_effective_coin_policy_and_disabled_policies():
     cfg = get_expanded_config_prototype()
     cfg["live"]["startup"]["risk_bootstrap_max_lookback_minutes"] = 100.0
     assert require_live_runtime_support(cfg) == 0.0
-    cfg["coin_overrides"] = {"AAA": {"bot": {"long": {"hsl": {
-        "enabled": True, "cooldown_after_red_minutes": 101.0}}}}}
+    cfg["coin_overrides"] = {"AAA": {"bot": {"long": {"risk": {"hsl": {
+        "enabled": True, "cooldown_after_red_minutes": 101.0}}}}}}
     with pytest.raises(ValueError, match="coin_overrides.AAA"):
         require_live_runtime_support(cfg)
 
@@ -1410,18 +1414,18 @@ def test_global_slow_span_bounds_survive_loader_cleanup_and_optimizer_shape():
     from optimization.shape import build_optimization_shape
 
     cfg = get_template_config()
-    cfg["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 4321.5
+    cfg["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] = 4321.5
     cfg["optimize"]["bounds"].pop("live", None)
     prepared = prepare_config(cfg, verbose=False)
     fixed_shape = build_optimization_shape(prepared)
-    index = [key for key, _ in fixed_shape.key_paths].index("bot.portfolio.unstuck.memory_ema_span_minutes")
+    index = [key for key, _ in fixed_shape.key_paths].index("bot.portfolio.risk.loss_realization.memory_ema_span_minutes")
     assert fixed_shape.bounds[index].low == fixed_shape.bounds[index].high == 4321.5
     apply_bot_config_patch(prepared, {
-        "optimize.bounds.portfolio.unstuck.memory_ema_span_minutes": [2000.5, 6000.5, 1.0],
+        "optimize.bounds.portfolio.risk.loss_realization.memory_ema_span_minutes": [2000.5, 6000.5, 1.0],
     })
     exported = clean_config(prepared)
     shape = build_optimization_shape(prepare_config(exported, verbose=False))
-    index = [key for key, _ in shape.key_paths].index("bot.portfolio.unstuck.memory_ema_span_minutes")
-    assert shape.key_paths[index][1] == ("bot", "portfolio", "unstuck", "memory_ema_span_minutes")
+    index = [key for key, _ in shape.key_paths].index("bot.portfolio.risk.loss_realization.memory_ema_span_minutes")
+    assert shape.key_paths[index][1] == ("bot", "portfolio", "risk", "loss_realization", "memory_ema_span_minutes")
     assert shape.bounds[index].low == 2000.5
     assert shape.bounds[index].high == 6000.5
