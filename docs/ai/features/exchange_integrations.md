@@ -283,7 +283,8 @@ Handling:
 1. Read the account's raw `positionMode` before a configuration write. An explicit hedge mode
    completes setup without a write. Only an explicit one-way mode permits a switch, and a
    fresh position-mode read must confirm hedge mode after a successful switch.
-2. Let failed reads, unrecognized modes, and failed writes propagate to the caller.
+2. Protective startup uses the same strict mode read and requires existing hedge mode.
+   Let failed reads, unrecognized modes, and failed writes propagate to the caller.
    The bounded Futures read retry applies to the position-mode read.
 3. The connector keeps the exchange account in hedge mode even when `bot.portfolio.hedge_mode=false`
    disables simultaneous strategy exposure. Normalize order updates against that actual exchange

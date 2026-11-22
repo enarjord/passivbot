@@ -488,6 +488,11 @@ async def test_exchange_update_config_reraises_hedge_mode_failures(
             return_value={"code": "00000"}
         )
 
+    elif class_name == "KucoinBot":
+        bot.cca.fetch_position_mode = AsyncMock(
+            return_value={"info": {"positionMode": 0}, "hedged": False}
+        )
+
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError, match="SECRET"):
             await bot.update_exchange_config()
@@ -497,33 +502,16 @@ async def test_exchange_update_config_reraises_hedge_mode_failures(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("module_name", "class_name", "response"),
-    [
-        (
-            "exchanges.bitget",
-            "BitgetBot",
-            {"code": "00000", "data": {"posMode": "hedge_mode"}},
+async def test_bitget_exchange_update_config_accepts_live_same_mode_success():
+    from exchanges.bitget import BitgetBot
+
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.cca = SimpleNamespace(
+        set_position_mode=AsyncMock(
+            return_value={"code": "00000", "data": {"posMode": "hedge_mode"}}
         ),
-        (
-            "exchanges.kucoin",
-            "KucoinBot",
-            {"code": "200000", "data": {"positionMode": 1}},
-        ),
-    ],
-)
-async def test_exchange_update_config_accepts_live_same_mode_success(
-    module_name, class_name, response
-):
-    module = __import__(module_name, fromlist=[class_name])
-    bot_cls = getattr(module, class_name)
-    bot = bot_cls.__new__(bot_cls)
-    bot.cca = SimpleNamespace(set_position_mode=AsyncMock(return_value=response))
-    if class_name == "BitgetBot":
-        # Bitget probes the UTA account mode before setting hedge mode.
-        bot.cca.private_uta_get_v3_account_assets = AsyncMock(
-            return_value={"code": "00000"}
-        )
+        private_uta_get_v3_account_assets=AsyncMock(return_value={"code": "00000"}),
+    )
 
     await bot.update_exchange_config()
 

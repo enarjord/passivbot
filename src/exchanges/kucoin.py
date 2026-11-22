@@ -609,11 +609,6 @@ class KucoinBot(CCXTBot):
         except (KeyError, TypeError, AttributeError):
             return False
 
-    async def _prepare_protective_account(self):
-        current = await self.cca.fetch_position_mode()
-        if current.get("hedged") is not True:
-            raise RuntimeError("KuCoin protective startup requires existing hedge position mode")
-
     async def _fetch_exchange_hedge_mode(self) -> bool:
         response = await self.cca.fetch_position_mode()
         info = response.get("info") if isinstance(response, dict) else None
@@ -622,6 +617,10 @@ class KucoinBot(CCXTBot):
         if type(mode) not in (int, str) or mode not in (0, 1, "0", "1"):
             raise ValueError("KuCoin position mode response must report one-way or hedge mode")
         return mode in (1, "1")
+
+    async def _prepare_protective_account(self):
+        if not await self._fetch_exchange_hedge_mode():
+            raise RuntimeError("KuCoin protective startup requires existing hedge position mode")
 
     async def update_exchange_config(self):
         """Verify hedge mode and change it only when KuCoin reports one-way mode."""
