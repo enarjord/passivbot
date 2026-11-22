@@ -104,7 +104,7 @@ class RecorderPublisher:
         self.completed_candles.append(entry)
         return entry["candles"]
 
-    def completed_candle_due(self, symbol, timeframe, ts):
+    def completed_hour_rollup_due(self, symbol, ts):
         return False
 
     def close(self):
@@ -6157,11 +6157,6 @@ def test_minute_monitor_publishes_only_the_complete_closed_hour(
     )
     cm._persist_batch(symbol, rows[13:14])
     _monitor_handle_candlestick_persist(bot, symbol, "1m", rows[-1:])
-    native = rows[-1:].copy()
-    native[0]["ts"] = start_ts - hour_ms
-    _monitor_handle_candlestick_persist(bot, symbol, "1h", native)
-    native[0]["ts"] = start_ts
-    _monitor_handle_candlestick_persist(bot, symbol, "1h", native)
 
     history = [json.loads(line) for line in history_path.read_text().splitlines()]
     assert len(history) == 1

@@ -253,6 +253,30 @@ def test_monitor_publisher_records_fills_ticks_and_completed_candles(tmp_path):
     assert [entry["payload"]["ts"] for entry in candles] == [180_000, 240_000, 300_000]
 
 
+def test_monitor_hour_rollup_preserves_delayed_native_hours(tmp_path):
+    publisher = _make_publisher(tmp_path, event_rotation_minutes=240.0)
+    symbol = "BTC/USDT:USDT"
+    earlier, missing, latest = (
+        {"ts": hour * 3_600_000, "o": 1.0, "h": 2.0, "l": 0.5, "c": 1.5, "bv": 3.0}
+        for hour in (1, 2, 3)
+    )
+    publisher.record_completed_candles(symbol, "1h", [earlier])
+    assert publisher.record_completed_hour_rollup(symbol, latest) is not None
+    assert publisher.record_completed_hour_rollup(symbol, latest) is None
+    publisher.record_completed_candles(symbol, "1h", [missing, latest])
+    assert publisher.record_completed_candles(symbol, "1h", [missing]) == []
+    assert publisher.record_completed_candles(symbol, "1h", [latest]) == []
+
+    path = publisher.history_dir / "candles_1h.current.ndjson"
+    observations = [json.loads(line)["payload"] for line in path.read_text().splitlines()]
+    assert observations == [
+        earlier,
+        {**latest, "source": "minute_rollup"},
+        missing,
+        latest,
+    ]
+
+
 def test_monitor_publisher_includes_raw_fill_payload_when_enabled(tmp_path):
     publisher = _make_publisher(tmp_path, include_raw_fill_payloads=True)
 

@@ -454,7 +454,7 @@ def _monitor_record_hour_from_minutes(self, publisher, symbol: str) -> None:
     cm = self.cm
     hour_ms = 60 * ONE_MIN_MS
     start_ts = (int(cm._now_ms()) // hour_ms - 1) * hour_ms
-    if not publisher.completed_candle_due(symbol, "1h", start_ts):
+    if not publisher.completed_hour_rollup_due(symbol, start_ts):
         return
     minutes = cm.peek_complete_minute_window(symbol, start_ts, start_ts + hour_ms - ONE_MIN_MS)
     if minutes is None:
@@ -466,9 +466,8 @@ def _monitor_record_hour_from_minutes(self, publisher, symbol: str) -> None:
         "l": float(minutes["l"].min()),
         "c": float(minutes[-1]["c"]),
         "bv": float(minutes["bv"].sum(dtype=np.float64)),
-        "source": "minute_rollup",
     }
-    publisher.record_completed_candles(symbol, "1h", [candle])
+    publisher.record_completed_hour_rollup(symbol, candle)
 
 
 def _monitor_equity(self, *, balance_raw: float, now_ms: int) -> Optional[float]:
