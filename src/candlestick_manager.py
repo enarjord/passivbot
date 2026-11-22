@@ -6184,28 +6184,24 @@ class CandlestickManager:
             # Missing shards contribute no canonical timestamps. Strict reads
             # above distinguish this from unavailable or corrupt history.
             canonical = cached if disk is None else self._merge_overwrite(disk, cached)
-            canonical_by_ts = {int(row["ts"]): row for row in canonical}
-            # Value changes alone can correct a timestamp already admitted by
-            # REST or WS. Extending canonical history requires independent
-            # post-boundary proof, so a pre-boundary update delayed in the
-            # consumer queue cannot become final merely because wall time
-            # advanced before it was processed.
-            eligible_rows = [
-                row
-                for row in candidates
-                if int(row["ts"]) in canonical_by_ts
-                or int(row["ts"]) in successor_proven_predecessors
+            # Probe only the candidate timestamps in the sorted canonical rows.
+            # A right-edge search preserves the last row if a timestamp repeats.
+            candidate_ts = candidates["ts"]
+            canonical_ts = canonical["ts"]
+            indices = np.searchsorted(canonical_ts, candidate_ts, side="right") - 1
+            existing = indices >= 0
+            existing[existing] = canonical_ts[indices[existing]] == candidate_ts[existing]
+            changed = np.zeros(len(candidates), dtype=bool)
+            changed[existing] = canonical[indices[existing]] != candidates[existing]
+            # An absent row can extend canonical history only with independent
+            # successor proof from this uninterrupted watcher session.
+            changed[~existing] = [
+                ts in successor_proven_predecessors for ts in candidate_ts[~existing]
             ]
-            changed_rows = [
-                tuple(row.tolist())
-                for row in eligible_rows
-                if int(row["ts"]) not in canonical_by_ts
-                or not np.array_equal(canonical_by_ts[int(row["ts"])], row)
-            ]
-            if not changed_rows:
+            persisted = candidates[changed]
+            if not persisted.size:
                 self._live_ws_ohlcv_observations[symbol] = current
                 return 0
-            persisted = np.array(changed_rows, dtype=CANDLE_DTYPE)
             self._persist_batch(
                 symbol,
                 persisted,

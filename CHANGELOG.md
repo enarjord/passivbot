@@ -59,6 +59,9 @@ its own version heading. See [release status](docs/releases.md).
 - Use each suite scenario’s start for trading and scoring when reusing a
   prepared OHLCV dataset.
 
+- Reduce CPU spent matching finalized live websocket candle candidates against
+  canonical history. Preserve strict disk verification and successor proof.
+
 - Keep live forager RMS ranking available from complete local candles or a
   recent valid score when remote candle work times out. Repair missing RMS
   candle history in the background even when the latest candle is fresh.
