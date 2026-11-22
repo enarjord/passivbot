@@ -185,11 +185,12 @@ def _project_loss(allocation, symbol, pside, remaining, price, route, *, post_on
 
 
 def _project_resting(allocation, order, remaining):
-    pside = order["position_side"]
-    if pside not in ("long", "short") or order["side"] != ("sell" if pside == "long" else "buy"):
-        raise ValueError("resting close side contradicts its position")
-    if order["type"].lower() != "limit":
-        raise ValueError("resting close execution type is unavailable")
+    pside = order.get("position_side")
+    if pside not in ("long", "short") or order.get("side") != ("sell" if pside == "long" else "buy"):
+        raise _ReservationEvidenceError(ReasonCodes.REALIZED_CLOSE_CONFLICTING_RESTING_SIDE)
+    execution_type = order.get("type")
+    if not isinstance(execution_type, str) or execution_type.lower() != "limit":
+        raise _ReservationEvidenceError(ReasonCodes.REALIZED_CLOSE_UNKNOWN_RESTING_EXECUTION_TYPE)
     # A limit still on the open-order surface is resting liquidity.
     return _project_loss(
         allocation, order["symbol"], pside, remaining, order["price"], "limit",

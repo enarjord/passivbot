@@ -610,6 +610,9 @@ def test_exact_terminal_fill_awaits_freshness_without_contradiction_warning(nati
         ("reduce_only", "realized_close_unknown_reduce_only"),
         ("quantity", "realized_close_missing_remaining_qty"),
         ("client_id", "realized_close_duplicate_client_order_id"),
+        ("side", "realized_close_conflicting_resting_side"),
+        ("execution_type", "realized_close_unknown_resting_execution_type"),
+        ("missing_type", "realized_close_unknown_resting_execution_type"),
     ],
 )
 def test_resting_close_evidence_defers_with_bounded_warning(native, monkeypatch, issue, reason):
@@ -630,8 +633,12 @@ def test_resting_close_evidence_defers_with_bounded_warning(native, monkeypatch,
         resting.pop("reduce_only")
     elif issue == "quantity":
         resting.pop("qty")
-    else:
+    elif issue == "client_id":
         bot.open_orders["A"].append({**resting, "price": 98.9})
+    elif issue == "side":
+        resting["side"] = "buy"
+    else:
+        resting["type"] = "market" if issue == "execution_type" else None
     proposed = _close("B", pside="short", identifier="next")
     _bind(bot, [proposed], cap=0.01)
 

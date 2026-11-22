@@ -415,6 +415,8 @@ class ReasonCodes:
     REALIZED_CLOSE_UNKNOWN_REDUCE_ONLY = "realized_close_unknown_reduce_only"
     REALIZED_CLOSE_MISSING_REMAINING_QTY = "realized_close_missing_remaining_qty"
     REALIZED_CLOSE_DUPLICATE_CLIENT_ORDER_ID = "realized_close_duplicate_client_order_id"
+    REALIZED_CLOSE_CONFLICTING_RESTING_SIDE = "realized_close_conflicting_resting_side"
+    REALIZED_CLOSE_UNKNOWN_RESTING_EXECUTION_TYPE = "realized_close_unknown_resting_execution_type"
     TRAILING_STATUS = "trailing_status"
     UNSTUCK_SELECTION = "unstuck_selection"
     UNSTUCK_STATUS = "unstuck_status"

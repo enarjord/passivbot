@@ -231,6 +231,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `realized_close_ambiguous_fill_identity`
 - `realized_close_conflicting_fill_identity`
 - `realized_close_conflicting_fill_quantity`
+- `realized_close_conflicting_resting_side`
 - `realized_close_duplicate_client_order_id`
 - `realized_close_duplicate_exchange_order_id`
 - `realized_close_lookup_unavailable`
@@ -238,6 +239,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `realized_close_missing_remaining_qty`
 - `realized_close_order_evidence_unavailable`
 - `realized_close_unknown_reduce_only`
+- `realized_close_unknown_resting_execution_type`
 - `realized_loss_gate_blocked`
 - `recent_execution`
 - `remote_fetch`
