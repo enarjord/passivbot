@@ -111,7 +111,8 @@ churn gate does not perform its own market fetch.
 For Bitunix hedge positions, the first admissible resting close has an additional
 economy exemption when the current plan contains a single reduce-only limit
 close and the confirmed account snapshot shows a nonzero position with no
-resting close in that position side. The exemption applies only when allowance
+resting close in that position side. Count every close in the plan before
+pre-create filters so a filtered ladder remains ineligible. The exemption applies only when allowance
 is exhausted. It counts toward rolling usage and gets create-batch priority
 after risk-critical orders. Missing or changed account facts and outstanding
 confirmation keep ordinary admission in place. Cancel-first sequencing,

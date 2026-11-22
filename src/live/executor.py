@@ -361,7 +361,13 @@ def _bitunix_uncovered_close_candidates(bot, orders: list[dict], snapshot) -> se
     return candidates
 
 
-def _apply_order_churn_admission(bot, orders: list[dict], *, planning_snapshot=None) -> list[dict]:
+def _apply_order_churn_admission(
+    bot,
+    orders: list[dict],
+    *,
+    planning_snapshot=None,
+    planned_creations: list[dict] | None = None,
+) -> list[dict]:
     if not orders:
         return []
     if not connector_supports_order_churn_gate(bot):
@@ -423,6 +429,8 @@ def _apply_order_churn_admission(bot, orders: list[dict], *, planning_snapshot=N
         admission[id(order)] = ("ready", signed_distance <= threshold)
     selected: list[dict] = []
     deferred: list[dict] = []
+    if planned_creations is None:
+        planned_creations = admission_orders
     uncovered_close_candidates = None
     for order in admission_orders:
         churn_evidenced = bool(order.get("_churn_evidence"))
@@ -439,7 +447,7 @@ def _apply_order_churn_admission(bot, orders: list[dict], *, planning_snapshot=N
         ):
             if uncovered_close_candidates is None:
                 uncovered_close_candidates = _bitunix_uncovered_close_candidates(
-                    bot, admission_orders, planning_snapshot
+                    bot, planned_creations, planning_snapshot
                 )
             if id(order) not in uncovered_close_candidates:
                 deferred.append(order)
@@ -698,6 +706,7 @@ async def execute_order_plan(
     """Execute a precomputed order plan against the exchange."""
     passivbot_cls = _pb_attr("Passivbot")
     snapshot = getattr(bot, "_current_planning_snapshot", None)
+    planned_creations = to_create
     planned_generation = int(
         getattr(snapshot, "account_invalidation_generation", 0) or 0
     )
@@ -1213,7 +1222,10 @@ async def execute_order_plan(
         )
         before_churn_admission = list(to_create_mod)
         to_create_mod = _apply_order_churn_admission(
-            bot, to_create_mod, planning_snapshot=snapshot
+            bot,
+            to_create_mod,
+            planning_snapshot=snapshot,
+            planned_creations=planned_creations,
         )
         if order_wave is not None:
             order_wave["deferred_create"] += max(

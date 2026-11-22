@@ -778,7 +778,10 @@ async def test_capacity_selects_later_admissible_order_after_churn_deferral(
 
 
 @pytest.mark.asyncio
-async def test_confirmed_uncovered_bitunix_close_executes_after_replan(execution_shell):
+@pytest.mark.parametrize("deferred_sibling", [False, True])
+async def test_confirmed_uncovered_bitunix_close_executes_after_replan(
+    execution_shell, deferred_sibling
+):
     from live.freshness import FreshnessLedger
     from live.planning_snapshot import PlanningSnapshot
 
@@ -839,11 +842,20 @@ async def test_confirmed_uncovered_bitunix_close_executes_after_replan(execution
     bot.fetched_open_orders = []
     capture_account()
     entry = dict(_order("entry"), symbol="ETH/USDT:USDT")
-    await executor.execute_order_plan(bot, [], [entry, close])
+    plan = [entry, close]
+    if deferred_sibling:
+        sibling = dict(close, name="recent-close", price=103.0)
+        plan.append(sibling)
+        bot.order_was_recently_updated = lambda order: 1000 if order is sibling else 0
+    await executor.execute_order_plan(bot, [], plan)
 
-    assert bot.created == [close]
-    assert close["_churn_gate_reason"] == "uncovered_close_exempt"
-    assert entry["_churn_gate_reason"] == "batch_capacity"
+    if deferred_sibling:
+        assert bot.created == [entry]
+        assert close["_churn_gate_reason"] == "allowance_exhausted"
+    else:
+        assert bot.created == [close]
+        assert close["_churn_gate_reason"] == "uncovered_close_exempt"
+        assert entry["_churn_gate_reason"] == "batch_capacity"
 
 
 @pytest.mark.asyncio
