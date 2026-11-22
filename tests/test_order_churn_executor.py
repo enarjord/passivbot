@@ -56,6 +56,10 @@ class _Bot:
         return self.values[key]
 
     @staticmethod
+    def _loss_gate_enabled() -> bool:
+        return False
+
+    @staticmethod
     def _is_market_execution_order(order: dict) -> bool:
         return order.get("type") == "market"
 
@@ -237,6 +241,24 @@ def test_create_capacity_preserves_risk_priority():
 
     assert [order["name"] for order in admitted] == ["critical", "ordinary"]
     assert another["_churn_gate_reason"] == "batch_capacity"
+
+
+def test_capacity_preserves_native_close_priority_when_loss_gate_enabled():
+    bot = _Bot()
+    bot.values["max_n_creations_per_batch"] = 1
+    bot._loss_gate_enabled = lambda: True
+    preferred = dict(
+        _order("native_priority"), side="sell", reduce_only=True, pb_order_type="close_grid_long"
+    )
+    uncovered = dict(
+        preferred,
+        name="uncovered",
+        symbol="ETH/USDT:USDT",
+        _churn_gate_reason="uncovered_close_exempt",
+    )
+
+    # The caller has already sorted the orders by native close-allocation priority.
+    assert _apply_creation_batch_capacity(bot, [preferred, uncovered]) == [preferred]
 
 
 def test_capacity_after_admission_does_not_starve_later_admissible_order():

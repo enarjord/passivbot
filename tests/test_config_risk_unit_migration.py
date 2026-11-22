@@ -51,23 +51,24 @@ def test_released_risk_units_preserve_values_sources_and_final_report_paths(tmp_
     assert source == original
     assert coin_file.read_bytes() == file_bytes
     assert converted["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.375
-    assert converted["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] == 0.23
-    assert converted["bot"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == 12.5
-    assert converted["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] == 0.125
+    assert converted["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] == 0.23
+    assert converted["bot"]["long"]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] == 12.5
+    assert converted["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]["max_realized_drawdown_fraction"] == 0.125
     coin = converted["coin_overrides"]["AAA"]
     assert "override_config_path" not in coin
     assert coin["bot"]["long"]["wallet_exposure_limit_ratio"] == 0.37
-    assert coin["bot"]["long"]["hsl"]["drawdown_threshold_fraction"] == 0.19
+    assert coin["bot"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] == 0.19
     assert converted["optimize"]["fixed_params"] == [
         "bot.long.risk.total_wallet_exposure_limit_ratio",
-        "bot.long.hsl.drawdown_fraction_ema_span_minutes",
+        "bot.long.risk.hsl.drawdown_fraction_ema_span_minutes",
     ]
     assert converted["optimize"]["fixed_runtime_overrides"] == {
         "bot.short.risk.total_wallet_exposure_limit_ratio": 1.625,
     }
     assert converted["backtest"]["scenarios"][0]["overrides"] == {
-        "bot.long.hsl.drawdown_threshold_fraction": 0.31,
-        "bot.portfolio.loss_gate.max_drawdown_fraction": 0.0625,
+        "bot.long.risk.hsl.drawdown_threshold_fraction": 0.31,
+        "bot.portfolio.risk.loss_realization.loss_gate.enabled": True,
+        "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction": 0.0625,
     }
     native = flatten_optimize_bounds(converted["optimize"]["bounds"], strategy_kind=kind)
     assert native["long_total_wallet_exposure_limit_ratio"] == [0.25, 3.5]
@@ -79,12 +80,12 @@ def test_released_risk_units_preserve_values_sources_and_final_report_paths(tmp_
     }
     assert {
         "bot.long.risk.total_wallet_exposure_limit_ratio",
-        "bot.long.hsl.drawdown_threshold_fraction",
-        "bot.long.hsl.drawdown_fraction_ema_span_minutes",
-        "bot.portfolio.loss_gate.max_drawdown_fraction",
+        "bot.long.risk.hsl.drawdown_threshold_fraction",
+        "bot.long.risk.hsl.drawdown_fraction_ema_span_minutes",
+        "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction",
         "optimize.bounds.long.risk.total_wallet_exposure_limit_ratio",
-        "optimize.bounds.long.hsl.drawdown_threshold_fraction",
-        "optimize.bounds.long.hsl.drawdown_fraction_ema_span_minutes",
+        "optimize.bounds.long.risk.hsl.drawdown_threshold_fraction",
+        "optimize.bounds.long.risk.hsl.drawdown_fraction_ema_span_minutes",
     } <= report_targets
     coin_file.unlink()
     loaded = prepare_config(converted, live_only=True, verbose=False,
@@ -108,10 +109,10 @@ def test_released_flat_hsl_bounds_keep_their_source_keys_after_native_id_rename(
     result = migrate(source, memory_span_minutes=123.5)
 
     assert source == original
-    assert result.config["optimize"]["bounds"]["long"]["hsl"][target] == value
+    assert result.config["optimize"]["bounds"]["long"]["risk"]["hsl"][target] == value
     assert any(
         row["path"] == f"optimize.bounds.long_{source_key}"
         and row["old"] == value
-        and row["new"] == {f"optimize.bounds.long.hsl.{target}": value}
+        and row["new"] == {f"optimize.bounds.long.risk.hsl.{target}": value}
         for row in result.changes
     )

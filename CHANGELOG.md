@@ -5,10 +5,17 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Let Bitunix submit the sole planned reduce-only limit close in a confirmed
-  uncovered cancel-first scope when the order churn allowance is exhausted.
-  Keep the attempt in the rolling count and place it after risk-critical
-  creates when batch capacity is tight.
+- Finalize v9 risk configuration under `bot.*.risk`. Unstuck and the optional
+  portfolio loss gate share one realized-loss memory. Enable the gate explicitly
+  and supply a cap in `[0, 1)`. Atomic overrides of the gate or an enclosing object also
+  require explicit enablement. The v8 converter emits the final layout directly.
+- Size close orders in Rust against available loss allowance and venue limits.
+  Unstuck targets the exposure threshold. Live admission reserves outstanding
+  close losses across symbols and sides, and reconciles conflicting replacements
+  before creating them. Bounded exchange lookups can recover closes canceled
+  before the open-order refresh. A warning identifies ambiguous or contradictory close
+  reservation evidence when it defers a write. Zero-loss limit closes retain order-match
+  tolerance when both projections agree. Use CPU replay for gate or unstuck evaluations.
 
 - Update the Trailing Martingale starter universe and suite subsets. Add ETC and
   TRX and remove ATOM, BTW, CC, KAS, and RENDER. Resolve verified TRX asset age
@@ -132,6 +139,10 @@ its own version heading. See [release status](docs/releases.md).
 - Distinguish confirmed full close coverage from partial and unconfirmed
   coverage in close replacement diagnostics. Keep recording account
   observations after a replacement is submitted.
+
+- Let Bitunix submit the sole planned reduce-only limit close in a confirmed
+  uncovered cancel-first scope when the order churn allowance is exhausted.
+  Preserve native loss-gate priority and count the attempt in rolling usage.
 
 - Recover Binance USDⓈ-M trailing resets from a complete trade query at the exact
   position update millisecond when cached replay retains stale position residue.

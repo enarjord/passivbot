@@ -3615,7 +3615,7 @@ inline int select_tm_multicoin_unstuck_coin(
     if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
     const float effective_wel = config.twel
         / fmax(float(effective_n_positions), 1.0f);
-    const float balance_peak = account.balance + account.unstuck_memory.drawdown;
+    const float balance_peak = account.balance + account.realized_memory.drawdown;
     if (!(balance_peak > 0.0f)) return -1;
 
     int selected_coin = -1;
@@ -3669,7 +3669,7 @@ inline int select_tm_multicoin_unstuck_coin(
         }
         float allowance;
         if (!hsl_decay_auto_allowance(
-            account.balance, account.unstuck_memory.drawdown,
+            account.balance, account.realized_memory.drawdown,
             coin_loss_allowance_pct, config.twel, allowance)) {
             account.realized_decay_valid = false;
             return -1;
@@ -4146,7 +4146,7 @@ inline void generate_tm_multicoin_side_orders(
         close_is_unstuck_reducer[c] = false;
     }
 #if PASSIVBOT_UNSTUCK_ENABLED
-    float balance_peak = balance + account.unstuck_memory.drawdown;
+    float balance_peak = balance + account.realized_memory.drawdown;
     int unstuck_coin = -1;
     float best_entry_distance_fraction = -INFINITY;
     float selected_unstuck_qty = 0.0f;
@@ -4208,7 +4208,7 @@ inline void generate_tm_multicoin_side_orders(
         }
         float allowance;
         if (!hsl_decay_auto_allowance(
-            balance, account.unstuck_memory.drawdown, coin_loss_allowance_pct, twel,
+            balance, account.realized_memory.drawdown, coin_loss_allowance_pct, twel,
             allowance)) {
             account.realized_decay_valid = false;
             return;
@@ -5438,8 +5438,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         bars, coin_settings, C, COIN_COLS, run_settings[15] > 0.5f);
     attach_hsl_replay_side(factual_context, long_side.hsl, long_side.coin_hsl, 0, false);
     attach_hsl_replay_side(factual_context, short_side.hsl, short_side.coin_hsl, 1, true);
-    configure_joint_realized_memory(account, params[po + 63], params[po + 64],
-        PASSIVBOT_UNSTUCK_ENABLED, loss_gate_enabled, multicoin_interval_minutes(interval_ms));
+    configure_joint_realized_memory(account, params[po + 63],
+        PASSIVBOT_UNSTUCK_ENABLED || loss_gate_enabled, multicoin_interval_minutes(interval_ms));
     for (int k = begin_k; k < chunk_stop_k; ++k) {
         if (alive && (held_positions_have_missing_prices(long_side.psize, bars, coin_settings ORGANILLO_PASS, k, C)
             || held_positions_have_missing_prices(short_side.psize, bars, coin_settings ORGANILLO_PASS, k, C))) {
@@ -6294,8 +6294,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     HslReplayContext factual_context = hsl_replay_context(
         bars, coin_settings, C, COIN_COLS, run_settings[13] > 0.5f);
     attach_hsl_replay_side(factual_context, side.hsl, side.coin_hsl, 0, short_side);
-    configure_joint_realized_memory(account, params[po + 63], params[po + 64],
-        PASSIVBOT_UNSTUCK_ENABLED, loss_gate_enabled, multicoin_interval_minutes(interval_ms));
+    configure_joint_realized_memory(account, params[po + 63],
+        PASSIVBOT_UNSTUCK_ENABLED || loss_gate_enabled, multicoin_interval_minutes(interval_ms));
     for (int k = begin_k; k < chunk_stop_k; ++k) {
         if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings ORGANILLO_PASS, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.

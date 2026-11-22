@@ -63,11 +63,12 @@ def test_lossless_migration_runtime_warmup_and_roundtrip():
     assert not any(key in strategy for key in SPANS)
     names = {
         "ema_span_0": "ema_span_0_minutes", "ema_span_1": "ema_span_1_minutes",
-        "close_pct": "close_fraction", "ema_dist": "ema_distance_fraction",
+        "ema_dist": "ema_distance_fraction",
         "loss_allowance_pct": "loss_allowance_fraction", "threshold": "exposure_trigger_ratio",
     }
-    assert prepared["bot"]["long"]["unstuck"] == {
+    assert prepared["bot"]["long"]["risk"]["unstuck"] == {
         names.get(key, key): value for key, value in old["bot"]["long"]["unstuck"].items()
+        if key != "close_pct"
     }
     bounds = flatten_optimize_bounds(prepared["optimize"]["bounds"], strategy_kind=KIND)
     assert bounds["long_entry_ema_span_0_minutes"] == [12.5, 321.75, 0.25]
@@ -120,7 +121,7 @@ def test_external_inline_precedence_and_partial_coupling(
     assert entry == {"ema_span_0_minutes": 17.125, "ema_span_1_minutes": 81.5}
     config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     apply_coupled_unstuck_ema_spans(config)
-    assert config["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"] == entry
+    assert config["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"] == entry
 
 
 def test_current_config_rejects_conflicting_retired_ema_path():

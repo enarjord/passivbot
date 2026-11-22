@@ -41,8 +41,11 @@ def test_sparse_config_uses_its_source_trading_defaults_and_domains(
     long = prepared["bot"]["long"]
     assert long["risk"]["max_positions"] == positions
     assert long["risk"]["total_exposure_enforcer"]["enabled"] is repair
-    assert long["unstuck"]["close_fraction"] == unstuck
-    assert long["unstuck"]["ema_span_0_minutes"] == span
+    assert long["risk"]["unstuck"]["enabled"] is True
+    assert "close_fraction" not in long["risk"]["unstuck"]
+    assert any(row["old"] == unstuck and "retired quantity sizing" in row["reason"]
+               for row in result.changes)
+    assert long["risk"]["unstuck"]["ema_span_0_minutes"] == span
     for side in ("long", "short"):
         cooldown = prepared["bot"][side]["entry_cooldown"]
         assert cooldown["weights_minutes"] == {
@@ -203,8 +206,8 @@ def test_tagged_unified_does_not_select_one_side_controller_or_its_bounds():
         migrate(source, best_effort=True)
     del source["optimize"]["fixed_params"]
     result = migrate(source, best_effort=True)
-    assert result.config["bot"]["portfolio"]["hsl"]["enabled"] is False
-    assert result.config["optimize"]["bounds"]["portfolio"]["hsl"]["drawdown_threshold_fraction"] == [0.05, 0.20]
+    assert result.config["bot"]["portfolio"]["risk"]["hsl"]["enabled"] is False
+    assert result.config["optimize"]["bounds"]["portfolio"]["risk"]["hsl"]["drawdown_threshold_fraction"] == [0.05, 0.20]
 
 
 def test_tagged_btc_example_stale_limit_requires_explicit_metric_decision():
@@ -224,7 +227,7 @@ def test_cli_acknowledges_inherited_tagged_threshold_in_best_effort(tmp_path):
     output = tmp_path / "v9.json"
     assert main([str(original), str(output), "--best-effort", "--acknowledge-permanent-stop-removal"]) == 0
     assert json.loads(original.read_text()) == source
-    assert json.loads(output.read_text())["bot"]["long"]["hsl"]["enabled"] is True
+    assert json.loads(output.read_text())["bot"]["long"]["risk"]["hsl"]["enabled"] is True
 
 
 @pytest.fixture(scope="module", params=[
@@ -266,7 +269,7 @@ def test_original_tagged_example_disposition(tagged_checkout, name, decision):
     original = deepcopy(source)
     if decision is None:
         converted = migrate(source, best_effort=True)
-        assert converted.config["bot"]["long"]["hsl"]["enabled"] is False
+        assert converted.config["bot"]["long"]["risk"]["hsl"]["enabled"] is False
         assert source == original
         return
 
@@ -290,5 +293,5 @@ def test_original_tagged_example_disposition(tagged_checkout, name, decision):
     converted = migrate(
         source, best_effort=True, acknowledge_never_removal=name == "hsl_npos1",
     )
-    assert converted.config["bot"]["portfolio"]["hsl"]["enabled"] is chosen["enabled"]
-    assert converted.config["bot"]["portfolio"]["hsl"]["scope"] == "portfolio"
+    assert converted.config["bot"]["portfolio"]["risk"]["hsl"]["enabled"] is chosen["enabled"]
+    assert converted.config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "portfolio"

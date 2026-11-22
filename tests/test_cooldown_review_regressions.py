@@ -79,7 +79,8 @@ def test_risk_selectors_exclude_the_canonical_cooldown_subtree(selector, sides):
     bounds = flatten_optimize_bounds(cfg["optimize"]["bounds"], strategy_kind="trailing_martingale")
     selected = resolve_bound_selectors(cfg, [selector], bounds)
     assert {f"{side}_n_positions" for side in sides} <= set(selected)
-    assert not any("cooldown" in key or "entry_cooldown" in path for key, path in selected.items())
+    assert all("entry_cooldown" not in path for path in selected.values())
+    assert {f"{side}_hsl_cooldown_minutes_after_red" for side in sides} <= set(selected)
 
 
 def test_coin_override_can_clear_ceiling_after_disabling_inherited_weights():

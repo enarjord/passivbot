@@ -108,6 +108,8 @@ class CCXTBot(Passivbot):
     See module docstring for hook taxonomy and extension patterns.
     """
 
+    supports_close_lookup_by_client_id = False
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.quote = self.user_info.get("quote", "USDT")
@@ -640,6 +642,28 @@ class CCXTBot(Passivbot):
         """
         side = elm.get("side")
         return side.lower() if isinstance(side, str) else ""
+
+    def _realized_close_exact_lookup_routes(self, symbol, exchange_order_id, client_order_id):
+        """Yield connector-supported exact order lookups before history lookups."""
+        if getattr(self.cca, "has", {}).get("fetchOrder") is not True:
+            return
+        if exchange_order_id:
+            yield self.cca.fetch_order, (exchange_order_id, symbol), False
+        elif self.supports_close_lookup_by_client_id:
+            yield self.cca.fetch_order, (None, symbol, {"clientOrderId": client_order_id}), False
+
+    def realized_close_lookup_routes(self, symbol, exchange_order_id, client_order_id, *, since_ms, limit):
+        """Yield (async method, arguments, returns_many) without making requests."""
+        yield from self._realized_close_exact_lookup_routes(
+            symbol, exchange_order_id, client_order_id
+        )
+        for capability, method in (
+            ("fetchOrders", "fetch_orders"),
+            ("fetchCanceledOrders", "fetch_canceled_orders"),
+            ("fetchClosedOrders", "fetch_closed_orders"),
+        ):
+            if getattr(self.cca, "has", {}).get(capability) is True:
+                yield getattr(self.cca, method), (symbol, since_ms, limit), True
 
     async def _do_fetch_open_orders(self, symbol: str = None) -> list:
         """Hook: Call exchange API for open orders."""

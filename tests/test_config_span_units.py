@@ -63,10 +63,13 @@ def test_strategy_span_units_preserve_raw_native_metadata_and_fractional_values(
 ])
 def test_shared_minute_fields_keep_native_optimizer_and_runtime_bindings(side, native, group, public):
     source = get_expanded_config_prototype()
-    source["bot"][side][group][public] = 123.75
+    from config.shared_bot import shared_bot_group_path
+
+    group_path = shared_bot_group_path(group)
+    set_value(source["bot"][side], (*group_path, public), 123.75)
     prepared = prepare_config(source, verbose=False)
     assert get_grouped_bot_value(prepared["bot"][side], native) == 123.75
-    assert resolve_optimizer_key_path(prepared, f"{side}_{native}") == ("bot", side, group, public)
+    assert resolve_optimizer_key_path(prepared, f"{side}_{native}") == ("bot", side, *group_path, public)
 
 
 @pytest.mark.parametrize("kind", ["trailing_martingale", "ema_anchor"])
@@ -101,7 +104,7 @@ def test_independent_coin_minute_span_pins_reach_unchanged_native_columns(kind, 
     ]))
     coins = source["backtest"]["coins"]["binance"]
     source["coin_overrides"] = {
-        coins[0]: {"bot": {side: {"unstuck": {"ema_span_0_minutes": 123.75}}}},
+        coins[0]: {"bot": {side: {"risk": {"unstuck": {"ema_span_0_minutes": 123.75}}}}},
     }
     original = deepcopy(source)
     prepared = parse_overrides(source, verbose=False)
@@ -118,5 +121,5 @@ def test_independent_coin_minute_span_pins_reach_unchanged_native_columns(kind, 
     assert matrix[0, start] == 123.75
     assert np.isnan(matrix[0, start + 1])  # The other span still inherits the global value.
     assert np.isnan(matrix[1, start:start + 2]).all()
-    assert contract["exact_overrides"][0]["bot"][side]["unstuck"] == {"ema_span_0_minutes": 123.75}
+    assert contract["exact_overrides"][0]["bot"][side]["risk"]["unstuck"] == {"ema_span_0_minutes": 123.75}
     assert source == original

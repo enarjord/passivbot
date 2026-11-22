@@ -25,16 +25,17 @@ from tools.migrate_config_v9 import migrate
 PORTFOLIO_PATHS = (
     "strategy_kind", "hedge_mode", "execution.market_orders_allowed",
     "execution.market_order_near_touch_fraction", "warmup.activation_span_fraction",
-    "warmup.max_minutes", "loss_gate.max_drawdown_fraction",
-    "loss_gate.memory_ema_span_minutes", "unstuck.memory_ema_span_minutes",
-    "hsl.scope", "hsl.enabled", "hsl.drawdown_threshold_fraction",
-    "hsl.drawdown_fraction_ema_span_minutes", "hsl.memory_ema_span_minutes",
-    "hsl.panic_close_order_type", "hsl.cooldown_after_red_minutes",
-    "hsl.scale_budget_with_excess_allowance",
+    "warmup.max_minutes", "risk.loss_realization.loss_gate.enabled",
+    "risk.loss_realization.loss_gate.max_realized_drawdown_fraction",
+    "risk.loss_realization.memory_ema_span_minutes",
+    "risk.hsl.scope", "risk.hsl.enabled", "risk.hsl.drawdown_threshold_fraction",
+    "risk.hsl.drawdown_fraction_ema_span_minutes", "risk.hsl.memory_ema_span_minutes",
+    "risk.hsl.panic_close_order_type", "risk.hsl.cooldown_after_red_minutes",
+    "risk.hsl.scale_budget_with_excess_allowance",
 )
 
 DIRECTIONAL_HSL_PATHS = tuple(path for path in PORTFOLIO_PATHS
-                              if path.startswith("hsl.") and path != "hsl.scope")
+                              if path.startswith("risk.hsl.") and path != "risk.hsl.scope")
 PORTFOLIO_ONLY_PATHS = tuple(path for path in PORTFOLIO_PATHS
                              if path not in DIRECTIONAL_HSL_PATHS)
 
@@ -89,7 +90,8 @@ def test_registry_declares_exact_portfolio_scope_and_remaining_global_defaults()
 def test_retired_global_portfolio_paths_are_rejected_without_mutation(local, owner):
     source = generated_template(get_template_config(), "portfolio")
     path = "bot.global." + local
-    value = read(source, "bot.portfolio." + local)
+    value = (0.05 if local == "risk.loss_realization.loss_gate.max_realized_drawdown_fraction"
+             else read(source, "bot.portfolio." + local))
     if owner == "root":
         write(source, path, deepcopy(value))
     elif owner == "fixed":
@@ -106,13 +108,17 @@ def test_retired_global_portfolio_paths_are_rejected_without_mutation(local, own
 @pytest.mark.parametrize("scope", ["coin", "position_side", "portfolio"])
 def test_portfolio_bounds_mirror_bot_paths_and_keep_native_optimizer_ids(scope):
     source = generated_template(get_template_config(), scope)
-    source["optimize"]["bounds"].setdefault("portfolio", {}).update({
-        "unstuck": {"memory_ema_span_minutes": [123.5, 456.75]},
-        "loss_gate": {"memory_ema_span_minutes": [234.5, 567.75]},
-    })
+    source["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] = {
+        "enabled": True, "max_realized_drawdown_fraction": 0.05,
+    }
+    loss_bounds = source["optimize"]["bounds"].setdefault("portfolio", {}).setdefault("risk", {})
+    loss_bounds["loss_realization"] = {
+        "memory_ema_span_minutes": [123.5, 456.75],
+        "loss_gate": {"max_realized_drawdown_fraction": [0.01, 0.1]},
+    }
     config = prepare_config(source, verbose=False, live_only=True)
     flat = flatten_optimize_bounds(config["optimize"]["bounds"], strategy_kind="trailing_martingale")
-    for key in ("unstuck_memory_ema_span_minutes", "loss_gate_memory_ema_span_minutes"):
+    for key in ("realized_loss_memory_ema_span_minutes", "loss_gate_max_drawdown_fraction"):
         path = resolve_optimizer_key_path(config, key)
         assert path[:2] == ("bot", "portfolio")
         assert read(config, "optimize.bounds." + ".".join(path[1:])) == flat[key]
@@ -125,10 +131,10 @@ def test_portfolio_bounds_mirror_bot_paths_and_keep_native_optimizer_ids(scope):
 @pytest.mark.parametrize("owner", ["global", "long", "short"])
 def test_directional_hsl_never_authorizes_portfolio_policy(owner):
     source = get_template_config()
-    source["bot"]["portfolio"]["hsl"]["scope"] = "portfolio"
-    directional = deepcopy(source["bot"]["global"]["hsl"])
+    source["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "portfolio"
+    directional = deepcopy(source["bot"]["global"]["risk"]["hsl"])
     directional["enabled"] = True
-    write(source, f"bot.{owner}.hsl", directional)
+    write(source, f"bot.{owner}.risk.hsl", directional)
     original = deepcopy(source)
     with pytest.raises(ValueError, match="(?:explicit|missing|required)"):
         prepare_config(source, verbose=False, live_only=True)
@@ -137,7 +143,7 @@ def test_directional_hsl_never_authorizes_portfolio_policy(owner):
 
 def test_portfolio_hsl_rejects_coin_only_budget_scaling():
     source = generated_template(get_template_config(), "portfolio")
-    source["bot"]["portfolio"]["hsl"]["scale_budget_with_excess_allowance"] = True
+    source["bot"]["portfolio"]["risk"]["hsl"]["scale_budget_with_excess_allowance"] = True
     with pytest.raises(ValueError, match="requires coin HSL mode"):
         prepare_config(source, verbose=False, live_only=True)
 
@@ -163,19 +169,21 @@ def test_directional_hsl_defaults_remain_valid_with_explicit_portfolio_policy(lo
 @pytest.mark.parametrize("mode", [compact_config, resolved_config, cleanup_config])
 def test_exports_retain_explicit_portfolio_policy_values_and_side_independence(mode):
     source = generated_template(get_template_config(), "portfolio")
-    source["bot"]["portfolio"]["hsl"].update(enabled=True, cooldown_after_red_minutes=17.25)
-    source["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 123.5
-    source["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 234.75
+    source["bot"]["portfolio"]["risk"]["hsl"].update(enabled=True, cooldown_after_red_minutes=17.25)
+    source["bot"]["portfolio"]["risk"]["loss_realization"] = {
+        "memory_ema_span_minutes": 123.5,
+        "loss_gate": {"enabled": False, "max_realized_drawdown_fraction": 0.0},
+    }
     source["bot"]["global"]["forager"]["score_hysteresis_margin"] = 0.125
-    write(source, "bot.long.hsl.cooldown_after_red_minutes", 35.5)
+    write(source, "bot.long.risk.hsl.cooldown_after_red_minutes", 35.5)
     original = deepcopy(source)
     expected = prepare_config(source, verbose=False, live_only=True)
     output = mode(source)
     if isinstance(output, tuple):
         output = output[0]
     reloaded = prepare_config(json.loads(json.dumps(output)), verbose=False, live_only=True)
-    for path in ("bot.portfolio.hsl", "bot.portfolio.loss_gate", "bot.portfolio.unstuck",
-                 "bot.global.forager", "bot.long.hsl"):
+    for path in ("bot.portfolio.risk.hsl", "bot.portfolio.risk.loss_realization",
+                 "bot.global.forager", "bot.long.risk.hsl"):
         assert read(reloaded, path) == read(expected, path)
     assert source == original
 
@@ -216,6 +224,6 @@ def test_released_missing_bounds_use_portfolio_strategy_and_scope_without_changi
     for side in ("long", "short"):
         expected = expected_released_strategy_bounds(kind, defaults["optimize"]["bounds"][side]["strategy"][kind])
         assert output["optimize"]["bounds"][side]["strategy"] == {kind: expected}
-        assert ("hsl" in output["optimize"]["bounds"][side]) == (scope != "portfolio")
-    assert output["bot"]["portfolio"]["hsl"]["scope"] == scope
+        assert ("hsl" in output["optimize"]["bounds"][side].get("risk", {})) == (scope != "portfolio")
+    assert output["bot"]["portfolio"]["risk"]["hsl"]["scope"] == scope
     assert source == original

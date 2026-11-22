@@ -350,14 +350,13 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
         trailing_martingale["close"].pop(key)
     current["bot"]["long"]["forager"].pop("log_range_ema_span_minutes")
     current["bot"]["long"]["forager"].pop("volume_ema_span_minutes")
-    current["bot"]["long"]["hsl"].pop("panic_close_order_type")
+    current["bot"]["long"]["risk"]["hsl"].pop("panic_close_order_type")
     current["bot"]["long"]["risk"]["total_exposure_enforcer"].pop("threshold_ratio")
     current["bot"]["long"]["risk"].pop("we_excess_allowance_fraction")
     current["bot"]["long"]["risk"]["position_exposure_enforcer"].pop("threshold_ratio")
-    current["bot"]["long"]["unstuck"].pop("close_fraction")
-    current["bot"]["long"]["unstuck"].pop("ema_distance_fraction")
-    current["bot"]["long"]["unstuck"].pop("loss_allowance_fraction")
-    current["bot"]["long"]["unstuck"].pop("exposure_trigger_ratio")
+    current["bot"]["long"]["risk"]["unstuck"].pop("ema_distance_fraction")
+    current["bot"]["long"]["risk"]["unstuck"].pop("loss_allowance_fraction")
+    current["bot"]["long"]["risk"]["unstuck"].pop("exposure_trigger_ratio")
 
     out = format_config(current, verbose=False, live_only=True)
 
@@ -396,8 +395,8 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
         default_long["forager"]["volume_ema_span_minutes"]
     )
     assert (
-        long_cfg["hsl"]["panic_close_order_type"]
-        == default_long["hsl"]["panic_close_order_type"]
+        long_cfg["risk"]["hsl"]["panic_close_order_type"]
+        == default_long["risk"]["hsl"]["panic_close_order_type"]
     )
     assert long_cfg['risk']['total_exposure_enforcer']['threshold_ratio'] == pytest.approx(
         default_long['risk']['total_exposure_enforcer']['threshold_ratio']
@@ -409,17 +408,14 @@ def test_format_config_canonical_omissions_restore_documented_defaults():
     assert long_cfg['risk']['position_exposure_enforcer']['threshold_ratio'] == pytest.approx(
         default_long['risk']['position_exposure_enforcer']['threshold_ratio']
     )
-    assert long_cfg["unstuck"]["close_fraction"] == pytest.approx(
-        default_long["unstuck"]["close_fraction"]
+    assert long_cfg["risk"]["unstuck"]["ema_distance_fraction"] == pytest.approx(
+        default_long["risk"]["unstuck"]["ema_distance_fraction"]
     )
-    assert long_cfg["unstuck"]["ema_distance_fraction"] == pytest.approx(
-        default_long["unstuck"]["ema_distance_fraction"]
+    assert long_cfg["risk"]["unstuck"]["loss_allowance_fraction"] == pytest.approx(
+        default_long["risk"]["unstuck"]["loss_allowance_fraction"]
     )
-    assert long_cfg["unstuck"]["loss_allowance_fraction"] == pytest.approx(
-        default_long["unstuck"]["loss_allowance_fraction"]
-    )
-    assert long_cfg["unstuck"]["exposure_trigger_ratio"] == pytest.approx(
-        default_long["unstuck"]["exposure_trigger_ratio"]
+    assert long_cfg["risk"]["unstuck"]["exposure_trigger_ratio"] == pytest.approx(
+        default_long["risk"]["unstuck"]["exposure_trigger_ratio"]
     )
 
 
@@ -461,14 +457,14 @@ def test_format_config_warns_and_snaps_cliff_edge_thresholds(caplog):
     current['bot']['long']['risk']['position_exposure_enforcer']['enabled'] = False
     current['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio'] = 5e-10
     current['bot']['long']['risk']['total_exposure_enforcer']['threshold_ratio'] = 0.05
-    current["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] = 5e-10
+    current["bot"]["long"]["risk"]["unstuck"]["exposure_trigger_ratio"] = 5e-10
 
     with caplog.at_level(logging.WARNING):
         out = format_config(current, verbose=True, live_only=True)
 
     assert out['bot']['long']['risk']['position_exposure_enforcer']['threshold_ratio'] == 0.0
     assert out['bot']['long']['risk']['total_exposure_enforcer']['threshold_ratio'] == pytest.approx(0.05)
-    assert out["bot"]["long"]["unstuck"]["exposure_trigger_ratio"] == 0.0
+    assert out["bot"]["long"]["risk"]["unstuck"]["exposure_trigger_ratio"] == 0.0
     assert any(
         "bot.long.risk.position_exposure_enforcer.threshold_ratio" in rec.message
         and "snapping to 0.0" in rec.message
@@ -479,7 +475,7 @@ def test_format_config_warns_and_snaps_cliff_edge_thresholds(caplog):
         for rec in caplog.records
     )
     assert any(
-        "bot.long.unstuck.exposure_trigger_ratio" in rec.message and "snapping to 0.0" in rec.message
+        "bot.long.risk.unstuck.exposure_trigger_ratio" in rec.message and "snapping to 0.0" in rec.message
         for rec in caplog.records
     )
 
@@ -522,8 +518,8 @@ def test_format_config_is_idempotent_for_lean_live_config():
 def test_format_config_preserves_live_optimize_bounds():
     tmpl = _template()
     current = copy.deepcopy(tmpl)
-    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_threshold_fraction"] = [0.1, 0.3, 0.01]
-    current["optimize"]["bounds"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] = [
+    current["optimize"]["bounds"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] = [0.1, 0.3, 0.01]
+    current["optimize"]["bounds"]["long"]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] = [
         10.0,
         120.0,
         5.0,
@@ -531,12 +527,12 @@ def test_format_config_preserves_live_optimize_bounds():
 
     out = format_config(current, verbose=False)
 
-    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_threshold_fraction"] == [
+    assert out["optimize"]["bounds"]["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] == [
         0.1,
         0.3,
         0.01,
     ]
-    assert out["optimize"]["bounds"]["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == [
+    assert out["optimize"]["bounds"]["long"]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] == [
         10.0,
         120.0,
         5.0,

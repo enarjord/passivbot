@@ -112,13 +112,13 @@ On the Bitunix hedge-mode venue connector, the first admissible resting close
 has an additional economy exemption when its cancel-first scope has one planned
 reduce-only limit close and account confirmation proves a nonzero target
 position and zero resting close coverage. The scope is a symbol and position
-side when the strategy hedges,
-and the whole symbol when the strategy is one-way. Count every close in the plan
-before pre-create filters so a filtered ladder remains ineligible. The exemption
-applies only when allowance is exhausted. It counts toward rolling usage and
-gets create-batch priority after risk-critical orders. Missing or changed
-account facts and outstanding
-confirmation keep ordinary admission in place. Cancel-first sequencing,
+side when the strategy hedges, and the whole symbol when the strategy is one-way.
+Count every close in the plan before pre-create filters so a filtered ladder
+remains ineligible. The exemption applies only when allowance is exhausted and
+counts toward rolling usage. With the realized-loss gate enabled, preserve native
+close allocation priority at batch capacity. Otherwise the exempt close follows
+risk-critical orders and precedes other ordinary creates. Missing or changed
+account facts and outstanding confirmation keep ordinary admission in place. Cancel-first sequencing,
 quote readiness, create recovery, and all connector write guards still apply.
 
 Connector calls remain responsible for their own exchange rate limiting.

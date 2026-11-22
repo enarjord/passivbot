@@ -36,10 +36,10 @@ def test_activation_settings_keep_factual_cost_and_age_layouts(monkeypatch, kind
 def test_runner_activation_is_required_complete_boolean_policy(monkeypatch, invalid):
     kernel, run, data = cpu_data(monkeypatch)
     with pytest.raises(TypeError):
-        kernel.MpsEmaAnchorMulticoinFusedRunner(run, data,
+        kernel.MpsEmaAnchorMulticoinFusedRunner(run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
             filter_by_min_effective_cost={'long': False, 'short': False}, side_activation=invalid, forager_score_hysteresis={"long": 0.0, "short": 0.0})
     with pytest.raises(TypeError, match='side_activation'):
-        kernel.MpsEmaAnchorMulticoinFusedRunner(run, data,
+        kernel.MpsEmaAnchorMulticoinFusedRunner(run, data, loss_gate_enabled=False, loss_gate_max_drawdown_fraction=None,
             filter_by_min_effective_cost={'long': False, 'short': False}, forager_score_hysteresis={"long": 0.0, "short": 0.0})
 
 

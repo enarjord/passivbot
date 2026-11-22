@@ -242,10 +242,13 @@ def test_declared_coin_file_global_defaults_project_without_hydrating_or_widenin
     raw = {"bot": {"global": {
         "enabled": True,
         "universe": {"approved_coins": ["BTC"], "ignored_coins": []},
-        "risk": {"total_wallet_exposure_limit_ratio": 2.0, "max_positions": 3},
+        "risk": {
+            "total_wallet_exposure_limit_ratio": 2.0,
+            "max_positions": 3,
+            "unstuck": {"ema_span_0_minutes": 30.5},
+        },
         "strategy": {kind: {"entry": {"ema_span_0_minutes": 12.5}},
                      "ema_anchor": {"fast_span_minutes": 42.0}},
-        "unstuck": {"ema_span_0_minutes": 30.5},
     }, "short": {"strategy": {kind: {"entry": {"ema_span_0_minutes": 17.5}}}},
         "portfolio": {"strategy_kind": kind, "hedge_mode": False}}}
     before = deepcopy(raw)
@@ -257,10 +260,9 @@ def test_declared_coin_file_global_defaults_project_without_hydrating_or_widenin
     assert patch["bot"]["long"]["strategy"][kind] == {"entry": {"ema_span_0_minutes": 12.5}}
     assert patch["bot"]["short"]["strategy"][kind] == {"entry": {"ema_span_0_minutes": 17.5}}
     for side in ("long", "short"):
-        assert patch["bot"][side]["unstuck"] == {"ema_span_0_minutes": 30.5}
+        assert patch["bot"][side]["risk"] == {"unstuck": {"ema_span_0_minutes": 30.5}}
         assert "enabled" not in patch["bot"][side]
         assert "universe" not in patch["bot"][side]
-        assert "risk" not in patch["bot"][side]
         assert set(patch["bot"][side]["strategy"]) == {kind}
     with pytest.raises(ValueError, match="not overridable"):
         _extract_allowed_patch(raw, coin="BTC", source="inline", strict=True,

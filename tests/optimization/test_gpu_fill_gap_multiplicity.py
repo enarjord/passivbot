@@ -57,7 +57,7 @@ def test_native_fill_gap_results_reuse_compact_counts_without_cpu_simulation(
         config = inputs[0]
         candle_coins = list(config["backtest"]["coins"]["binance"])
         config = generated_template(config, "portfolio")
-        config["bot"]["portfolio"]["hsl"].update(enabled=True,
+        config["bot"]["portfolio"]["risk"]["hsl"].update(enabled=True,
             drawdown_threshold_fraction=1., drawdown_fraction_ema_span_minutes=2.5,
             cooldown_after_red_minutes=5)
         inputs[0] = prepare_config(config,verbose=False,target="canonical",runtime=None)

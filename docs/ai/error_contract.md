@@ -86,6 +86,18 @@ transport, request fresh account confirmation after the wave. Creates in the sam
 plan wait for a fresh ordinary plan. This does not change the reconciliation or
 create-only replacement churn contracts.
 
+An enabled realized-loss gate reserves projected loss account-wide across symbols and sides.
+Native close projection supplies the loss of each remaining resting order and unresolved
+create. A create rechecks the allocation under the connector's write lock after queueing.
+A conflicting close replacement waits for cancellation, account and fill confirmation,
+and a new plan. An already satisfied ideal and its working exchange order use one
+reservation. Unresolved creates retain their reservation until exact working, terminal or
+fill evidence accounts for them. For ordinary connectors, bounded order status or
+history reads can recover a close that became terminal before it appeared in open orders.
+Terminal evidence includes cumulative executed quantity and requires a later authoritative
+account and fill refresh. A lookup miss or unavailable endpoint leaves the reservation in
+place and produces a rate-limited diagnostic. Panic follows its independent admission path.
+
 Bitunix ordinary creates reserve one durable submission per configured account, or one per
 submitted member of its bounded create wave. Record the exact wire request before placement
 and recheck transport admission after persisting it. A proven

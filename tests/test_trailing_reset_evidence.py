@@ -290,8 +290,8 @@ async def test_portfolio_margin_does_not_use_the_usdm_proof_endpoint(tmp_path):
 @pytest.mark.asyncio
 async def test_hsl_history_owner_probes_under_fill_lock_without_widening(tmp_path):
     bot, manager, query = await pending_bot(tmp_path)
-    bot.config["bot"]["portfolio"]["hsl"]["scope"] = "coin"
-    bot.config["bot"]["long"]["hsl"]["enabled"] = True
+    bot.config["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "coin"
+    bot.config["bot"]["long"]["risk"]["hsl"]["enabled"] = True
     bot.init_pnls = AsyncMock()
     manager.set_history_scope("all")
     manager.refresh_latest = AsyncMock()
@@ -319,8 +319,8 @@ async def test_hsl_probe_timeout_keeps_published_fill_observation_valid(
     import passivbot
 
     bot, manager, query = await pending_bot(tmp_path)
-    bot.config["bot"]["portfolio"]["hsl"]["scope"] = "coin"
-    bot.config["bot"]["long"]["hsl"]["enabled"] = True
+    bot.config["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "coin"
+    bot.config["bot"]["long"]["risk"]["hsl"]["enabled"] = True
     monkeypatch.setattr(passivbot, "TRAILING_RESET_PROBE_TIMEOUT_SECONDS", 0.05)
     bot.init_pnls = AsyncMock()
     manager.set_history_scope("all")
@@ -348,8 +348,8 @@ async def test_hsl_probe_transport_failure_keeps_authoritative_fills_ready(
     tmp_path, error
 ):
     bot, manager, query = await pending_bot(tmp_path)
-    bot.config["bot"]["portfolio"]["hsl"]["scope"] = "coin"
-    bot.config["bot"]["long"]["hsl"]["enabled"] = True
+    bot.config["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "coin"
+    bot.config["bot"]["long"]["risk"]["hsl"]["enabled"] = True
     bot._health_rate_limits = 0
     bot.init_pnls = AsyncMock()
     manager.set_history_scope("all")

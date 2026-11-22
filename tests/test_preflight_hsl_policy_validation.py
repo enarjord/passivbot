@@ -18,11 +18,19 @@ def _policy(enabled=False):
 
 
 def _config(scope="portfolio"):
-    return {"config_version": "v9.0.0",
-            "live": {"account": {"balance_override": None},
-                     "startup": {"risk_bootstrap_max_lookback_minutes": 129600.0}},
-            "bot": {"portfolio": {"hsl": {"scope": scope, **(_policy() if scope == "portfolio" else {})}},
-                    "global": {"hsl": _policy()}}}
+    return {
+        "config_version": "v9.0.0",
+        "live": {
+            "account": {"balance_override": None},
+            "startup": {"risk_bootstrap_max_lookback_minutes": 129600.0},
+        },
+        "bot": {
+            "portfolio": {
+                "risk": {"hsl": {"scope": scope, **(_policy() if scope == "portfolio" else {})}},
+            },
+            "global": {"risk": {"hsl": _policy()}},
+        },
+    }
 
 
 def _inspect(tmp_path, baseline, target, inspection):
@@ -47,9 +55,9 @@ def _inspect(tmp_path, baseline, target, inspection):
 def test_portfolio_scope_still_validates_resolved_directional_hsl(tmp_path, inspection, scope, field, value, message):
     baseline = _config()
     target = deepcopy(baseline)
-    target["bot"].setdefault(scope, {}).setdefault("hsl", {})[field] = value
+    target["bot"].setdefault(scope, {}).setdefault("risk", {}).setdefault("hsl", {})[field] = value
     resolved_side = "long" if scope == "global" else scope
-    path = f"bot.{resolved_side}.hsl.{field}"
+    path = f"bot.{resolved_side}.risk.hsl.{field}"
     # Normal startup already rejects these policies even though entry and HSL
     # are disabled on the directional side. Inspection must report the same error.
     with pytest.raises(ValueError, match=re.escape(path)):
@@ -66,9 +74,9 @@ def test_portfolio_scope_still_validates_resolved_directional_hsl(tmp_path, insp
 def test_position_side_scope_rejects_coin_only_directional_scaling(tmp_path, inspection, scope):
     baseline = _config("position_side")
     target = deepcopy(baseline)
-    target["bot"].setdefault(scope, {}).setdefault("hsl", {})["scale_budget_with_excess_allowance"] = True
+    target["bot"].setdefault(scope, {}).setdefault("risk", {}).setdefault("hsl", {})["scale_budget_with_excess_allowance"] = True
     resolved_side = "long" if scope == "global" else scope
-    path = f"bot.{resolved_side}.hsl.scale_budget_with_excess_allowance"
+    path = f"bot.{resolved_side}.risk.hsl.scale_budget_with_excess_allowance"
     with pytest.raises(ValueError, match=re.escape(path)):
         prepare_config(deepcopy(target), live_only=True, verbose=False)
     report = _inspect(tmp_path, baseline, target, inspection)
@@ -82,8 +90,8 @@ def test_position_side_scope_rejects_coin_only_directional_scaling(tmp_path, ins
 def test_portfolio_scaling_rejection_matches_loader_even_when_disabled(tmp_path, inspection, enabled):
     baseline = _config()
     target = deepcopy(baseline)
-    target["bot"]["portfolio"]["hsl"].update(enabled=enabled, scale_budget_with_excess_allowance=True)
-    path = "bot.portfolio.hsl.scale_budget_with_excess_allowance"
+    target["bot"]["portfolio"]["risk"]["hsl"].update(enabled=enabled, scale_budget_with_excess_allowance=True)
+    path = "bot.portfolio.risk.hsl.scale_budget_with_excess_allowance"
     with pytest.raises(ValueError, match=re.escape(path)):
         prepare_config(deepcopy(target), live_only=True, verbose=False)
     report = _inspect(tmp_path, baseline, target, inspection)
@@ -95,7 +103,7 @@ def test_portfolio_scaling_rejection_matches_loader_even_when_disabled(tmp_path,
 @pytest.mark.parametrize("enabled", [False, True])
 def test_coin_scoped_scaling_remains_valid_with_activation_disabled(tmp_path, enabled):
     config = _config("coin")
-    config["bot"]["global"]["hsl"].update(enabled=enabled, scale_budget_with_excess_allowance=True)
+    config["bot"]["global"]["risk"]["hsl"].update(enabled=enabled, scale_budget_with_excess_allowance=True)
     prepared = prepare_config(deepcopy(config), live_only=True, verbose=False)
     assert all(prepared["bot"][side]["enabled"] is False for side in ("long", "short"))
     report = _inspect(tmp_path, config, config, "preflight")

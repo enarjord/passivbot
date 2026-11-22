@@ -66,7 +66,9 @@ def apply_features(config, case, coins, markets, bars):
     config["backtest"].update(offline=True, dynamic_wel_by_tradability="dynamic_wel_off" not in flags)
     config['bot']["portfolio"]['hedge_mode'] = case.sides == "both" and "one_way" not in flags
     if "loss_gate" in flags:
-        config["bot"]["portfolio"]["loss_gate"]["max_drawdown_fraction"] = 0.001
+        config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"] = {
+            "enabled": True, "max_realized_drawdown_fraction": 0.001,
+        }
     if "min_cost" in flags:
         config["backtest"]["filter_by_min_effective_cost"] = True
     config["backtest"]["limit_order_fill_buffer_fraction"] = (
@@ -83,7 +85,7 @@ def apply_features(config, case, coins, markets, bars):
         bot = config["bot"][side]
         slots = 1 if case.topology == "single" else max(1, len(coins) // 2) if case.topology == "forager" else len(coins)
         bot['risk'].update({'max_positions': slots if side in active else 0, 'total_wallet_exposure_limit_ratio': 1.0 if side in active else 0.0, 'we_excess_allowance_fraction': 0.2 if 'excess' in flags else 0.0, 'position_exposure_enforcer': {'enabled': 'position_enforcer' in flags, 'threshold_ratio': 0.8}, 'total_exposure_enforcer': {'enabled': bool(flags & {'total_enforcer', 'total_enforcer_portfolio'}), 'policy': 'reduce_portfolio' if 'total_enforcer_portfolio' in flags else 'reduce_overweight', 'threshold_ratio': 0.8}})
-        bot["unstuck"].update(enabled=side in active and bool(flags & {"unstuck", "unstuck_no_ema"}),
+        bot["risk"]["unstuck"].update(enabled=side in active and bool(flags & {"unstuck", "unstuck_no_ema"}),
                               ema_gating_enabled="unstuck_no_ema" not in flags)
         bot["entry_cooldown"].update(base_duration_minutes=5.0 if flags & {"cooldown", "adaptive_cooldown"} else 0.0)
         if "adaptive_cooldown" in flags:
@@ -98,7 +100,7 @@ def apply_features(config, case, coins, markets, bars):
             weights.update({key: 0.0 for key in weights})
         if "forager_hysteresis" in flags:
             config['bot']['global']['forager']['score_hysteresis_margin'] = 0.1
-        policy = config["bot"]["portfolio"]["hsl"] if config["bot"]["portfolio"]["hsl"]["scope"] == "portfolio" else bot["hsl"]
+        policy = config["bot"]["portfolio"]["risk"]["hsl"] if config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "portfolio" else bot["risk"]["hsl"]
         if "hsl_slow_memory" in flags:
             policy["memory_ema_span_minutes"] = 10.5
         if "hsl_zero_cooldown" in flags:
@@ -142,7 +144,7 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
     search = deepcopy(config)
     source_bounds = bounds_config
     if source_bounds is None:
-        template = generated_template(get_expanded_config_prototype(), config["bot"]["portfolio"]["hsl"]["scope"])
+        template = generated_template(get_expanded_config_prototype(), config["bot"]["portfolio"]["risk"]["hsl"]["scope"])
         source_bounds = template["optimize"]["bounds"]
         # This generated benchmark profile explicitly searches every positive
         # score coordinate. An authored bounds_config remains authoritative.
@@ -159,14 +161,14 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
     for key, path in paths:
         bound = Bound.from_config(key, flat[key])
         value = get_path(config, path)
-        portfolio_hsl = path[:3] == ("bot", "portfolio", "hsl")
-        enabled = (portfolio_hsl and config["bot"]["portfolio"]["hsl"]["scope"] == "portfolio" and
+        portfolio_hsl = path[:4] == ("bot", "portfolio", "risk", "hsl")
+        enabled = (portfolio_hsl and config["bot"]["portfolio"]["risk"]["hsl"]["scope"] == "portfolio" and
                    any(flag.startswith("hsl") for flag in flags)) or path[1] in active and (
-            "strategy" in path or path[2] == "risk" or
+            "strategy" in path or (path[2] == "risk" and path[3] not in {"hsl", "unstuck"}) or
             path[2] == "forager" and case.topology == "forager" or
-            path[2] == "unstuck" and bool(flags & {"unstuck", "unstuck_no_ema"}) or
+            path[2:4] == ("risk", "unstuck") and bool(flags & {"unstuck", "unstuck_no_ema"}) or
             path[2] == "entry_cooldown" and bool(flags & {"cooldown", "adaptive_cooldown"}) or
-            path[2] == "hsl" and config["bot"]["portfolio"]["hsl"]["scope"] != "portfolio" and
+            path[2:4] == ("risk", "hsl") and config["bot"]["portfolio"]["risk"]["hsl"]["scope"] != "portfolio" and
             any(flag.startswith("hsl") for flag in flags))
         # Preserve the class: policies are fixed; zero weights/retracements stay zero.
         if value is None or isinstance(value, bool):
@@ -188,7 +190,7 @@ def sampled_population(config, case, count, seed, bounds_config=None, boundary_c
             bound = Bound(0.5, 1.5, 0.01) if bounds_config is None else bound
             if bound.low <= 0:
                 raise ValueError("active-side exposure bounds must stay positive")
-        if path[2] == "hsl" and enabled and bounds_config is None:
+        if path[2:4] == ("risk", "hsl") and enabled and bounds_config is None:
             bound = {"drawdown_threshold_fraction": Bound(.002, .01, .001), "drawdown_fraction_ema_span_minutes": Bound(2, 20, 1),
                      "cooldown_after_red_minutes": Bound(5, 30, 1)}[path[-1]]
         if not enabled:

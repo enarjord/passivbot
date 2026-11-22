@@ -14,7 +14,7 @@ from config.hsl import generated_template
 def _parse(overrides, *, mode="coin", loaded=None, configure_source=None):
     source = generated_template(get_template_config(), mode)
     source["live"]["account"]["user"] = "tester"
-    source["bot"]["portfolio"]["hsl"]["scope"] = mode
+    source["bot"]["portfolio"]["risk"]["hsl"]["scope"] = mode
     if configure_source is not None:
         configure_source(source)
     # Schema validation must see the same real authored file that the resolver
@@ -65,21 +65,21 @@ def _get_path(value, path):
 @pytest.mark.parametrize("pside", ["long", "short"])
 @pytest.mark.parametrize(("path", "value"), HSL_LEAF_CASES)
 def test_complete_hsl_group_is_allowed_for_coin_signal_mode(pside, path, value):
-    parsed = _parse({"BTC": {"bot": {pside: {"hsl": _nested_hsl_patch(path, value)}}}})
+    parsed = _parse({"BTC": {"bot": {pside: {"risk": {"hsl": _nested_hsl_patch(path, value)}}}}})
 
-    hsl = parsed["coin_overrides"]["BTC"]["bot"][pside]["hsl"]
+    hsl = parsed["coin_overrides"]["BTC"]["bot"][pside]["risk"]["hsl"]
     assert _get_path(hsl, path) == value
 
 
 def test_hsl_policy_registry_covers_every_canonical_leaf():
     assert CONDITIONAL_HSL_OVERRIDE_PATHS == {
-        "hsl.cooldown_after_red_minutes",
-        "hsl.drawdown_fraction_ema_span_minutes",
-        "hsl.memory_ema_span_minutes",
-        "hsl.scale_budget_with_excess_allowance",
-        "hsl.enabled",
-        "hsl.panic_close_order_type",
-        "hsl.drawdown_threshold_fraction",
+        "risk.hsl.cooldown_after_red_minutes",
+        "risk.hsl.drawdown_fraction_ema_span_minutes",
+        "risk.hsl.memory_ema_span_minutes",
+        "risk.hsl.scale_budget_with_excess_allowance",
+        "risk.hsl.enabled",
+        "risk.hsl.panic_close_order_type",
+        "risk.hsl.drawdown_threshold_fraction",
     }
 
 
@@ -102,14 +102,14 @@ def test_final_coin_patch_rejects_retired_flat_shared_fields(field, value, locat
 @pytest.mark.parametrize("spelling", ["grouped", "flat"])
 def test_inline_hsl_patch_is_rejected_outside_coin_mode(mode, spelling):
     side = (
-        {"hsl": {"drawdown_threshold_fraction": 0.2}}
+        {"risk": {"hsl": {"drawdown_threshold_fraction": 0.2}}}
         if spelling == "grouped"
         else {"hsl_drawdown_threshold_fraction": 0.2}
     )
 
     with pytest.raises(
         ValueError,
-        match=r"bot\.long\.hsl.*(inactive|only when)",
+        match=r"bot\.long\.(risk\.hsl|hsl_drawdown_threshold_fraction).*(inactive|only when)",
     ):
         _parse({"BTC": {"bot": {"long": side}}}, mode=mode)
 
@@ -121,14 +121,16 @@ def test_full_file_hsl_patch_is_ignored_outside_coin_mode(caplog):
         loaded={
             "bot": {
                 "long": {
-                    "hsl": {"drawdown_threshold_fraction": 0.2},
-                    "unstuck": {"loss_allowance_fraction": 0.023},
+                    "risk": {
+                        "hsl": {"drawdown_threshold_fraction": 0.2},
+                        "unstuck": {"loss_allowance_fraction": 0.023},
+                    },
                 }
             }
         },
     )
     assert parsed["coin_overrides"]["BTC"] == {
-        "bot": {"long": {"unstuck": {"loss_allowance_fraction": 0.023}}}
+        "bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.023}}}}
     }
     assert "hsl is overridable only" in caplog.text
     assert "the file HSL values are ignored" in caplog.text
@@ -141,19 +143,19 @@ def test_override_file_cannot_author_global_signal_scope(
     global_mode, file_mode, caplog
 ):
     loaded = generated_template(get_expanded_config_prototype(), file_mode)
-    loaded["bot"]["short"]["hsl"]["panic_close_order_type"] = "market"
+    loaded["bot"]["short"]["risk"]["hsl"]["panic_close_order_type"] = "market"
     parsed = _parse(
         {"BTC": {"override_config_path": "unused-by-test.json"}},
         mode=global_mode,
         loaded=loaded,
     )
-    assert parsed["bot"]["portfolio"]["hsl"]["scope"] == global_mode
+    assert parsed["bot"]["portfolio"]["risk"]["hsl"]["scope"] == global_mode
     patch = parsed["coin_overrides"]["BTC"]["bot"]
     assert "risk" not in patch
     if global_mode == "coin":
-        assert patch["short"]["hsl"]["panic_close_order_type"] == "market"
+        assert patch["short"]["risk"]["hsl"]["panic_close_order_type"] == "market"
     else:
-        assert "hsl" not in patch.get("short", {})
+        assert "hsl" not in patch.get("short", {}).get("risk", {})
         assert "the file HSL values are ignored" in caplog.text
 
 def test_inline_cannot_switch_signal_mode_to_authorize_hsl_patch():
@@ -163,7 +165,7 @@ def test_inline_cannot_switch_signal_mode_to_authorize_hsl_patch():
         _parse(
             {
                 "BTC": {
-                    "bot": {"portfolio": {'hsl': {'scope': 'coin'}}, 'long': {'hsl': {'enabled': False}}},
+                    "bot": {"portfolio": {"risk": {'hsl': {'scope': 'coin'}}}, 'long': {"risk": {'hsl': {'enabled': False}}}},
                 }
             },
             mode="position_side",
@@ -176,23 +178,27 @@ def test_file_then_inline_hsl_precedence_is_independent_by_side():
             "BTC": {
                 "override_config_path": "unused-by-test.json",
                 "bot": {
-                    "long": {"hsl": {"drawdown_threshold_fraction": 0.25}},
-                    "short": {"hsl": {"panic_close_order_type": "market"}},
+                    "long": {"risk": {"hsl": {"drawdown_threshold_fraction": 0.25}}},
+                    "short": {"risk": {"hsl": {"panic_close_order_type": "market"}}},
                 },
             }
         },
         loaded={
             "bot": {
                 "long": {
-                    "hsl": {
-                        "drawdown_threshold_fraction": 0.15,
-                        "drawdown_fraction_ema_span_minutes": 4.5,
+                    "risk": {
+                        "hsl": {
+                            "drawdown_threshold_fraction": 0.15,
+                            "drawdown_fraction_ema_span_minutes": 4.5,
+                        },
                     }
                 },
                 "short": {
-                    "hsl": {
-                        "panic_close_order_type": "limit",
-                        "cooldown_after_red_minutes": 17.5,
+                    "risk": {
+                        "hsl": {
+                            "panic_close_order_type": "limit",
+                            "cooldown_after_red_minutes": 17.5,
+                        },
                     }
                 },
             }
@@ -200,15 +206,15 @@ def test_file_then_inline_hsl_precedence_is_independent_by_side():
     )
 
     bot = parsed["coin_overrides"]["BTC"]["bot"]
-    assert bot["long"]["hsl"]["drawdown_threshold_fraction"] == 0.25
-    assert bot["long"]["hsl"]["drawdown_fraction_ema_span_minutes"] == 4.5
-    assert bot["short"]["hsl"]["panic_close_order_type"] == "market"
-    assert bot["short"]["hsl"]["cooldown_after_red_minutes"] == 17.5
+    assert bot["long"]["risk"]["hsl"]["drawdown_threshold_fraction"] == 0.25
+    assert bot["long"]["risk"]["hsl"]["drawdown_fraction_ema_span_minutes"] == 4.5
+    assert bot["short"]["risk"]["hsl"]["panic_close_order_type"] == "market"
+    assert bot["short"]["risk"]["hsl"]["cooldown_after_red_minutes"] == 17.5
 
 
 def test_threshold_override_does_not_add_unrequested_policy_fields():
-    parsed = _parse({"BTC": {"bot": {"long": {"hsl": {"drawdown_threshold_fraction": 0.2}}}}})
-    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["hsl"] == {
+    parsed = _parse({"BTC": {"bot": {"long": {"risk": {"hsl": {"drawdown_threshold_fraction": 0.2}}}}}})
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["hsl"] == {
         "drawdown_threshold_fraction": 0.2
     }
 
@@ -222,7 +228,7 @@ def test_threshold_override_does_not_add_unrequested_policy_fields():
 )
 def test_invalid_hsl_combinations_fail_effective_validation(hsl_patch):
     with pytest.raises(ValueError, match=r"coin_overrides\.BTC"):
-        _parse({"BTC": {"bot": {"long": {"hsl": hsl_patch}}}})
+        _parse({"BTC": {"bot": {"long": {"risk": {"hsl": hsl_patch}}}}})
 
 
 def test_unknown_hsl_policy_is_rejected_at_patch_boundary():
@@ -230,4 +236,4 @@ def test_unknown_hsl_policy_is_rejected_at_patch_boundary():
         ValueError,
         match=r"coin_overrides\.BTC.*(unknown|not overridable)",
     ):
-        _parse({"BTC": {"bot": {"long": {"hsl": {"unknown_policy": 1.0}}}}})
+        _parse({"BTC": {"bot": {"long": {"risk": {"hsl": {"unknown_policy": 1.0}}}}}})

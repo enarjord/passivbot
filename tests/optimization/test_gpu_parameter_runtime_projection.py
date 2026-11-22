@@ -52,8 +52,7 @@ def test_candidate_runtime_projection_matches_full_canonical_payload(
     _apply_config_overrides(config, {
         f"bot.long.strategy.{strategy}.{entry}ema_span_0_minutes": 37.25,
         "bot.long.entry_cooldown.min_duration_minutes": 3.5,
-        "bot.portfolio.unstuck.memory_ema_span_minutes": 1777.25,
-        "bot.portfolio.loss_gate.memory_ema_span_minutes": 2888.5,
+        "bot.portfolio.risk.loss_realization.memory_ema_span_minutes": 2888.5,
     })
     config["coin_overrides"] = {"COIN00": {"bot": {"long": {
         "strategy": {strategy: ({"entry": {"initial_qty_fraction": 0.4}}
@@ -61,7 +60,9 @@ def test_candidate_runtime_projection_matches_full_canonical_payload(
                                 else {"base_qty_fraction": 0.4})},
     }}}}
     if scope == "coin":
-        config["coin_overrides"]["COIN00"]["bot"]["long"]["hsl"] = {"enabled": False}
+        config["coin_overrides"]["COIN00"]["bot"]["long"]["risk"] = {
+            "hsl": {"enabled": False},
+        }
     original = deepcopy(config)
     bot = config["bot"]
     owners = dict(vars(bot))
@@ -121,7 +122,7 @@ def test_foreign_roots_and_keys_retain_legacy_compilation(foreign, monkeypatch):
         def __deepcopy__(self, memo):
             visits.append("root_deepcopy")
             copied = deepcopy(dict(self), memo)
-            copied["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 2345.5
+            copied["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] = 2345.5
             return copied
 
         def items(self):
@@ -148,7 +149,7 @@ def test_foreign_roots_and_keys_retain_legacy_compilation(foreign, monkeypatch):
     assert prepare_candidate_parameters(config, markets, "binance") == expected
     assert visits
     if foreign != "key":
-        assert expected["unstuck_memory_ema_span_minutes"] == 2345.5
+        assert expected["realized_loss_memory_ema_span_minutes"] == 2345.5
 
 
 @pytest.mark.parametrize("malformed", ["version", "retired", "number", "source", "market", "inactive_pin"])
@@ -157,16 +158,16 @@ def test_projection_preserves_required_input_failures(malformed, monkeypatch):
     if malformed == "version":
         config["config_version"] = "v8.0.0"
     elif malformed == "retired":
-        config["bot"]["long"]["hsl"]["restart_after_red_policy"] = "never"
+        config["bot"]["long"]["risk"]["hsl"]["restart_after_red_policy"] = "never"
     elif malformed == "number":
-        config["bot"]["long"]["hsl"]["memory_ema_span_minutes"] = float("nan")
+        config["bot"]["long"]["risk"]["hsl"]["memory_ema_span_minutes"] = float("nan")
     elif malformed == "source":
         config["bot"]._bot_policy = object()
     elif malformed == "market":
         del markets["COIN00"]["qty_step"]
     else:
         config, markets = inputs(scope="portfolio")
-        config["coin_overrides"] = {"COIN00": {"bot": {"long": {"hsl": {"enabled": False}}}}}
+        config["coin_overrides"] = {"COIN00": {"bot": {"long": {"risk": {"hsl": {"enabled": False}}}}}}
 
     with pytest.raises((ValueError, TypeError, KeyError)) as expected:
         legacy_parameters(config, markets, monkeypatch)

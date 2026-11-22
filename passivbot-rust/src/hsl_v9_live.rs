@@ -262,28 +262,10 @@ struct RealizedFill {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RealizedInput {
-    span_minutes: f64,
-    start: i64,
-    now: i64,
-    known_origin: bool,
-    fills: Vec<RealizedFill>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RealizedFilterPolicy {
-    enabled: bool,
     memory_ema_span_minutes: f64,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RealizedMemoriesInput {
     start: i64,
     now: i64,
     known_origin: bool,
-    unstuck: RealizedFilterPolicy,
-    loss_gate: RealizedFilterPolicy,
     fills: Vec<RealizedFill>,
 }
 
@@ -345,7 +327,7 @@ pub fn realized_memory_v9(input_json: &str) -> PyResult<String> {
     let same_time = validate_realized_facts(input.start, input.now, &input.fills)
         .map_err(PyValueError::new_err)?;
     let output = fold_realized_memory(
-        input.span_minutes,
+        input.memory_ema_span_minutes,
         input.start,
         input.now,
         input.known_origin,
@@ -353,38 +335,6 @@ pub fn realized_memory_v9(input_json: &str) -> PyResult<String> {
         same_time,
     )
     .map_err(PyValueError::new_err)?;
-    serde_json::to_string(&output).map_err(|e| PyValueError::new_err(e.to_string()))
-}
-
-/// Validate one factual tape, then feed each enabled independent filter once.
-/// Disabled filters have no state and are returned as explicit null envelopes.
-#[pyfunction]
-pub fn realized_memories_v9(input_json: &str) -> PyResult<String> {
-    let input: RealizedMemoriesInput =
-        serde_json::from_str(input_json).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    let same_time = validate_realized_facts(input.start, input.now, &input.fills)
-        .map_err(PyValueError::new_err)?;
-    let filter = |policy: &RealizedFilterPolicy| -> Result<Option<serde_json::Value>, String> {
-        // Configuration remains checked even when this consumer is disabled.
-        Policy::new(policy.memory_ema_span_minutes, 1.0, 1.0, 0)?;
-        if !policy.enabled {
-            return Ok(None);
-        }
-        fold_realized_memory(
-            policy.memory_ema_span_minutes,
-            input.start,
-            input.now,
-            input.known_origin,
-            &input.fills,
-            same_time,
-        )
-        .map(Some)
-    };
-    let output = serde_json::json!({
-        "start": input.start, "now": input.now, "input_fills": input.fills.len(),
-        "unstuck": filter(&input.unstuck).map_err(PyValueError::new_err)?,
-        "loss_gate": filter(&input.loss_gate).map_err(PyValueError::new_err)?,
-    });
     serde_json::to_string(&output).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
@@ -506,7 +456,7 @@ mod tests {
 
     #[test]
     fn realized_memory_clips_each_ordered_fill_and_queries_do_not_net_cohorts() {
-        let input = json!({"span_minutes":3,"start":0,"now":60000,"known_origin":true,
+        let input = json!({"memory_ema_span_minutes":3,"start":0,"now":60000,"known_origin":true,
             "fills":[{"identity":"profit","timestamp":0,"net":10},
                      {"identity":"loss","timestamp":0,"net":-15}]})
         .to_string();
@@ -519,7 +469,7 @@ mod tests {
 
     #[test]
     fn realized_memory_unknown_prefix_declares_initializer_without_claiming_tail_recovery() {
-        let suffix = json!({"span_minutes":3,"start":60000,"now":120000,
+        let suffix = json!({"memory_ema_span_minutes":3,"start":60000,"now":120000,
             "known_origin":false,"fills":[]})
         .to_string();
         let result: Value = serde_json::from_str(&realized_memory_v9(&suffix).unwrap()).unwrap();
@@ -531,7 +481,7 @@ mod tests {
 
         // The same empty suffix with an actual preceding loss has nonzero
         // memory. Attenuation alone cannot bound unknown economic loss.
-        let complete = json!({"span_minutes":3,"start":0,"now":120000,
+        let complete = json!({"memory_ema_span_minutes":3,"start":0,"now":120000,
         "known_origin":true,"fills":[
             {"identity":"prior-loss","timestamp":0,"net":-40.0}
         ]})
@@ -541,67 +491,21 @@ mod tests {
     }
 
     #[test]
-    fn separate_realized_filters_use_one_tape_with_independent_decay_and_paydown() {
-        let input = json!({"start":0,"now":60000,"known_origin":true,
-            "unstuck":{"enabled":true,"memory_ema_span_minutes":3.0},
-            "loss_gate":{"enabled":true,"memory_ema_span_minutes":7.0},
-            "fills":[{"identity":"loss","timestamp":0,"net":-40},
-                     {"identity":"profit","timestamp":60000,"net":10}]});
-        let output: Value =
-            serde_json::from_str(&realized_memories_v9(&input.to_string()).unwrap()).unwrap();
-        assert_eq!(output["input_fills"], json!(2));
-        assert_eq!(output["unstuck"]["drawdown"], json!(10.0));
-        assert_eq!(output["loss_gate"]["drawdown"], json!(20.0));
-        assert_eq!(output["unstuck"]["span_minutes"], json!(3.0));
-        assert_eq!(output["loss_gate"]["span_minutes"], json!(7.0));
-        assert_eq!(output["unstuck"]["fills"], json!(2));
-        assert_eq!(output["loss_gate"]["fills"], json!(2));
-        // Repeating a fold or replaying a corrected factual prefix does not
-        // move either initializer or apply the economic fill twice.
-        assert_eq!(
-            realized_memories_v9(&input.to_string()).unwrap(),
-            output.to_string()
-        );
-        let mut corrected = input;
-        corrected["fills"][0]["net"] = json!(-20);
-        let corrected: Value =
-            serde_json::from_str(&realized_memories_v9(&corrected.to_string()).unwrap()).unwrap();
-        assert_eq!(corrected["unstuck"]["drawdown"], json!(0.0));
-        assert_eq!(corrected["loss_gate"]["drawdown"], json!(5.0));
-        assert_eq!(corrected["start"], json!(0));
-    }
+    fn shared_realized_memory_replays_each_observed_fill_once() {
+        let mut input = json!({"start":0,"now":120000,"known_origin":true,
+            "memory_ema_span_minutes":3.0,
+            "fills":[{"identity":"entry_fee","timestamp":0,"net":-2},
+                     {"identity":"long_loss","timestamp":0,"net":-38},
+                     {"identity":"short_profit","timestamp":60000,"net":10},
+                     {"identity":"maker_rebate","timestamp":60000,"net":1},
+                     {"identity":"panic_loss","timestamp":120000,"net":-5}]});
+        let output = realized_memory_v9(&input.to_string()).unwrap();
+        let observation: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(observation["drawdown"], json!(9.5));
+        assert_eq!(observation["fills"], json!(5));
+        assert_eq!(realized_memory_v9(&input.to_string()).unwrap(), output);
 
-    #[test]
-    fn disabled_realized_filter_is_absent_and_gate_only_preserves_unknown_prefix() {
-        let input = json!({"start":60000,"now":120000,"known_origin":false,
-            "unstuck":{"enabled":false,"memory_ema_span_minutes":3.0},
-            "loss_gate":{"enabled":true,"memory_ema_span_minutes":7.0},
-            "fills":[{"identity":"loss","timestamp":60000,"net":-40}]});
-        let output: Value =
-            serde_json::from_str(&realized_memories_v9(&input.to_string()).unwrap()).unwrap();
-        assert!(output["unstuck"].is_null());
-        assert_eq!(output["loss_gate"]["drawdown"], json!(30.0));
-        assert_eq!(
-            output["loss_gate"]["initialization"],
-            json!("unknown_prefix_zero")
-        );
-        assert_eq!(output["loss_gate"]["prefix_attenuation"], json!(0.75));
-        assert_eq!(output["loss_gate"]["start"], json!(60000));
-    }
-
-    #[test]
-    fn joint_realized_filters_reject_conflicting_tapes_before_any_filter_result() {
-        let mut input = json!({"start":0,"now":60000,"known_origin":true,
-            "unstuck":{"enabled":true,"memory_ema_span_minutes":3.0},
-            "loss_gate":{"enabled":false,"memory_ema_span_minutes":7.0},
-            "fills":[{"identity":"duplicate","timestamp":0,"net":10},
-                     {"identity":"duplicate","timestamp":60000,"net":-40}]});
-        assert!(realized_memories_v9(&input.to_string()).is_err());
-        input["fills"][1]["identity"] = json!("second");
-        input["fills"][1]["timestamp"] = json!(60001);
-        assert!(realized_memories_v9(&input.to_string()).is_err());
-        input["fills"][1]["timestamp"] = json!(60000);
-        input["loss_gate"]["memory_ema_span_minutes"] = json!(0);
-        assert!(realized_memories_v9(&input.to_string()).is_err());
+        input["fills"][1]["identity"] = json!("entry_fee");
+        assert!(realized_memory_v9(&input.to_string()).is_err());
     }
 }

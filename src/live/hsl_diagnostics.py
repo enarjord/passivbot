@@ -148,7 +148,7 @@ def record(bot, wave):
         observation = dict(
             engine="hsl",
             schema_version=1,
-            signal_mode=bot.config["bot"]["portfolio"]["hsl"]["scope"],
+            signal_mode=bot.config["bot"]["portfolio"]["risk"]["hsl"]["scope"],
             captured_at_ms=wave.captured_ms,
             input_expires_at_ms=min(stamps)
             + int(bot._live_market_snapshot_max_age_ms()),
@@ -321,7 +321,7 @@ def snapshot(bot, *, now_ms):
             return dict(
                 engine="hsl",
                 schema_version=1,
-                signal_mode=bot.config["bot"]["portfolio"]["hsl"]["scope"],
+                signal_mode=bot.config["bot"]["portfolio"]["risk"]["hsl"]["scope"],
                 observation_status=(
                     "diagnostic_unavailable"
                     if getattr(bot, "_hsl_diagnostic_failed", False)

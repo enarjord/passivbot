@@ -60,7 +60,7 @@ def _base_parameter_values() -> dict[str, float]:
         "unstuck_ema_span_1_minutes": 211.75,
         "unstuck_enabled": 0.0,
         "unstuck_ema_gating_enabled": 1.0,
-        "unstuck_close_fraction": 0.1,
+        "reserved_unstuck_sizing_slot": 0.1,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_loss_allowance_fraction": 0.1,
         "unstuck_exposure_trigger_ratio": 0.5,
@@ -71,8 +71,8 @@ def _base_parameter_values() -> dict[str, float]:
         "hsl_cooldown_ms_hi": 0.0,
         "hsl_memory_ema_span_minutes": 1440.0,
         "hsl_signal_mode": 0.0,
-        "unstuck_memory_ema_span_minutes": 1440.0,
-        "loss_gate_memory_ema_span_minutes": 1440.0,
+        "realized_loss_memory_ema_span_minutes": 1440.0,
+        "reserved_realized_memory_slot": 1440.0,
     }
 
 
@@ -95,10 +95,10 @@ def _build_case(name, *, candidates, dispatch_batch_size, single_bars,
         from config.schema import get_expanded_config_prototype
 
         template = generated_template(get_expanded_config_prototype(), "portfolio")
-        config["bot"]["long"].pop("hsl", None)
-        config["bot"]["short"].pop("hsl", None)
-        config["bot"]["portfolio"]["hsl"] = dict(template["bot"]["portfolio"]["hsl"])
-        config["bot"]["portfolio"]["hsl"]["enabled"] = False
+        config["bot"]["long"]["risk"].pop("hsl", None)
+        config["bot"]["short"]["risk"].pop("hsl", None)
+        config["bot"]["portfolio"]["risk"]["hsl"] = dict(template["bot"]["portfolio"]["risk"]["hsl"])
+        config["bot"]["portfolio"]["risk"]["hsl"]["enabled"] = False
         config["optimize"]["bounds"] = {}
     metrics = {"cagr_fraction_strategy_equity", "drawdown_max_fraction_strategy_equity", "gross_turnover_ratio_per_day"}
     replay = SharedAccountReplay(config=config, hlcvs=candles, mss=markets,

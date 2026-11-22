@@ -153,7 +153,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             ),
                         );
                     }
-                } else if let Some(next) = request.next_candle {
+                } else if let Some(next) = request.next_candle.filter(|_| !request.close_grid_from_current_snapshot) {
                     let next_close = calc_next_close_long(
                         request.exchange,
                         request.state,
@@ -308,7 +308,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             ),
                         );
                     }
-                } else if let Some(next) = request.next_candle {
+                } else if let Some(next) = request.next_candle.filter(|_| !request.close_grid_from_current_snapshot) {
                     let next_close = calc_next_close_short(
                         request.exchange,
                         request.state,
@@ -394,6 +394,7 @@ mod tests {
             },
             position,
             trailing,
+            close_grid_from_current_snapshot: false,
             next_candle: Some(NextStepHint {
                 limit_order_fill_buffer_fraction: 0.0,
                 low: next_low,

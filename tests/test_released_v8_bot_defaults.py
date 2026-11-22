@@ -47,8 +47,8 @@ def test_missing_unstuck_spans_still_derive_from_the_authored_strategy(kind):
     strategy["ema_span_0"] = 403.5
     original = deepcopy(source)
     output = migrate_v8_to_v9(source, memory_span_minutes=123.5).config
-    assert output["bot"]["long"]["unstuck"]["ema_span_0_minutes"] == 403.5
-    assert output["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0_minutes"] == [403.5, 403.5]
+    assert output["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == 403.5
+    assert output["optimize"]["bounds"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] == [403.5, 403.5]
     assert source == original
 
 
@@ -88,7 +88,7 @@ def test_inactive_zero_span_uses_the_frozen_positive_strategy_fallback(kind, sid
     original = deepcopy(source)
     result = migrate_v8_to_v9(source, memory_span_minutes=123.5)
     migrated = result.config["bot"][side]
-    assert migrated["unstuck"][span + "_minutes"] == historical_fallback
+    assert migrated["risk"]["unstuck"][span + "_minutes"] == historical_fallback
     emitted_strategy = migrated["strategy"][kind]
     if kind == "trailing_martingale":
         emitted_strategy = emitted_strategy["entry"]
@@ -117,8 +117,8 @@ def test_omitted_short_positive_search_bounds_keep_old_runtime_policy_and_couple
     assert short["risk"]["total_wallet_exposure_limit_ratio"] == 0.0
     assert short["risk"]["max_positions"] == 1
     assert short["enabled"] is True  # Historical search bounds can still activate capacity.
-    assert short["unstuck"]["ema_span_0_minutes"] == 60.0
-    assert short["unstuck"]["ema_span_1_minutes"] == 60.0
+    assert short["risk"]["unstuck"]["ema_span_0_minutes"] == 60.0
+    assert short["risk"]["unstuck"]["ema_span_1_minutes"] == 60.0
     assert result.config["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] == [0.0, 1.0]
     assert source == original
 
@@ -170,12 +170,12 @@ def test_sparse_coin_and_scenario_fixed_replacements_do_not_gain_root_defaults()
     }}]
     source["optimize"]["fixed_runtime_overrides"] = {"bot.long.risk.n_positions": 3}
     result = migrate_v8_to_v9(source, memory_span_minutes=123.5).config
-    assert result["coin_overrides"]["BTC"]["bot"]["short"] == {"unstuck": {"close_fraction": 0.007}}
+    assert result["coin_overrides"]["BTC"]["bot"]["short"] == {"risk": {"unstuck": {}}}
     assert result["backtest"]["scenarios"][0]["overrides"] == {"bot.short": {"risk": {"max_positions": 2}}}
     assert result["optimize"]["fixed_runtime_overrides"] == {"bot.long.risk.max_positions": 3}
     sparse = {"config_version": "v8.6.0", "bot": {"short": {"unstuck": {"close_pct": 0.007}}}}
     output = migrate_v8_to_v9(sparse, _coin_patch=True).config
-    assert output["bot"] == {"short": {"unstuck": {"close_fraction": 0.007}}}
+    assert output["bot"] == {"short": {"risk": {"unstuck": {}}}}
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -282,6 +282,5 @@ def test_minimal_released_cli_export_preserves_sparse_approval_declarations(tmp_
         assert exported["bot"].get(scope, {}).get("universe", {}) == (
             expected["bot"].get(scope, {}).get("universe", {}))
     prepared = prepare_config(exported, verbose=False)
-    assert prepared["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] == 21600.5
-    assert prepared["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] == 21600.5
+    assert prepared["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] == 21600.5
     assert "pnls_max_lookback_days" not in exported["live"]

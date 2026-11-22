@@ -57,9 +57,9 @@ def test_shared_position_selector_converts_without_changing_authored_value(owner
     ("risk_we_excess_allowance_pct", "risk.we_excess_allowance_fraction", 0.125),
     ("forager_score_weights.volume", "forager.score_weights.volume", 0.375),
     ("forager_volume_ema_span_1m", "forager.volume_ema_span_minutes", 37.5),
-    ("hsl_cooldown_minutes_after_red", "hsl.cooldown_after_red_minutes", 17.5),
-    ("hsl_ema_span_minutes", "hsl.drawdown_fraction_ema_span_minutes", 6.25),
-    ("unstuck_threshold", "unstuck.exposure_trigger_ratio", 0.625),
+    ("hsl_cooldown_minutes_after_red", "risk.hsl.cooldown_after_red_minutes", 17.5),
+    ("hsl_ema_span_minutes", "risk.hsl.drawdown_fraction_ema_span_minutes", 6.25),
+    ("unstuck_threshold", "risk.unstuck.exposure_trigger_ratio", 0.625),
     ("risk_entry_cooldown_minutes", "entry_cooldown.base_duration_minutes", 9.5),
 ])
 def test_other_declared_shared_fields_and_dictionary_tails_convert(owner, old, new, value):
@@ -180,7 +180,8 @@ def test_shared_conversion_preserves_separate_gate_acknowledgment(owner):
     output = migrate(source, memory_span_minutes=123.5,
         acknowledge_realized_loss_gate_memory_change=True).config
     assert get_patch(output, owner) == {"bot.long.risk.max_positions": 4,
-        "bot.portfolio.loss_gate.max_drawdown_fraction": 0.1}
+        "bot.portfolio.risk.loss_realization.loss_gate.enabled": True,
+        "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction": 0.1}
     assert source == before
 
 
@@ -192,12 +193,12 @@ def test_shared_conversion_preserves_separate_gate_acknowledgment(owner):
     ("bot.*.risk.n_positions", "bot.*.risk.max_positions", "n_positions", {"long", "short"}),
     ("threshold", "exposure_trigger_ratio", "unstuck_exposure_trigger_ratio", {"long", "short"}),
     ("unstuck.threshold", "unstuck.exposure_trigger_ratio", "unstuck_exposure_trigger_ratio", {"long", "short"}),
-    ("*.unstuck.threshold", "bot.*.unstuck.exposure_trigger_ratio", "unstuck_exposure_trigger_ratio", {"long", "short"}),
-    ("short.unstuck_threshold", "bot.short.unstuck.exposure_trigger_ratio", "unstuck_exposure_trigger_ratio", {"short"}),
+    ("*.unstuck.threshold", "bot.*.risk.unstuck.exposure_trigger_ratio", "unstuck_exposure_trigger_ratio", {"long", "short"}),
+    ("short.unstuck_threshold", "bot.short.risk.unstuck.exposure_trigger_ratio", "unstuck_exposure_trigger_ratio", {"short"}),
     ("ema_span_minutes", "drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long", "short"}),
     ("hsl.ema_span_minutes", "hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long", "short"}),
-    ("*.hsl.ema_span_minutes", "bot.*.hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long", "short"}),
-    ("long.hsl_ema_span_minutes", "bot.long.hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long"}),
+    ("*.hsl.ema_span_minutes", "bot.*.risk.hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long", "short"}),
+    ("long.hsl_ema_span_minutes", "bot.long.risk.hsl.drawdown_fraction_ema_span_minutes", "hsl_drawdown_fraction_ema_span_minutes", {"long"}),
     ("entry_cooldown_minutes", "entry_cooldown.base_duration_minutes", "risk_entry_cooldown_minutes", {"long", "short"}),
     ("risk.entry_cooldown_minutes", "entry_cooldown.base_duration_minutes", "risk_entry_cooldown_minutes", {"long", "short"}),
     ("long.risk.entry_cooldown_minutes", "bot.long.entry_cooldown.base_duration_minutes", "risk_entry_cooldown_minutes", {"long"}),
@@ -267,7 +268,7 @@ def test_changed_risk_group_selector_requires_explicit_canonical_choices(selecto
 @pytest.mark.parametrize("selector,expected", [
     ("ema_span_minutes", "drawdown_fraction_ema_span_minutes"),
     ("hsl.ema_span_minutes", "hsl.drawdown_fraction_ema_span_minutes"),
-    ("bot.hsl.ema_span_minutes", "bot.portfolio.hsl.drawdown_fraction_ema_span_minutes"),
+    ("bot.hsl.ema_span_minutes", "bot.portfolio.risk.hsl.drawdown_fraction_ema_span_minutes"),
 ])
 def test_portfolio_smoothing_selectors_preserve_only_the_old_smoothing_gene(selector, expected):
     from config.optimize_bounds import flatten_optimize_bounds
@@ -284,7 +285,7 @@ def test_portfolio_smoothing_selectors_preserve_only_the_old_smoothing_gene(sele
     bounds = flatten_optimize_bounds(converted["optimize"]["bounds"],
                                      strategy_kind=converted["bot"]["portfolio"]["strategy_kind"])
     assert resolve_bound_selectors(converted, [expected], bounds) == {
-        "hsl_drawdown_fraction_ema_span_minutes": ("bot", "portfolio", "hsl", "drawdown_fraction_ema_span_minutes")
+        "hsl_drawdown_fraction_ema_span_minutes": ("bot", "portfolio", "risk", "hsl", "drawdown_fraction_ema_span_minutes")
     }
 
 

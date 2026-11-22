@@ -1332,6 +1332,10 @@ def apply_scenario_overrides(config, overrides, tracker=None):
     """
     from config.universe import restore_universe_sources, universe_sources_affected
     from config.bot_inheritance import get_bot_policy, reconciled_bot_policy
+    from config.risk_memory import validate_loss_gate_replacements
+
+    if overrides:
+        validate_loss_gate_replacements(overrides)
     policy_source = reconciled_bot_policy(config)
     bounds_source = config.get("optimize", {}).get("bounds")
     if universe_sources_affected(overrides) and policy_source is None:

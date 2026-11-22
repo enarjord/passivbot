@@ -151,7 +151,6 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
         return False
     for key in (
         "unstuck_loss_allowance_fraction",
-        "unstuck_close_fraction",
         "unstuck_exposure_trigger_ratio",
         "total_wallet_exposure_limit_ratio",
         "n_positions",

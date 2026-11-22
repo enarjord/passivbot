@@ -156,15 +156,15 @@ def validate_bot_config(result: dict) -> None:
             )
         _validate_bool(
             get_grouped_bot_value(bot_side, "unstuck_enabled"),
-            path=f"bot.{pside}.unstuck.enabled",
+            path=f"bot.{pside}.risk.unstuck.enabled",
         )
         _validate_bool(
             get_grouped_bot_value(bot_side, "unstuck_ema_gating_enabled"),
-            path=f"bot.{pside}.unstuck.ema_gating_enabled",
+            path=f"bot.{pside}.risk.unstuck.ema_gating_enabled",
         )
         validate_unstuck_ema_distance_fraction_value(
             get_grouped_bot_value(bot_side, "unstuck_ema_distance_fraction"),
-            path=f"bot.{pside}.unstuck.ema_distance_fraction",
+            path=f"bot.{pside}.risk.unstuck.ema_distance_fraction",
             pside=pside,
         )
 
@@ -412,7 +412,7 @@ def normalize_hsl_risk_unstuck_numerics(
     for pside in BOT_POSITION_SIDES:
         bot_side = result["bot"][pside]
         risk_path = f"bot.{pside}.risk"
-        unstuck_path = f"bot.{pside}.unstuck"
+        unstuck_path = f"bot.{pside}.risk.unstuck"
         for key in ("ema_span_0", "ema_span_1"):
             raw = get_grouped_bot_value(bot_side, f"unstuck_{key}_minutes")
             if isinstance(raw, bool):
@@ -425,11 +425,6 @@ def normalize_hsl_risk_unstuck_numerics(
         _validate_ratio(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_fraction"),
             path=f"{risk_path}.we_excess_allowance_fraction",
-        )
-        _validate_ratio(
-            get_grouped_bot_value(bot_side, "unstuck_close_fraction"),
-            path=f"{unstuck_path}.close_fraction",
-            max_value=1.0,
         )
         _validate_ratio(
             get_grouped_bot_value(bot_side, "unstuck_loss_allowance_fraction"),

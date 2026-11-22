@@ -19,24 +19,26 @@ def _sample_config() -> dict:
         "config_version": "v9.0.0",
         "live": {"account": {"user": "binance_01"}},
         "bot": {
-            "portfolio": {"hsl": {
-                    "scope": "coin",
-                }},
+            "portfolio": {"risk": {"hsl": {"scope": "coin"}}},
             "long": {
-                "hsl": {
-                    "enabled": True,
-                    "drawdown_threshold_fraction": 0.1,
-                    "cooldown_after_red_minutes": 45,
-                    "memory_ema_span_minutes": 43200.0,
-                    "drawdown_fraction_ema_span_minutes": 120.0,
-                    "panic_close_order_type": "limit",
+                "risk": {
+                    "hsl": {
+                        "enabled": True,
+                        "drawdown_threshold_fraction": 0.1,
+                        "cooldown_after_red_minutes": 45,
+                        "memory_ema_span_minutes": 43200.0,
+                        "drawdown_fraction_ema_span_minutes": 120.0,
+                        "panic_close_order_type": "limit",
+                    },
                 },
             },
             "short": {
-                "hsl": {
-                    "enabled": False,
-                    "drawdown_threshold_fraction": 0.12,
-                    "cooldown_after_red_minutes": 30,
+                "risk": {
+                    "hsl": {
+                        "enabled": False,
+                        "drawdown_threshold_fraction": 0.12,
+                        "cooldown_after_red_minutes": 30,
+                    },
                 },
             },
         },
@@ -183,7 +185,7 @@ def test_hsl_preview_degraded_capture_never_becomes_current_by_timestamp():
 
 def test_hsl_preview_portfolio_policy_uses_explicit_block():
     config = _sample_config()
-    config["bot"]["portfolio"]["hsl"] = {
+    config["bot"]["portfolio"]["risk"]["hsl"] = {
         "scope": "portfolio",
         "enabled": True,
         "drawdown_threshold_fraction": 0.25,

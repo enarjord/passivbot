@@ -21,11 +21,11 @@ def test_parse_overrides_validates_each_default_file_document_once(tmp_path, mon
 
     source = get_expanded_config_prototype()
     override = tmp_path / "btc.json"
-    _write_config(override, {"bot": {"long": {"unstuck": {"close_fraction": 0.04}}}})
+    _write_config(override, {"bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.04}}}}})
     source["coin_overrides"] = {
         "BTC": {
             "override_config_path": str(override),
-            "bot": {"long": {"unstuck": {"close_fraction": 0.06}}},
+            "bot": {"long": {"risk": {"unstuck": {"loss_allowance_fraction": 0.06}}}},
         },
     }
     prepared = prepare_config(source, verbose=False)
@@ -39,7 +39,7 @@ def test_parse_overrides_validates_each_default_file_document_once(tmp_path, mon
     monkeypatch.setattr(overrides, "_validated_file_patch", count_file_validation)
     result = parse_overrides(prepared, verbose=False)
 
-    assert result["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["close_fraction"] == 0.06
+    assert result["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.06
     assert calls == [str(override)]
 
 
@@ -216,7 +216,7 @@ def test_unreadable_override_file_error_propagates(tmp_path):
 def test_referenced_retired_policy_error_identifies_coin_and_file(tmp_path):
     config = config_utils.get_template_config()
     override = tmp_path / "doge-policy.json"
-    _write_config(override, {"bot": {"long": {"hsl": {"restart_after_red_policy": "never"}}}})
+    _write_config(override, {"bot": {"long": {"risk": {"hsl": {"restart_after_red_policy": "never"}}}}})
     config["coin_overrides"] = {"DOGE": {"override_config_path": str(override)}}
     base = tmp_path / "base.json"
     _write_config(base, config)
@@ -229,11 +229,11 @@ def test_referenced_retired_policy_error_identifies_coin_and_file(tmp_path):
 def _config_with_file(tmp_path, document, *, scope="coin"):
     config = get_expanded_config_prototype()
     config["live"]["account"]["user"] = "tester"
-    config["bot"]["portfolio"]["hsl"]["scope"] = scope
+    config["bot"]["portfolio"]["risk"]["hsl"]["scope"] = scope
     if scope == "portfolio":
-        config["bot"]["portfolio"]["hsl"].update(deepcopy(config["bot"]["long"]["hsl"]))
+        config["bot"]["portfolio"]["risk"]["hsl"].update(deepcopy(config["bot"]["long"]["risk"]["hsl"]))
         for side in ("long", "short"):
-            config["optimize"]["bounds"][side].pop("hsl", None)
+            config["optimize"]["bounds"][side]["risk"].pop("hsl", None)
     config["live"]["base_config_path"] = str(tmp_path / "main.json")
     path = tmp_path / "override.json"
     _write_config(path, document)
@@ -250,7 +250,7 @@ def _prepare_file_config(config):
 def test_stored_scenario_file_is_not_a_cycle_in_effective_coin_validation(tmp_path, pside):
     from config.optimize_bounds import set_flat_optimize_bound
 
-    document = {"bot": {pside: {"unstuck": {"close_fraction": 0.075}}}}
+    document = {"bot": {pside: {"risk": {"unstuck": {"loss_allowance_fraction": 0.075}}}}}
     config, path = _config_with_file(tmp_path, document)
     scenario = {"label": "file-policy", "overrides": {
         "coin_overrides": {"BTC": {"override_config_path": str(path)}},
@@ -320,14 +320,14 @@ def test_override_file_own_scenario_reference_remains_a_real_cycle(tmp_path):
 def test_sparse_file_keeps_only_authored_pins_and_explicit_wallet_extension(tmp_path):
     document = {"bot": {"long": {
         "wallet_exposure_limit_ratio": 0.12,
-        "unstuck": {"enabled": False, "ema_distance_fraction": 0.0},
+        "risk": {"unstuck": {"enabled": False, "ema_distance_fraction": 0.0}},
     }}}
     config, path = _config_with_file(tmp_path, document)
-    config["coin_overrides"]["BTC"]["bot"] = {"long": {"unstuck": {"ema_distance_fraction": -0.1}}}
+    config["coin_overrides"]["BTC"]["bot"] = {"long": {"risk": {"unstuck": {"ema_distance_fraction": -0.1}}}}
     parsed = _prepare_file_config(config)
     assert parsed["coin_overrides"]["BTC"] == {"bot": {"long": {
         "wallet_exposure_limit_ratio": 0.12,
-        "unstuck": {"enabled": False, "ema_distance_fraction": -0.1},
+        "risk": {"unstuck": {"enabled": False, "ema_distance_fraction": -0.1}},
     }}}
     assert json.loads(path.read_text()) == document
 
@@ -335,14 +335,14 @@ def test_sparse_file_keeps_only_authored_pins_and_explicit_wallet_extension(tmp_
 @pytest.mark.parametrize("scope", ["position_side", "portfolio"])
 def test_full_file_hsl_cannot_authorize_its_own_scope(tmp_path, caplog, scope):
     document = get_expanded_config_prototype()
-    document["bot"]["portfolio"]["hsl"]["scope"] = "coin"
-    document["bot"]["long"]["hsl"]["enabled"] = True
-    document["bot"]["long"]["unstuck"]["enabled"] = False
+    document["bot"]["portfolio"]["risk"]["hsl"]["scope"] = "coin"
+    document["bot"]["long"]["risk"]["hsl"]["enabled"] = True
+    document["bot"]["long"]["risk"]["unstuck"]["enabled"] = False
     config, _ = _config_with_file(tmp_path, document, scope=scope)
     parsed = _prepare_file_config(config)
-    assert parsed["bot"]["portfolio"]["hsl"]["scope"] == scope
-    assert "hsl" not in parsed["coin_overrides"]["BTC"]["bot"]["long"]
-    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["enabled"] is False
+    assert parsed["bot"]["portfolio"]["risk"]["hsl"]["scope"] == scope
+    assert "hsl" not in parsed["coin_overrides"]["BTC"]["bot"]["long"]["risk"]
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["risk"]["unstuck"]["enabled"] is False
     assert "file HSL values are ignored" in caplog.text
 
 

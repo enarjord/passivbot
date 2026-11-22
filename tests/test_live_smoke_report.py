@@ -9338,19 +9338,8 @@ def test_live_smoke_report_flags_account_hsl_with_launch_balance_override(
             {
                 "live": {},
                 "bot": {
-                    "portfolio": {"hsl": {
-                            "scope": "portfolio",
-                            "enabled": True,
-                        }},
-                    "long": {
-                        "hsl": {
-                            "enabled": True,
-                        },
-                    },
-                    "short": {
-                        "hsl": {
-                            "enabled": False,
-                        },
+                    "portfolio": {
+                        "risk": {"hsl": {"scope": "portfolio", "enabled": True}},
                     },
                 },
             }
@@ -9439,9 +9428,9 @@ def test_live_smoke_report_allows_coin_hsl_with_balance_override(
             {
                 "live": {"account": {"balance_override": 1000}},
                 "bot": {
-                    "portfolio": {"hsl": {"scope": "coin"}},
-                    "long": {"hsl": {"enabled": True}},
-                    "short": {"hsl": {"enabled": True}},
+                    "portfolio": {"risk": {"hsl": {"scope": "coin"}}},
+                    "long": {"risk": {"hsl": {"enabled": True}}},
+                    "short": {"risk": {"hsl": {"enabled": True}}},
                 },
             }
         ),
@@ -9493,8 +9482,8 @@ def test_live_smoke_report_uses_coin_default_for_missing_hsl_signal_mode_with_ba
             {
                 "live": {"account": {"balance_override": 1000}},
                 "bot": {
-                    "long": {"hsl": {"enabled": True}},
-                    "short": {"hsl": {"enabled": False}},
+                    "long": {"risk": {"hsl": {"enabled": True}}},
+                    "short": {"risk": {"hsl": {"enabled": False}}},
                 },
             }
         ),

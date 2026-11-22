@@ -24,12 +24,12 @@ def test_native_hsl_lifecycle_metrics_match_cpu(strategy, mode, sides):
         "--bars", "3000", "--seed", "43", "--hsl", mode,
     ]))
     for side in ("long", "short"):
-        inputs[0]["bot"][side]["hsl"].update(
+        inputs[0]["bot"][side]["risk"]["hsl"].update(
             drawdown_threshold_fraction=.002, drawdown_fraction_ema_span_minutes=2.5,
             cooldown_after_red_minutes=5,
         )
     if mode == "portfolio":
-        inputs[0]["bot"]["portfolio"]["hsl"].update(
+        inputs[0]["bot"]["portfolio"]["risk"]["hsl"].update(
             drawdown_threshold_fraction=.002, drawdown_fraction_ema_span_minutes=2.5,
             cooldown_after_red_minutes=5,
         )
@@ -73,11 +73,11 @@ def test_native_unfinished_hsl_duration_uses_final_reporting_time(strategy, mode
         enabled = side == "long" or sides == "both"
         bot["risk"].update(max_positions=2 if enabled else 0,
                            total_wallet_exposure_limit_ratio=(5.0 if side == "long" else .001) if enabled else 0)
-        bot["hsl"].update(enabled=enabled, **policy)
+        bot["risk"]["hsl"].update(enabled=enabled, **policy)
         bot["strategy"]["ema_anchor"]["base_qty_fraction"] = .8
         bot["strategy"]["trailing_martingale"]["entry"]["initial_qty_fraction"] = .8
     if mode == "portfolio":
-        config["bot"]["portfolio"]["hsl"].update(enabled=True, **policy)
+        config["bot"]["portfolio"]["risk"]["hsl"].update(enabled=True, **policy)
     # Entry at 3; RED is observed at the close of 4. The limit panic cannot
     # cross the next gap, while the market panic flattens into a long cooldown.
     # Row 6 is lookahead: both remain RED at the final simulated close of 5.
@@ -121,7 +121,7 @@ def test_forced_delist_liquidation_hsl_duration_reaches_bar_close(strategy, gpu_
     config['bot']["portfolio"]['strategy_kind'] = strategy
     config['bot']["portfolio"]['hedge_mode'] = False
     config["bot"]["long"]["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=5.0)
-    config["bot"]["long"]["hsl"].update(
+    config["bot"]["long"]["risk"]["hsl"].update(
         enabled=True, drawdown_threshold_fraction=.002, drawdown_fraction_ema_span_minutes=1,
         cooldown_after_red_minutes=10000,
         panic_close_order_type="limit",

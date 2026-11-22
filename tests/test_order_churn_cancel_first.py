@@ -52,6 +52,12 @@ class _PlanBot:
     def get_raw_balance(self):
         return 100.0
 
+    def _loss_gate_enabled(self):
+        return False
+
+    def _orchestrator_uses_realized_pnl(self):
+        return False
+
     def _is_market_execution_order(self, order):
         return order.get("type") == "market"
 
@@ -174,9 +180,9 @@ async def test_bitunix_ordinary_cancel_wave(
 
     bot = Bot()
     vars(bot).update(vars(make_account()))
-    bot.config["bot"]["long"]["hsl"]["enabled"] = scenario == "hsl_enabled"
+    bot.config["bot"]["long"]["risk"]["hsl"]["enabled"] = scenario == "hsl_enabled"
     if scenario == "hsl_override_enabled":
-        bot.coin_overrides = {"ALT/USDT:USDT": {"bot": {"long": {"hsl": {"enabled": True}}}}}
+        bot.coin_overrides = {"ALT/USDT:USDT": {"bot": {"long": {"risk": {"hsl": {"enabled": True}}}}}}
     bot._account_invalidation_generation = 0
     bot._health_orders_cancelled = 0
     bot._live_market_snapshot_max_age_ms = lambda: 10_000
@@ -260,7 +266,7 @@ async def test_bitunix_ordinary_cancel_wave(
         elif scenario in {"queued_past_deadline", "queued_past_account_expiry"}:
             await asyncio.Future()
         elif scenario == "hsl_enables_in_limiter":
-            bot.config["bot"]["long"]["hsl"]["enabled"] = True
+            bot.config["bot"]["long"]["risk"]["hsl"]["enabled"] = True
         elif scenario == "capped":
             echo = dict(symbol=symbol, id="close-1", status="canceled", info={"tradeQty": "0"})
             assert Passivbot._ws_order_update_is_self_echo(bot, [echo])

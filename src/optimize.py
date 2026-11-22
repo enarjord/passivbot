@@ -2111,6 +2111,19 @@ class SuiteEvaluator:
         if ctx.overrides:
             scenario_config = deepcopy(scenario_config)
             _apply_config_overrides(scenario_config, ctx.overrides)
+        # A portfolio cap gene varies the cap of each enabled scenario.
+        # The scenario's policy stays authoritative for permission and dormant caps.
+        from config.inherited_bounds import get_bound_plan
+        from config.risk_memory import (LOSS_GATE_CAP_PATH, optimizer_loss_gate_policy,
+                                        require_loss_realization_policy)
+
+        plan = get_bound_plan(config)
+        if plan is not None and any(binding.authoring_path == LOSS_GATE_CAP_PATH for binding in plan.bindings):
+            gate = optimizer_loss_gate_policy(self.base.config, ctx.overrides)
+            if gate["enabled"]:
+                _, _, candidate_cap = require_loss_realization_policy(config)
+                gate[LOSS_GATE_CAP_PATH[-1]] = candidate_cap
+            _apply_config_overrides(scenario_config, {".".join(LOSS_GATE_CAP_PATH[:-1]): gate})
         # Context creation already resolved authority and prepared membership.
         # Candidate replay keeps that immutable view without re-reading files.
         from config.universe import materialize_side_universe_sources
@@ -3212,7 +3225,7 @@ def _format_starting_seed_bot(bot, live=None):
     # runtime policy first, or replace an invalid suggestion with a default.
     for field in _starting_live_numeric_seed(live):
         live[field] = deepcopy(template["live"][field])
-    defaults = get_expanded_config_prototype()["bot"]["long"]["hsl"]
+    defaults = get_expanded_config_prototype()["bot"]["long"]["risk"]["hsl"]
     numeric_fields = (
         "drawdown_threshold_fraction", "memory_ema_span_minutes",
         "drawdown_fraction_ema_span_minutes", "cooldown_after_red_minutes",
@@ -3233,10 +3246,10 @@ def _format_starting_seed_bot(bot, live=None):
             numeric_seeds[(*path, key)] = number
 
     for scope, path in (
-        ("global", ("global", "hsl")),
-        ("long", ("long", "hsl")),
-        ("short", ("short", "hsl")),
-        ("portfolio", ("portfolio", "hsl")),
+        ("global", ("global", "risk", "hsl")),
+        ("long", ("long", "risk", "hsl")),
+        ("short", ("short", "risk", "hsl")),
+        ("portfolio", ("portfolio", "risk", "hsl")),
     ):
         parent = bot
         for key in path[:-1]:
@@ -3251,26 +3264,28 @@ def _format_starting_seed_bot(bot, live=None):
         block.update(deepcopy(defaults), enabled=False)
         if scope == "portfolio":
             block["scope"] = "portfolio"
-    for path in (("portfolio", "unstuck"), ("portfolio", "loss_gate")):
-        block = bot
-        default = template["bot"]
-        for key in path:
-            block = block.get(key, {})
-            default = default[key]
-        remember(block, ("memory_ema_span_minutes",), path)
-        if "memory_ema_span_minutes" in block:
-            block["memory_ema_span_minutes"] = default["memory_ema_span_minutes"]
+    from config.risk_memory import LOSS_GATE_CAP_PATH, LOSS_REALIZATION_PATH
+
+    path = LOSS_REALIZATION_PATH[1:]
+    policy = bot.get("portfolio", {}).get("risk", {}).get("loss_realization", {})
+    remember(policy, ("memory_ema_span_minutes",), path)
+    remember(policy.get("loss_gate", {}), (LOSS_GATE_CAP_PATH[-1],), (*path, "loss_gate"))
+    if policy:
+        policy.clear()
+        policy.update(deepcopy(template["bot"]["portfolio"]["risk"]["loss_realization"]))
     effective = resolve_bot_policy(bot, get_side_field_catalog()).effective_view()
     formatted = format_bot_config(effective, live_cfg=live, verbose=False, warn_deprecations=False)
     for path, value in numeric_seeds.items():
         block = formatted
         for key in path[:-1]:
-            block = block[key]
+            block = block.setdefault(key, {})
         block[path[-1]] = value
         if path[0] == "global":
+            from config.shared_bot import get_grouped_path
+
             for side in ("long", "short"):
-                if path[-1] not in source_bot.get(side, {}).get(path[1], {}):
-                    formatted[side][path[1]][path[-1]] = value
+                if get_grouped_path(source_bot.get(side, {}), path[1:]) is None:
+                    get_grouped_path(formatted[side], path[1:-1])[path[-1]] = value
     return formatted
 
 
@@ -3431,14 +3446,18 @@ def _materialize_suite_run_contract(
 
     backtest = config.setdefault("backtest", {})
     backtest["suite_enabled"] = bool(suite_cfg.get("enabled"))
-    if not backtest["suite_enabled"]:
-        return
-    for key in ("scenarios", "reducer", "exchanges", "volume_normalization"):
-        if key in suite_cfg:
-            backtest[key] = deepcopy(suite_cfg[key])
+    if backtest["suite_enabled"]:
+        for key in ("scenarios", "reducer", "exchanges", "volume_normalization"):
+            if key in suite_cfg:
+                backtest[key] = deepcopy(suite_cfg[key])
+    from config.bot_inheritance import get_bot_policy
+    from config.inherited_bounds import prepare_bound_plan
     from optimization.config_adapter import validate_forager_weight_search
 
-    validate_forager_weight_search(config)
+    if get_bot_policy(config) is not None:
+        prepare_bound_plan(config)
+    if backtest["suite_enabled"]:
+        validate_forager_weight_search(config)
 
 
 def _run_gpu_preparation_preflight(config: Dict[str, Any], suite_cfg: Mapping[str, Any]) -> None:

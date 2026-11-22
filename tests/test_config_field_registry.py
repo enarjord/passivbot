@@ -45,7 +45,9 @@ def test_every_template_setting_has_an_explicit_descriptor():
 def test_only_documented_optional_authority_lacks_exact_path_defaults():
     absent = {field.path for field in get_field_registry()
               if field.default is NO_DEFAULT and "*" not in field.path}
-    assert absent == {("bot", "portfolio", "hsl", field) for field in HSL_FIELDS}
+    from config.risk_memory import LOSS_GATE_CAP_PATH
+
+    assert absent == {LOSS_GATE_CAP_PATH, *{("bot", "portfolio", "risk", "hsl", field) for field in HSL_FIELDS}}
 
 
 def test_numeric_type_does_not_depend_on_default_spelling(monkeypatch):
@@ -53,11 +55,11 @@ def test_numeric_type_does_not_depend_on_default_spelling(monkeypatch):
 
     template = get_expanded_config_prototype()
     template["bot"]["long"]["risk"]["max_positions"] = 7.0
-    template["bot"]["long"]["unstuck"]["ema_span_0_minutes"] = 60
+    template["bot"]["long"]["risk"]["unstuck"]["ema_span_0_minutes"] = 60
     monkeypatch.setattr(config.schema, "get_expanded_config_prototype", lambda: deepcopy(template))
     registry = get_field_registry()
     assert registry.find(("bot", "long", "risk", "max_positions")).numeric_type is int
-    assert registry.find(("bot", "long", "unstuck", "ema_span_0_minutes")).numeric_type is float
+    assert registry.find(("bot", "long", "risk", "unstuck", "ema_span_0_minutes")).numeric_type is float
 
 
 @pytest.mark.parametrize(
@@ -125,9 +127,9 @@ def test_registry_defaults_are_isolated_and_optional_authority_is_absent():
     field.default.append("extra")
     assert get_template_config() == template
     assert get_field_registry().find(field.path).default == template["backtest"]["exchanges"]
-    authority = registry.find(("bot", "portfolio", "hsl", "enabled"))
+    authority = registry.find(("bot", "portfolio", "risk", "hsl", "enabled"))
     assert authority.default is NO_DEFAULT
-    assert "enabled" not in template["bot"]["portfolio"]["hsl"]
+    assert "enabled" not in template["bot"]["portfolio"]["risk"]["hsl"]
 
 
 def test_all_rust_strategy_fields_are_typed_with_identical_paths_and_defaults():

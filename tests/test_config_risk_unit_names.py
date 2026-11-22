@@ -15,14 +15,14 @@ from tools.clean_config import cleanup_config
 
 
 RENAMES = [
-    *((f"bot.{scope}.hsl.{old}", f"bot.{scope}.hsl.{new}", value)
+    *((f"bot.{scope}.risk.hsl.{old}", f"bot.{scope}.risk.hsl.{new}", value)
       for scope in ("global", "long", "short", "portfolio")
       for old, new, value in (
           ("drawdown_ratio_threshold", "drawdown_threshold_fraction", 0.125),
           ("drawdown_ratio_ema_span_minutes", "drawdown_fraction_ema_span_minutes", 12.5),
       )),
-    ("bot.portfolio.loss_gate.max_drawdown_ratio",
-     "bot.portfolio.loss_gate.max_drawdown_fraction", 0.125),
+    ("bot.portfolio.risk.loss_realization.loss_gate.max_drawdown_fraction",
+     "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction", 0.125),
     *((f"bot.{scope}.risk.total_wallet_exposure_limit",
        f"bot.{scope}.risk.total_wallet_exposure_limit_ratio", 2.375)
       for scope in ("global", "long", "short")),
@@ -39,7 +39,7 @@ def put(config, path, value):
 
 def source_for(path):
     config = generated_template(get_template_config(),
-                                "portfolio" if ".portfolio.hsl." in path else "coin")
+                                "portfolio" if ".portfolio.risk.hsl." in path else "coin")
     config["optimize"]["bounds"] = {}
     return config
 
@@ -78,12 +78,12 @@ def test_new_risk_spellings_roundtrip_values_through_every_export(old, new, valu
 
 
 def test_new_public_hsl_spans_and_threshold_lower_once_without_rescaling():
-    config = source_for("bot.long.hsl")
-    config["bot"]["long"].setdefault("hsl", {}).update(
+    config = source_for("bot.long.risk.hsl")
+    config["bot"]["long"].setdefault("risk", {}).setdefault("hsl", {}).update(
         drawdown_threshold_fraction=0.125, drawdown_fraction_ema_span_minutes=12.5,
     )
     prepared = prepare_config(config, live_only=True, verbose=False)
-    policy = prepared["bot"]["long"]["hsl"]
+    policy = prepared["bot"]["long"]["risk"]["hsl"]
     original = deepcopy(policy)
     native = native_hsl_policy(policy)
     assert native["drawdown_threshold_fraction"] == 0.125
@@ -95,7 +95,7 @@ def test_new_public_hsl_spans_and_threshold_lower_once_without_rescaling():
 
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_per_coin_exposure_ratio_remains_public_and_lowers_to_native_wallet_limit(side):
-    config = source_for("bot.long.hsl")
+    config = source_for("bot.long.risk.hsl")
     config["coin_overrides"] = {"BTC": {"bot": {side: {"wallet_exposure_limit_ratio": 0.625}}}}
     prepared = prepare_config(config, live_only=True, verbose=False)
     patch = prepared["coin_overrides"]["BTC"]["bot"][side]
@@ -111,13 +111,13 @@ def test_per_coin_exposure_ratio_remains_public_and_lowers_to_native_wallet_limi
 
 
 def test_public_exposure_and_hsl_quantities_resolve_current_native_optimizer_ids():
-    config = prepare_config(source_for("bot.long.hsl"), live_only=True, verbose=False)
+    config = prepare_config(source_for("bot.long.risk.hsl"), live_only=True, verbose=False)
     assert resolve_optimizer_key_path(config, "long_total_wallet_exposure_limit_ratio") == (
         "bot", "long", "risk", "total_wallet_exposure_limit_ratio")
     assert resolve_optimizer_key_path(config, "long_hsl_drawdown_threshold_fraction") == (
-        "bot", "long", "hsl", "drawdown_threshold_fraction")
+        "bot", "long", "risk", "hsl", "drawdown_threshold_fraction")
     assert resolve_optimizer_key_path(config, "long_hsl_drawdown_fraction_ema_span_minutes") == (
-        "bot", "long", "hsl", "drawdown_fraction_ema_span_minutes")
+        "bot", "long", "risk", "hsl", "drawdown_fraction_ema_span_minutes")
     assert flatten_shared_bot_side(config["bot"]["long"])["total_wallet_exposure_limit_ratio"] == 1.5
 
 
@@ -127,7 +127,7 @@ def test_live_allocation_and_backtest_payload_honor_the_same_public_coin_ratio(s
     from backtest import prep_backtest_args
     from passivbot import Passivbot
 
-    config = source_for("bot.long.hsl")
+    config = source_for("bot.long.risk.hsl")
     for pside in ("long", "short"):
         config["bot"].setdefault(pside, {}).update(enabled=True)
         config["bot"][pside].setdefault("universe", {})["approved_coins"] = ["BTC"]
@@ -169,7 +169,7 @@ def test_command_parser_rejects_retired_names_that_are_prefixes_of_new_flags(ret
     for flag in ("--bot.long.risk.total_wallet_exposure_limit_ratio", "-ltwel"):
         args = parser.parse_args([flag, "1.75"])
         assert getattr(args, "bot.long.risk.total_wallet_exposure_limit_ratio") == 1.75
-    args = parser.parse_args(["--loss-gate-max-drawdown-fraction", "0.125"])
-    assert getattr(args, "bot.portfolio.loss_gate.max_drawdown_fraction") == 0.125
+    args = parser.parse_args(["--loss-gate-max-realized-drawdown-fraction", "0.125"])
+    assert getattr(args, "bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction") == 0.125
     with pytest.raises(SystemExit):
         parser.parse_args([retired_flag, "0.125"])

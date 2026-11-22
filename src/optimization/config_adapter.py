@@ -20,6 +20,8 @@ from config.optimize_bounds import flatten_optimize_bounds
 from config.inherited_bounds import get_bound_plan, resolve_plan_selectors
 from config.shared_bot import flatten_shared_bot_side
 from config.schema import get_template_config
+from config.risk_memory import (LOSS_GATE_CAP_PATH, LOSS_REALIZATION_PATH, normalize_loss_gate_cap,
+                                normalize_memory_ema_span_minutes, optimizer_loss_gate_policies)
 from config.strategy import merge_runtime_bot_side, normalize_strategy_kind
 from config.strategy_spec import (
     get_strategy_spec,
@@ -88,15 +90,14 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
             raise KeyError(
                 f"optimize bound {bound_key} does not map to a known bot parameter"
             )
-        if resolved in {
-            ("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
-            ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes"),
-        }:
-            from config.risk_memory import normalize_memory_ema_span_minutes
-
+        validate_risk_bound = {
+            (*LOSS_REALIZATION_PATH, "memory_ema_span_minutes"): normalize_memory_ema_span_minutes,
+            LOSS_GATE_CAP_PATH: normalize_loss_gate_cap,
+        }.get(resolved)
+        if validate_risk_bound is not None:
             bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
             for endpoint in (bound.low, bound.high):
-                normalize_memory_ema_span_minutes(endpoint, field=f"optimize.bounds.{bound_key}")
+                validate_risk_bound(endpoint, field=f"optimize.bounds.{bound_key}")
             continue
         if "hsl" in resolved:
             from config.hsl import _number
@@ -113,8 +114,6 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 for endpoint in (bound.low, bound.high):
                     _number(endpoint, f"optimize.bounds.{bound_key}", **constraints[name])
                     if name in {"memory_ema_span_minutes", "drawdown_fraction_ema_span_minutes"}:
-                        from config.risk_memory import normalize_memory_ema_span_minutes
-
                         normalize_memory_ema_span_minutes(
                             endpoint, field=f"optimize.bounds.{bound_key}"
                         )
@@ -143,8 +142,8 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
             ("entry_cooldown", "max_duration_minutes"),
         ):
             cooldown_ranges[resolved[1], resolved[-1]] = bound
-        if resolved[:3] == ("bot", "portfolio", "hsl"):
-            value = bot_config["portfolio"]["hsl"].get(resolved[-1])
+        if resolved[:4] == ("bot", "portfolio", "risk", "hsl"):
+            value = bot_config["portfolio"]["risk"]["hsl"].get(resolved[-1])
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise KeyError(
                     f"optimize bound {bound_key} must map to a numeric portfolio HSL parameter"
@@ -347,6 +346,8 @@ def _validate_inherited_forager_weight_context(
     bindings = {binding.authoring_path: binding for binding in plan.bindings}
     values = {}
     for binding in plan.bindings:
+        if binding.authoring_path == LOSS_GATE_CAP_PATH:
+            continue  # An omitted base cap can be authored only in enabled scenarios.
         value = config
         for part in binding.authoring_path:
             value = value[part]
@@ -549,10 +550,11 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
             continue
         if resolved is None:
             continue
+        if resolved == LOSS_GATE_CAP_PATH and not any(gate["enabled"] for gate in optimizer_loss_gate_policies(config)):
+            continue
         if (canonical_key in OPTIMIZABLE_BOT_KEY_PATHS
-            or resolved[:3] == ("bot", "portfolio", "hsl")
-            or resolved in {("bot", "portfolio", "unstuck", "memory_ema_span_minutes"),
-                            ("bot", "portfolio", "loss_gate", "memory_ema_span_minutes")}):
+            or resolved[:4] == ("bot", "portfolio", "risk", "hsl")
+            or resolved in {(*LOSS_REALIZATION_PATH, "memory_ema_span_minutes"), LOSS_GATE_CAP_PATH}):
             key_paths.append((bound_key, resolved))
             continue
         if canonical_key in strategy_path_map:

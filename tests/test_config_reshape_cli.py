@@ -22,12 +22,12 @@ def policy():
             "long": {"enabled": True, "risk": {
                 "max_positions": 3, "total_wallet_exposure_limit_ratio": 1.5,
             }},
-            "short": {"enabled": True, "risk": {
+            "short": {"enabled": True, "risk": {"unstuck": {"loss_allowance_fraction": 0.15},
                 "max_positions": 1, "total_wallet_exposure_limit_ratio": 0.0,
-            }, "unstuck": {"close_fraction": 0.15}},
+            }},
         },
         "optimize": {"bounds": {
-            "long": {"unstuck": {"close_fraction": [0.02, 0.06]}},
+            "long": {"risk": {"unstuck": {"loss_allowance_fraction": [0.02, 0.06]}}},
             "short": {"risk": {"total_wallet_exposure_limit_ratio": [0.0, 0.0]}},
         }},
         "backtest": {"scenarios": [{"label": "two", "overrides": {
@@ -69,7 +69,7 @@ def test_cleanup_disable_retains_dormant_profile():
     source = policy()
     result = cleanup_config(source, disabled_sides="disable")
     assert result["bot"]["short"]["enabled"] is False
-    assert result["bot"]["short"]["unstuck"] == source["bot"]["short"]["unstuck"]
+    assert result["bot"]["short"]["risk"]["unstuck"] == source["bot"]["short"]["risk"]["unstuck"]
 
 
 def test_live_projection_audits_optimizer_reachability_before_dropping_optimize():

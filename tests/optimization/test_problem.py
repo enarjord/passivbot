@@ -11,14 +11,14 @@ def recording_template():
     from config.load import prepare_config
     from config.schema import get_template_config
     config = get_template_config()
-    config["optimize"]["bounds"] = {"global": {"unstuck": {"close_fraction": [0.0, 1.0]}}}
+    config["optimize"]["bounds"] = {"global": {"risk": {"unstuck": {"loss_allowance_fraction": [0.0, 1.0]}}}}
     return prepare_config(config, verbose=False)
 
 
 def recording_config(vector, _overrides_fn, _overrides_list, template):
     from config.bot_inheritance import apply_bot_config_patch
     config = deepcopy(template)
-    apply_bot_config_patch(config, {"bot.global.unstuck.close_fraction": float(vector[0])}, channel="gene")
+    apply_bot_config_patch(config, {"bot.global.risk.unstuck.loss_allowance_fraction": float(vector[0])}, channel="gene")
     config["backtest"]["coins"] = {"binance": ["BTC/USDT:USDT"]}
     return config
 

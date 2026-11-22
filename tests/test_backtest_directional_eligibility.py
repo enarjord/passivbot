@@ -23,7 +23,7 @@ def _ema_anchor_config(hedge_mode: bool, *, include_dataset: bool = True) -> dic
             "bot": {
                 "portfolio": {"strategy_kind": "ema_anchor"},
                 "global": {
-                    "unstuck": {"enabled": False},
+                    "risk": {"unstuck": {"enabled": False}},
                     "entry_cooldown": {
                         "base_duration_minutes": 0.0,
                         "min_duration_minutes": 0.0,

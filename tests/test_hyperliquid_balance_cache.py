@@ -1054,6 +1054,7 @@ async def test_hyperliquid_already_gone_cancel_requests_full_confirmation(
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.user_info = {"is_vault": False}
     bot.cca = _AlreadyGoneCancelCCA()
+    bot._orchestrator_uses_realized_pnl = lambda: False
     bot.recent_order_cancellations = []
     bot.log_order_action = lambda *args, **kwargs: None
     bot._log_order_action_summary = lambda *args, **kwargs: None

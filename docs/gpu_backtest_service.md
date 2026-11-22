@@ -116,9 +116,9 @@ fixed runtime policies and exact-last scenario overrides before encoding compact
 parameters. It never calls an evaluator's simulation method. Global candidate values are
 separate from dataset-owned coin patches, so the first coin's patch cannot replace defaults
 for every unpatched coin. Mirrored or fixed shadow genes deduplicate by effective work.
-The global `unstuck_memory_ema_span_minutes` and `loss_gate_memory_ema_span_minutes`
-request parameters remain independent after overrides; changing either does not
-require another prepared dataset.
+The account-wide `realized_loss_memory_ema_span_minutes` and an explicitly
+bounded loss-gate cap can vary by candidate without preparing a new CPU dataset.
+Gate enablement stays fixed by the effective scenario policy.
 
 `prepare(candidate_id, vector, scenarios=...)` returns a candidate plan containing requests
 and expected result slots. A screening plan's duplicate identity includes unscreened
@@ -634,34 +634,17 @@ EMA/TM runner constructors reject execution with a capability error directing ca
 to `NativeBacktestService`, including one-coin datasets. Compiler specialization and adaptive dispatch select execution
 policy within the native service.
 
-Shared-account EMA/TM dispatches prove whether any packed candidate and effective
-coin-side override can use unstuck EMA gating. When none can, compilation removes
-only its EMA band, initialization, per-candle updates and gating consumers. Ungated
-unstuck selection and ordinary strategy EMAs retain their existing policies;
-continuous realized memory remains required when the realized-loss gate is active. Finite coin flags override candidate flags; nonfinite overrides
-inherit them. The feature bit belongs to the compilation/replay-state identity,
-independently of batch scheduling or search policy. Both fused sides participate
-in the proof, and each replay reconstructs its state for the selected layout.
+The final v9 GPU evaluator supports configurations with both the portfolio loss
+gate and auto-unstuck disabled. Metal and CUDA reject either active policy before
+dispatch because the native GPU sizing path does not implement the final allocation
+contract. Use the CPU evaluator for those cases. The requirement also applies to
+effective scenario and coin overrides.
 
-Shared-account EMA and Trailing Martingale auto-unstuck use continuous decaying
-net-realized-PnL memory with `bot.portfolio.unstuck.memory_ema_span_minutes`. The global loss
-gate maintains its own realized D with `bot.portfolio.loss_gate.memory_ema_span_minutes`.
-Every ordinary, protective or unstuck fill contributes its net economics to each
-enabled memory, including signed fees and rebates, while the economic ledger records
-the fill once. Both memories exclude UPNL and survive HSL episode boundaries. The
-gate uses `bot.portfolio.loss_gate.max_drawdown_fraction` directly in the allowance formula,
-without a TWEL multiplier. Its configured
-enablement is preserved separately from float32 packing, including fractions that
-round to 1. The independent rolling window and its history scratch storage are
-retired; old zero/all-history windows require explicit semantic migration.
-
-Trailing Martingale finalizes executable close quantities before reserving projected
-negative PnL across coins and both sides. It prioritizes finalized protective reducers,
-then ordinary closes; projected profits cannot fund another emitted loss. Unfilled
-emitted orders also reserve allowance, panic closes are exempt, and fills consume
-admitted intent without repeating the loss check at a changed candle price or balance.
-The disabled loss gate compiles out its admission state and work. Native single-coin
-requests use this shared-account engine as well.
+The transport requires explicit loss-gate enablement and a separate nullable cap.
+A disabled gate with a valid dormant cap has the same device behavior as a disabled
+gate with its cap omitted. The shared GPU risk accumulator holds one realized-loss
+memory. The supported optimizer dispatches leave it inactive, while HSL retains its
+own equity memory and behavior.
 
 GPU HSL time-in-red reporting includes both current panic and terminal cooldown.
 Reporting state is separate from the panic tier used by the simulation; counting

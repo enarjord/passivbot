@@ -24,8 +24,7 @@ def runner_and_params(monkeypatch, kind, sides=1, *, first_observed=10):
     for side in range(sides):
         for key, value in ((hour, 3.0), (weight, 1.0), ("n_positions", 1),
                            ("total_wallet_exposure_limit_ratio", 1.0),
-                           ("unstuck_memory_ema_span_minutes", 3.0),
-                           ("loss_gate_memory_ema_span_minutes", 7.0)):
+                           ("realized_loss_memory_ema_span_minutes", 7.0)):
             matrix[:, side * len(keys) + keys.index(key)] = value
     overrides = tuple(np.full((1, columns), np.nan) for _ in range(sides))
     runner = SimpleNamespace(
@@ -37,6 +36,7 @@ def runner_and_params(monkeypatch, kind, sides=1, *, first_observed=10):
         _hourly_coin_ranges=np.array([[0, 19, 2]]),
         _pack_params=lambda params: params,
         _use_disabled_hsl_specialization=lambda params: False,
+        _unstuck_ema_overrides=tuple(np.full((1, 2), np.nan) for _ in range(sides)),
         _unstuck_ema_required=lambda params: False,
         _unstuck_required=lambda params: False,
     )

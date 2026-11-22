@@ -161,9 +161,9 @@ def test_released_coin_file_and_inline_age_are_ignored_and_reported(tmp_path, co
     source = released_v8_policy()
     file = tmp_path / "coin.json"
     file.write_text(json.dumps({"live": {"minimum_coin_age_days": 7.25},
-                                "bot": {"long": {"unstuck_close_pct": 0.15}}}))
+                                "bot": {"long": {"unstuck_loss_allowance_pct": 0.15}}}))
     inline = {"override_config_path": file.name, "live": {"minimum_coin_age_days": 12.5},
-              "bot": {"long": {"unstuck_close_pct": 0.25}}}
+              "bot": {"long": {"unstuck_loss_allowance_pct": 0.25}}}
     if context == "inline_only":
         inline.pop("override_config_path")
     source["coin_overrides"] = {"AAA": inline}
@@ -172,7 +172,7 @@ def test_released_coin_file_and_inline_age_are_ignored_and_reported(tmp_path, co
     elif context == "fixed_root_age":
         source["optimize"]["fixed_runtime_overrides"] = {"live.minimum_coin_age_days": 5.5}
     elif context == "fixed_coin_leaf":
-        source["optimize"]["fixed_runtime_overrides"] = {"coin_overrides.AAA.bot.long.unstuck_close_pct": 0.25}
+        source["optimize"]["fixed_runtime_overrides"] = {"coin_overrides.AAA.bot.long.unstuck_loss_allowance_pct": 0.25}
     elif context == "fixed_coin_object":
         source["optimize"]["fixed_runtime_overrides"] = {"coin_overrides.AAA": inline}
     before, contents = deepcopy(source), file.read_bytes()
@@ -182,7 +182,7 @@ def test_released_coin_file_and_inline_age_are_ignored_and_reported(tmp_path, co
         assert source == before and file.read_bytes() == contents
         return
     result = migrate(source, memory_span_minutes=123.5, base_config_path=str(tmp_path / "input.json"))
-    assert result.config["coin_overrides"]["AAA"]["bot"]["long"]["unstuck"]["close_fraction"] == 0.25
+    assert result.config["coin_overrides"]["AAA"]["bot"]["long"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.25
     assert all(result.config["bot"][side]["universe"]["minimum_coin_age_days"] == 60.0 for side in ("long", "short"))
     inline_changes = [item for item in result.changes if item["path"] == "coin_overrides.AAA.live.minimum_coin_age_days"]
     assert inline_changes and all(item["old"] == 12.5 and item["new"] is None and "ignored" in item["reason"] for item in inline_changes)
@@ -192,9 +192,9 @@ def test_released_coin_file_and_inline_age_are_ignored_and_reported(tmp_path, co
         assert result.config["optimize"]["fixed_runtime_overrides"] == {f"bot.{side}.universe.minimum_coin_age_days": 5.5 for side in ("long", "short")}
     elif context == "fixed_coin_leaf":
         fixed = result.config["optimize"]["fixed_runtime_overrides"]
-        assert fixed == {"coin_overrides.AAA.bot.long.unstuck.close_fraction": 0.25}
+        assert fixed == {"coin_overrides.AAA.bot.long.risk.unstuck.loss_allowance_fraction": 0.25}
     elif context == "scenario":
         patch = result.config["backtest"]["scenarios"][0]["overrides"]["coin_overrides.AAA"]
-        assert patch["bot"]["long"]["unstuck"]["close_fraction"] == 0.25
+        assert patch["bot"]["long"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.25
         assert "minimum_coin_age_days" not in json.dumps(patch)
     assert source == before and file.read_bytes() == contents

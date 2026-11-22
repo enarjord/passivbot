@@ -1,10 +1,15 @@
+use crate::close_risk::{
+    active_gate_cap, close_fill_priority, compare_close_fill_priority, project_close,
+    size_to_loss_budget, CloseProjection, UnstuckExposure,
+};
+use crate::orchestrator::{ExecutionType, PositionSide};
 use crate::constants::{LONG, SHORT};
 use crate::entries::calc_min_entry_qty;
-use crate::types::{ExchangeParams, Order, OrderType, TwelEnforcerPolicy};
+use crate::types::{ExchangeParams, Order, OrderBook, OrderType, Position, TwelEnforcerPolicy};
 use crate::utils::{
     calc_ask_order_price_gap_fraction, calc_bid_order_price_gap_fraction, calc_new_psize_pprice,
-    calc_pnl_long, calc_pnl_short, calc_signed_entry_distance_fraction, calc_wallet_exposure,
-    cost_to_qty, quantize_price, quantize_qty, round_dn, round_up, tolerant_round_dn_preserve_step,
+    calc_pnl_long, calc_pnl_short, calc_wallet_exposure,
+    quantize_price, quantize_qty, round_dn, round_up, tolerant_round_dn_preserve_step,
     tolerant_round_up_preserve_step, RoundingMode,
 };
 use std::collections::HashMap;
@@ -15,36 +20,6 @@ fn exposure_to_psize(exposure: f64, balance: f64, price: f64, c_mult: f64) -> f6
     } else {
         exposure * balance / (price * c_mult)
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-struct LeastStuckCandidate {
-    collection_idx: usize,
-    symbol_idx: usize,
-    signed_entry_distance_fraction: f64,
-}
-
-fn compare_least_stuck(a: LeastStuckCandidate, b: LeastStuckCandidate) -> std::cmp::Ordering {
-    match b
-        .signed_entry_distance_fraction
-        .partial_cmp(&a.signed_entry_distance_fraction)
-        .unwrap_or(std::cmp::Ordering::Equal)
-    {
-        std::cmp::Ordering::Equal => a.symbol_idx.cmp(&b.symbol_idx),
-        other => other,
-    }
-}
-
-fn least_stuck_order(candidates: Vec<LeastStuckCandidate>) -> Vec<usize> {
-    let mut candidates: Vec<LeastStuckCandidate> = candidates
-        .into_iter()
-        .filter(|candidate| candidate.signed_entry_distance_fraction.is_finite())
-        .collect();
-    candidates.sort_by(|a, b| compare_least_stuck(*a, *b));
-    candidates
-        .into_iter()
-        .map(|candidate| candidate.collection_idx)
-        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -329,6 +304,8 @@ pub struct UnstuckDiagnostic {
     pub qty: Option<f64>,
     pub price: Option<f64>,
     pub estimated_pnl: Option<f64>,
+    pub projected_exposure_ratio: Option<f64>,
+    pub selected: bool,
 }
 
 impl UnstuckDiagnostic {
@@ -353,30 +330,8 @@ fn observe_unstuck(
     }
 }
 
-fn observe_unstuck_proposal(
-    diagnostics: &mut Option<&mut Vec<UnstuckDiagnostic>>,
-    input: &UnstuckPositionInput,
-    qty: f64,
-    price: f64,
-) {
-    if let Some(rows) = diagnostics.as_deref_mut() {
-        if let Some(row) = rows.iter_mut().find(|row| {
-            row.symbol_idx == input.idx
-                && row.pside == if input.side == LONG { "long" } else { "short" }
-        }) {
-            row.proposed = true;
-            row.qty = Some(qty);
-            row.price = Some(price);
-            row.estimated_pnl = Some(if input.side == LONG {
-                calc_pnl_long(input.position_price, price, qty, input.c_mult)
-            } else {
-                calc_pnl_short(input.position_price, price, qty, input.c_mult)
-            });
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UnstuckPositionInput {
     pub idx: usize,
     pub side: usize,
@@ -385,7 +340,6 @@ pub struct UnstuckPositionInput {
     pub wallet_exposure_limit_ratio: f64,
     pub effective_we_excess_allowance_fraction: f64,
     pub unstuck_exposure_trigger_ratio: f64,
-    pub unstuck_close_fraction: f64,
     pub unstuck_ema_gating_enabled: bool,
     pub unstuck_ema_distance_fraction: f64,
     pub unstuck_loss_allowance_fraction: f64,
@@ -394,107 +348,48 @@ pub struct UnstuckPositionInput {
     pub ema_band_lower: f64,
     pub current_price: f64,
     pub price_step: f64,
-    pub qty_step: f64,
-    pub min_qty: f64,
-    pub min_cost: f64,
     pub c_mult: f64,
 }
 
-pub fn calc_unstucking_action(
-    balance: f64,
-    allowance_long: f64,
-    allowance_short: f64,
-    positions: &[UnstuckPositionInput],
-) -> Option<(usize, usize, Order)> {
-    calc_unstucking_action_with_allowance(balance, positions, None, |input| match input.side {
-        LONG => allowance_long,
-        SHORT => allowance_short,
-        _ => 0.0,
-    })
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UnstuckProposal {
+    pub idx: usize,
+    pub side: usize,
+    pub order: Order,
+    pub allowance: f64,
+    pub exposure: UnstuckExposure,
 }
 
-#[cfg(test)]
-fn calc_unstucking_action_with_realized_drawdown(
-    balance: f64,
-    realized_drawdown: f64,
-    positions: &[UnstuckPositionInput],
-) -> Result<Option<(usize, usize, Order)>, String> {
-    calc_unstucking_action_with_realized_drawdown_observed(
-        balance,
-        realized_drawdown,
-        positions,
-        None,
-    )
-}
-
-pub fn calc_unstucking_action_with_diagnostics(
-    balance: f64,
-    realized_drawdown: f64,
-    positions: &[UnstuckPositionInput],
-    diagnostics: Option<&mut Vec<UnstuckDiagnostic>>,
-) -> Result<Option<(usize, usize, Order)>, String> {
-    calc_unstucking_action_with_realized_drawdown_observed(
-        balance,
-        realized_drawdown,
-        positions,
-        diagnostics,
-    )
-}
-
-fn calc_unstucking_action_with_realized_drawdown_observed(
-    balance: f64,
-    realized_drawdown: f64,
-    positions: &[UnstuckPositionInput],
-    diagnostics: Option<&mut Vec<UnstuckDiagnostic>>,
-) -> Result<Option<(usize, usize, Order)>, String> {
-    let mut error = None;
-    let result = calc_unstucking_action_with_allowance(balance, positions, diagnostics, |input| {
-        if input.unstuck_loss_allowance_fraction <= 0.0
-            || input.total_wallet_exposure_limit_ratio <= 0.0
-        {
-            return 0.0;
-        }
-        match crate::hsl_decay::allowance_for(
-            balance,
-            input.unstuck_loss_allowance_fraction,
-            input.total_wallet_exposure_limit_ratio,
-            realized_drawdown,
-        ) {
-            Ok(value) => value,
-            Err(reason) => {
-                error = Some(reason);
-                0.0
-            }
-        }
-    });
-    if let Some(reason) = error {
-        Err(reason)
-    } else {
-        Ok(result)
+impl UnstuckProposal {
+    pub(crate) fn size(
+        self,
+        proposed: f64,
+        step: f64,
+        projection: CloseProjection,
+        headroom: Option<f64>,
+    ) -> Option<f64> {
+        let budget = headroom.map_or(self.allowance, |headroom| self.allowance.min(headroom));
+        let qty = size_to_loss_budget(
+            proposed,
+            self.exposure.quantity,
+            step,
+            projection,
+            Some(budget),
+            false,
+        )?;
+        let after = self.exposure.ratio(qty, projection.pnl(qty))?;
+        (after >= self.exposure.trigger && after < self.exposure.ratio(0.0, 0.0)?)
+            .then_some(qty)
     }
 }
 
-fn calc_unstucking_action_with_allowance<F>(
+pub(crate) fn unstuck_proposals(
     balance: f64,
+    realized_drawdown: f64,
     positions: &[UnstuckPositionInput],
     mut diagnostics: Option<&mut Vec<UnstuckDiagnostic>>,
-    mut allowance_for: F,
-) -> Option<(usize, usize, Order)>
-where
-    F: FnMut(&UnstuckPositionInput) -> f64,
-{
-    if balance <= 0.0 || positions.is_empty() {
-        return None;
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct Candidate<'a> {
-        input: &'a UnstuckPositionInput,
-        signed_entry_distance_fraction: f64,
-    }
-
-    let mut stuck_positions: Vec<Candidate> = Vec::new();
-
+) -> Result<Vec<UnstuckProposal>, String> {
+    let mut proposals = Vec::new();
     for input in positions {
         let mut observation = diagnostics.as_ref().map(|_| {
             let mut row = UnstuckDiagnostic::new(input.idx, input.side, "inputs_unavailable");
@@ -511,7 +406,16 @@ where
                 continue;
             }};
         }
-        let allowance = allowance_for(input);
+        let allowance = if input.unstuck_loss_allowance_fraction > 0.0
+            && input.total_wallet_exposure_limit_ratio > 0.0
+        {
+            crate::hsl_decay::allowance_for(
+                balance, input.unstuck_loss_allowance_fraction,
+                input.total_wallet_exposure_limit_ratio, realized_drawdown,
+            )?
+        } else {
+            0.0
+        };
         if let Some(row) = observation.as_mut() {
             row.allowance = Some(allowance);
         }
@@ -519,28 +423,31 @@ where
             skip_observed!("allowance_exhausted");
         }
 
-        if !input.position_price.is_finite() || input.position_price <= 0.0 {
-            skip_observed!("inputs_unavailable");
-        }
-        let size_abs = input.position_size.abs();
-        if size_abs <= f64::EPSILON {
-            skip_observed!("inputs_unavailable");
-        }
-
-        let wallet_exposure =
-            calc_wallet_exposure(input.c_mult, balance, size_abs, input.position_price);
-        let allowance_multiplier = 1.0 + input.effective_we_excess_allowance_fraction.max(0.0);
-        let effective_wel = input.wallet_exposure_limit_ratio * allowance_multiplier;
-
-        let unstuck_exposure_trigger_ratio = input.unstuck_exposure_trigger_ratio;
-        if unstuck_exposure_trigger_ratio < 0.0 {
-            skip_observed!("inputs_unavailable");
-        }
-        if let Some(row) = observation.as_mut() {
-            row.exposure_ratio = (effective_wel > 0.0).then_some(wallet_exposure / effective_wel);
-        }
-        if effective_wel > 0.0 && wallet_exposure / effective_wel <= unstuck_exposure_trigger_ratio
+        let size = match input.side {
+            LONG => input.position_size,
+            SHORT => -input.position_size,
+            _ => 0.0,
+        };
+        let exposure = UnstuckExposure {
+            quantity: size,
+            entry_cost_per_unit: input.position_price * input.c_mult,
+            balance,
+            effective_wel: input.wallet_exposure_limit_ratio
+                * (1.0 + input.effective_we_excess_allowance_fraction.max(0.0)),
+            trigger: input.unstuck_exposure_trigger_ratio,
+        };
+        if !(size > 0.0 && exposure.entry_cost_per_unit > 0.0
+            && exposure.effective_wel > 0.0 && exposure.trigger > 0.0)
         {
+            skip_observed!("inputs_unavailable");
+        }
+        let Some(exposure_before) = exposure.ratio(0.0, 0.0) else {
+            skip_observed!("inputs_unavailable");
+        };
+        if let Some(row) = observation.as_mut() {
+            row.exposure_ratio = Some(exposure_before);
+        }
+        if exposure_before <= exposure.trigger {
             skip_observed!("below_exposure_trigger");
         }
 
@@ -604,151 +511,102 @@ where
             skip_observed!("inputs_unavailable");
         }
 
-        let signed_entry_distance_fraction = calc_signed_entry_distance_fraction(
-            input.side,
-            input.position_price,
-            input.current_price,
-        );
-        if !signed_entry_distance_fraction.is_finite() {
+        let (qty, price, order_type) = if input.side == LONG {
+            (
+                -size,
+                tolerant_round_up_preserve_step(input.current_price, input.price_step),
+                OrderType::CloseUnstuckLong,
+            )
+        } else {
+            (
+                size,
+                tolerant_round_dn_preserve_step(input.current_price, input.price_step),
+                OrderType::CloseUnstuckShort,
+            )
+        };
+        if !(price.is_finite() && price > 0.0) {
             skip_observed!("inputs_unavailable");
         }
-
         observe_unstuck(&mut diagnostics, observation, "eligible");
-        stuck_positions.push(Candidate {
-            input,
-            signed_entry_distance_fraction,
+        proposals.push(UnstuckProposal {
+            idx: input.idx,
+            side: input.side,
+            order: Order { qty, price, order_type },
+            allowance,
+            exposure,
         });
     }
+    Ok(proposals)
+}
 
-    if stuck_positions.is_empty() {
-        return None;
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StandaloneUnstuckInput {
+    balance: f64,
+    realized_pnl_drawdown: f64,
+    loss_gate_enabled: bool,
+    #[serde(deserialize_with = "crate::close_risk::required_optional")]
+    loss_gate_max_drawdown_fraction: Option<f64>,
+    positions: Vec<StandaloneUnstuckPosition>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StandaloneUnstuckPosition {
+    policy: UnstuckPositionInput,
+    symbol: String,
+    order_book: OrderBook,
+    exchange: ExchangeParams,
+    execution_type: ExecutionType,
+    post_only: bool,
+    market_order_slippage_fraction: f64,
+}
+
+impl StandaloneUnstuckInput {
+    pub(crate) fn evaluate(self) -> Result<Option<(usize, usize, Order)>, String> {
+        let headroom = active_gate_cap(self.loss_gate_enabled, self.loss_gate_max_drawdown_fraction)?
+            .map(|cap| crate::hsl_decay::allowance(self.balance, cap, self.realized_pnl_drawdown))
+            .transpose()?;
+        let mut admissible = Vec::new();
+        for position in self.positions {
+            position.exchange.validate_required()?;
+            let policy = &position.policy;
+            if policy.price_step != position.exchange.price_step || policy.c_mult != position.exchange.c_mult {
+                return Err("unstuck policy and exchange market parameters differ".into());
+            }
+            let Some(candidate) = unstuck_proposals(
+                self.balance, self.realized_pnl_drawdown, std::slice::from_ref(policy), None,
+            )?.pop() else {
+                continue;
+            };
+            let pside = if candidate.side == LONG { PositionSide::Long } else { PositionSide::Short };
+            let mut order = candidate.order;
+            let filled_position = Position { size: policy.position_size, price: policy.position_price };
+            let projection = project_close(
+                pside, order.qty, order.price, position.execution_type, position.post_only,
+                &filled_position, &position.order_book, &position.exchange,
+                position.market_order_slippage_fraction,
+            ).ok_or("invalid standalone unstuck projection")?;
+            let step = position.exchange.qty_step;
+            let Some(upper) = candidate.exposure.upper_qty(step, projection) else {
+                continue;
+            };
+            let Some(qty) = candidate.size(upper, step, projection, headroom) else {
+                continue;
+            };
+            order.qty = qty.copysign(order.qty);
+            let priority = close_fill_priority(pside, order.price, policy.position_price,
+                &position.order_book, projection.immediately_executable);
+            admissible.push((priority, position.symbol, candidate.idx, candidate.side, order));
+        }
+
+        Ok(admissible.into_iter().min_by(|a, b| {
+            compare_close_fill_priority(a.0, b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.3.cmp(&b.3))
+                .then_with(|| a.2.cmp(&b.2))
+        }).map(|(_, _, idx, side, order)| (idx, side, order)))
     }
-
-    let candidate_order = least_stuck_order(
-        stuck_positions
-            .iter()
-            .enumerate()
-            .map(|(collection_idx, candidate)| LeastStuckCandidate {
-                collection_idx,
-                symbol_idx: candidate.input.idx,
-                signed_entry_distance_fraction: candidate.signed_entry_distance_fraction,
-            })
-            .collect(),
-    );
-
-    for candidate_idx in candidate_order {
-        let input = stuck_positions[candidate_idx].input;
-        let allowance = allowance_for(input);
-        if allowance <= 0.0 {
-            continue;
-        }
-
-        let exchange_params = ExchangeParams {
-            qty_step: input.qty_step,
-            price_step: input.price_step,
-            min_qty: input.min_qty,
-            min_cost: input.min_cost,
-            c_mult: input.c_mult,
-            ..Default::default()
-        };
-        let close_price = if input.price_step > 0.0 {
-            match input.side {
-                LONG => tolerant_round_up_preserve_step(input.current_price, input.price_step),
-                SHORT => tolerant_round_dn_preserve_step(input.current_price, input.price_step),
-                _ => continue,
-            }
-        } else {
-            input.current_price
-        };
-        if !close_price.is_finite() || close_price <= 0.0 {
-            continue;
-        }
-        let min_entry_qty = calc_min_entry_qty(close_price, &exchange_params);
-        let allowance_multiplier = 1.0 + input.effective_we_excess_allowance_fraction.max(0.0);
-        let effective_wel = input.wallet_exposure_limit_ratio * allowance_multiplier;
-
-        match input.side {
-            LONG => {
-                let size_abs = input.position_size.max(0.0);
-                if size_abs <= f64::EPSILON {
-                    continue;
-                }
-                let target_qty = cost_to_qty(
-                    balance * effective_wel * input.unstuck_close_fraction,
-                    close_price,
-                    input.c_mult,
-                );
-                let target_qty = round_dn(target_qty, input.qty_step).max(0.0);
-                let mut close_qty = -f64::min(size_abs, f64::max(min_entry_qty, target_qty));
-                if close_qty == 0.0 {
-                    continue;
-                }
-                let pnl_if_closed =
-                    calc_pnl_long(input.position_price, close_price, close_qty, input.c_mult);
-                let pnl_abs = pnl_if_closed.abs();
-                if pnl_if_closed < 0.0 && pnl_abs > allowance {
-                    let scaled_qty = close_qty.abs() * (allowance / pnl_abs);
-                    let scaled_qty = f64::max(min_entry_qty, round_dn(scaled_qty, input.qty_step));
-                    let scaled_qty = f64::min(size_abs, scaled_qty);
-                    close_qty = -scaled_qty;
-                }
-                if close_qty == 0.0 {
-                    continue;
-                }
-                observe_unstuck_proposal(&mut diagnostics, input, close_qty, close_price);
-                return Some((
-                    input.idx,
-                    LONG,
-                    Order {
-                        qty: close_qty,
-                        price: close_price,
-                        order_type: OrderType::CloseUnstuckLong,
-                    },
-                ));
-            }
-            SHORT => {
-                let size_abs = input.position_size.abs();
-                if size_abs <= f64::EPSILON {
-                    continue;
-                }
-                let target_qty = cost_to_qty(
-                    balance * effective_wel * input.unstuck_close_fraction,
-                    close_price,
-                    input.c_mult,
-                );
-                let target_qty = round_dn(target_qty, input.qty_step).max(0.0);
-                let mut close_qty = f64::min(size_abs, f64::max(min_entry_qty, target_qty));
-                if close_qty == 0.0 {
-                    continue;
-                }
-                let pnl_if_closed =
-                    calc_pnl_short(input.position_price, close_price, close_qty, input.c_mult);
-                let pnl_abs = pnl_if_closed.abs();
-                if pnl_if_closed < 0.0 && pnl_abs > allowance {
-                    let scaled_qty = close_qty * (allowance / pnl_abs);
-                    let scaled_qty = f64::max(min_entry_qty, round_dn(scaled_qty, input.qty_step));
-                    let scaled_qty = f64::min(size_abs, scaled_qty);
-                    close_qty = scaled_qty;
-                }
-                if close_qty == 0.0 {
-                    continue;
-                }
-                observe_unstuck_proposal(&mut diagnostics, input, close_qty, close_price);
-                return Some((
-                    input.idx,
-                    SHORT,
-                    Order {
-                        qty: close_qty,
-                        price: close_price,
-                        order_type: OrderType::CloseUnstuckShort,
-                    },
-                ));
-            }
-            _ => continue,
-        }
-    }
-
-    None
 }
 
 #[derive(Clone, Debug)]
@@ -1118,201 +976,45 @@ mod tests {
         }
     }
 
-    fn unstuck_diagnostic_input(side: usize) -> UnstuckPositionInput {
+    fn unstuck_input(side: usize) -> UnstuckPositionInput {
         UnstuckPositionInput {
-            idx: 0,
+            idx: side,
             side,
             position_size: if side == LONG { 10.0 } else { -10.0 },
-            position_price: if side == LONG { 130.0 } else { 110.0 },
+            position_price: 100.0,
             wallet_exposure_limit_ratio: 1.0,
             effective_we_excess_allowance_fraction: 0.0,
             unstuck_exposure_trigger_ratio: 0.5,
-            unstuck_close_fraction: 0.1,
-            unstuck_ema_gating_enabled: true,
+            unstuck_ema_gating_enabled: false,
             unstuck_ema_distance_fraction: 0.0,
             unstuck_loss_allowance_fraction: 0.1,
             total_wallet_exposure_limit_ratio: 1.0,
-            ema_band_upper: 119.0,
-            ema_band_lower: 121.0,
-            current_price: 120.003,
-            price_step: 0.01,
-            qty_step: 0.01,
-            min_qty: 0.01,
-            min_cost: 0.0,
+            ema_band_upper: 100.0,
+            ema_band_lower: 100.0,
+            current_price: 91.25,
+            price_step: 0.1,
             c_mult: 1.0,
         }
     }
 
     #[test]
-    fn unstuck_diagnostics_observe_exact_gates_without_changing_decisions() {
-        for side in [LONG, SHORT] {
-            for case in 0..6 {
-                let mut input = unstuck_diagnostic_input(side);
-                let mut drawdown = 0.0;
-                let expected = match case {
-                    0 => {
-                        drawdown = 1_000.0;
-                        "allowance_exhausted"
-                    }
-                    1 => {
-                        input.position_size *= 0.1;
-                        "below_exposure_trigger"
-                    }
-                    2 => {
-                        input.ema_band_upper = 125.001;
-                        input.ema_band_lower = 115.009;
-                        "waiting_ema"
-                    }
-                    3 => {
-                        input.ema_band_upper = f64::NAN;
-                        input.ema_band_lower = f64::NAN;
-                        "inputs_unavailable"
-                    }
-                    4 => {
-                        input.unstuck_ema_gating_enabled = false;
-                        input.ema_band_upper = f64::NAN;
-                        input.ema_band_lower = f64::NAN;
-                        "eligible"
-                    }
-                    _ => "eligible",
-                };
-                let positions = [input];
-                let ordinary =
-                    calc_unstucking_action_with_realized_drawdown(1_000.0, drawdown, &positions)
-                        .unwrap();
-                let mut rows = Vec::new();
-                let observed = calc_unstucking_action_with_diagnostics(
-                    1_000.0,
-                    drawdown,
-                    &positions,
-                    Some(&mut rows),
-                )
-                .unwrap();
-                let normalize = |result: Option<(usize, usize, Order)>| {
-                    result.map(|(idx, side, order)| {
-                        (
-                            idx,
-                            side,
-                            order.qty.to_bits(),
-                            order.price.to_bits(),
-                            order.order_type,
-                        )
-                    })
-                };
-                assert_eq!(normalize(ordinary), normalize(observed));
-                assert_eq!(rows.len(), 1);
-                assert_eq!(rows[0].reason, expected);
-                assert_eq!(rows[0].proposed, expected == "eligible");
-                if expected == "waiting_ema" {
-                    assert_eq!(
-                        rows[0].ema_trigger_price,
-                        Some(if side == LONG { 125.01 } else { 115.0 })
-                    );
-                }
-            }
-        }
-    }
+    fn unstuck_keeps_eligible_alternatives_with_checked_raw_balance_allowance() {
+        let long = unstuck_input(LONG);
+        let short = unstuck_input(SHORT);
+        let mut diagnostics = Vec::new();
+        let proposals = unstuck_proposals(1000.0, 20.0, &[long.clone(), short], Some(&mut diagnostics))
+            .unwrap();
+        assert_eq!(proposals.len(), 2);
+        assert_eq!(proposals[0].order.price, 91.3);
+        assert_eq!(proposals[1].order.price, 91.2);
+        assert_eq!(proposals[0].allowance, proposals[1].allowance);
+        assert!(diagnostics.iter().all(|row| row.reason == "eligible" && row.exposure_ratio == Some(1.0)));
 
-    #[test]
-    fn unstuck_diagnostics_preserve_global_least_stuck_selection() {
-        let mut positions = vec![
-            unstuck_diagnostic_input(LONG),
-            unstuck_diagnostic_input(SHORT),
-        ];
-        positions[1].idx = 1;
-        positions[1].position_price = 119.0;
-        let mut rows = Vec::new();
-        let selected =
-            calc_unstucking_action_with_diagnostics(1_000.0, 0.0, &positions, Some(&mut rows))
-                .unwrap()
-                .unwrap();
-        assert_eq!((selected.0, selected.1), (1, SHORT));
-        assert_eq!(rows.iter().filter(|row| row.proposed).count(), 1);
-        assert!(rows[1].proposed);
-        assert_eq!(rows[0].reason, "eligible");
-        assert_eq!(rows[1].reason, "eligible");
-    }
-
-    #[test]
-    fn unstuck_prefers_favorable_moves_and_preserves_symbol_index_ties() {
-        let mut long = unstuck_diagnostic_input(LONG);
-        long.idx = 3;
-        long.position_price = 128.0;
-        long.current_price = 144.0;
-        long.unstuck_ema_gating_enabled = false;
-
-        let mut short = unstuck_diagnostic_input(SHORT);
-        short.idx = 2;
-        short.position_price = 128.0;
-        short.unstuck_ema_gating_enabled = false;
-
-        for (short_price, expected_idx, expected_side) in [
-            (136.0, 3, LONG),  // Short underwater.
-            (120.0, 3, LONG),  // Both profitable, long farther from entry.
-            (112.0_f64.next_up(), 3, LONG),
-            (112.0, 2, SHORT), // Exact tie, lower symbol index wins.
-            (112.0_f64.next_down(), 2, SHORT),
-            (111.0, 2, SHORT), // Both profitable, short farther from entry.
-        ] {
-            short.current_price = short_price;
-            let (idx, side, _) =
-                calc_unstucking_action(1_000.0, 100.0, 100.0, &[long.clone(), short.clone()])
-                    .expect("one eligible position should be selected");
-            assert_eq!((idx, side), (expected_idx, expected_side));
-        }
-    }
-
-    #[test]
-    fn allowance_scaled_unstuck_closes_at_most_the_remaining_position() {
-        for (side, position_size, current_price) in [(LONG, 0.05, 90.0), (SHORT, -0.05, 110.0)] {
-            let mut input = unstuck_diagnostic_input(side);
-            input.position_size = position_size;
-            input.position_price = 100.0;
-            input.current_price = current_price;
-            input.unstuck_ema_gating_enabled = false;
-            input.unstuck_exposure_trigger_ratio = 0.0;
-            input.min_qty = 0.1;
-
-            let (_, _, order) = calc_unstucking_action(1_000.0, 0.1, 0.1, &[input])
-                .expect("allowance-scaled dust close");
-            assert_eq!(order.qty, -position_size);
-        }
-    }
-
-    #[test]
-    fn auto_unstuck_directionally_quantizes_off_tick_close_prices() {
-        for (side, position_size, position_price, expected_price, expected_order_type) in [
-            (LONG, 10.0, 130.0, 120.01, OrderType::CloseUnstuckLong),
-            (SHORT, -10.0, 110.0, 120.0, OrderType::CloseUnstuckShort),
-        ] {
-            let input = UnstuckPositionInput {
-                idx: 0,
-                side,
-                position_size,
-                position_price,
-                wallet_exposure_limit_ratio: 1.0,
-                effective_we_excess_allowance_fraction: 0.0,
-                unstuck_exposure_trigger_ratio: 0.5,
-                unstuck_close_fraction: 0.1,
-                unstuck_ema_gating_enabled: false,
-                unstuck_ema_distance_fraction: 0.0,
-                unstuck_loss_allowance_fraction: 0.01,
-                total_wallet_exposure_limit_ratio: 1.0,
-                ema_band_upper: 0.0,
-                ema_band_lower: 0.0,
-                current_price: 120.003,
-                price_step: 0.01,
-                qty_step: 0.01,
-                min_qty: 0.01,
-                min_cost: 0.0,
-                c_mult: 1.0,
-            };
-
-            let (_, _, order) = calc_unstucking_action(1_000.0, 1e9, 1e9, &[input])
-                .expect("off-tick candidate should emit a quantized auto-unstuck close");
-            assert_eq!(order.order_type, expected_order_type);
-            assert!((order.price - expected_price).abs() < 1e-12);
-        }
+        let mut long = long;
+        long.unstuck_exposure_trigger_ratio = 1.0;
+        diagnostics.clear();
+        assert!(unstuck_proposals(1000.0, 20.0, &[long], Some(&mut diagnostics)).unwrap().is_empty());
+        assert_eq!(diagnostics[0].reason, "below_exposure_trigger");
     }
 
     #[test]

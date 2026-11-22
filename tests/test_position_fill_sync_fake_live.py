@@ -43,11 +43,11 @@ async def test_pending_history_cannot_starve_real_protective_execution(
     )
     if side == "short":
         cfg["bot"]["short"] = deepcopy(cfg["bot"]["long"])
-        cfg["bot"]["long"]["hsl"]["enabled"] = False
+        cfg["bot"]["long"]["risk"]["hsl"]["enabled"] = False
         cfg["bot"]["long"]["risk"].update(
             max_positions=0, total_wallet_exposure_limit_ratio=0.0
         )
-    cfg["bot"][side]["hsl"].update(
+    cfg["bot"][side]["risk"]["hsl"].update(
         enabled=True,
         drawdown_threshold_fraction=0.9,
         # Isolate the fill-sync deadline from intentional fast-EMA warmup.
@@ -55,8 +55,7 @@ async def test_pending_history_cannot_starve_real_protective_execution(
         drawdown_fraction_ema_span_minutes=1.0,
         panic_close_order_type="market",
     )
-    cfg["bot"]["portfolio"]["unstuck"]["memory_ema_span_minutes"] = 288.0
-    cfg["bot"]["portfolio"]["loss_gate"]["memory_ema_span_minutes"] = 288.0
+    cfg["bot"]["portfolio"]["risk"]["loss_realization"]["memory_ema_span_minutes"] = 288.0
     config = tmp_path / "config.json"
     config.write_text(
         json.dumps({k: v for k, v in cfg.items() if not k.startswith("_")})
@@ -89,7 +88,7 @@ async def test_pending_history_cannot_starve_real_protective_execution(
         bot.cca.positions[(symbol, side)]["size"] = 2.0
         await bot.refresh_protective_authoritative_state(require_balance=True)
         assert sync.blocked((symbol, side))
-        bot.config["bot"][side]["hsl"]["drawdown_threshold_fraction"] = 0.03
+        bot.config["bot"][side]["risk"]["hsl"]["drawdown_threshold_fraction"] = 0.03
         bot.cca.get_current_step()["prices"][symbol] = 10.0 if side == "long" else 190.0
         bot.market_snapshot_provider._cache.clear()
         owner = bot._hsl_live = hsl_live.Owner(bot)

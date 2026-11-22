@@ -61,7 +61,7 @@ def test_actual_suite_candidate_source_handoff_preserves_omitted_ignored_and_num
     policy = apply_bot_policy_patch(get_bot_policy(current),
         {"bot.global.risk.total_wallet_exposure_limit_ratio": 2.75}, channel="gene")
     policy = apply_bot_policy_patch(policy,
-        {"bot.short.unstuck.close_fraction": 0.08}, channel="derived")
+        {"bot.short.risk.unstuck.loss_allowance_fraction": 0.08}, channel="derived")
     install_bot_policy(current, policy)
     ignored.unlink()
     ctx = SimpleNamespace(config=context, overrides={}, label="base", msss={"binance": {"AAA": {}}})
@@ -73,7 +73,7 @@ def test_actual_suite_candidate_source_handoff_preserves_omitted_ignored_and_num
     assert exported["global"]["universe"]["ignored_coins"] == str(ignored)
     assert result["bot"]["long"]["risk"]["total_wallet_exposure_limit_ratio"] == 2.75
     assert ("bot", "global", "risk", "total_wallet_exposure_limit_ratio") in get_bot_policy(result)._genes
-    assert result["bot"]["short"]["unstuck"]["close_fraction"] == 0.08
+    assert result["bot"]["short"]["risk"]["unstuck"]["loss_allowance_fraction"] == 0.08
     assert get_bot_policy(result)._derived == policy._derived
     assert list(result["bot"]["long"]["universe"]["ignored_coins"]) == ["BBB"]
     assert execution_key(result) == execution_key(dataset(result).policy_config())
@@ -153,7 +153,7 @@ def test_request_owned_common_gene_reuses_execution_identity_but_equal_pin_chang
 @pytest.mark.parametrize("transform", ["mirror_short_from_long", "couple_unstuck_ema_spans"])
 def test_saved_derived_snapshot_reloads_as_ordinary_policy_without_changing_authored_source(kind, transform):
     raw = source(kind)
-    raw["bot"]["long"] = {"unstuck": {"ema_span_0_minutes": 123.5, "ema_span_1_minutes": 345.5}}
+    raw["bot"]["long"] = {"risk": {"unstuck": {"ema_span_0_minutes": 123.5, "ema_span_1_minutes": 345.5}}}
     config = load(raw)
     original = bot_policy_source_view(config)["bot"]
     config["optimize"]["enable_overrides"] = [transform]
@@ -165,7 +165,7 @@ def test_saved_derived_snapshot_reloads_as_ordinary_policy_without_changing_auth
     snapshot["optimize"]["enable_overrides"] = []
     replay = prepare_config(json.loads(json.dumps(snapshot)), verbose=False)
     for side in ("long", "short"):
-        assert replay["bot"][side]["unstuck"] == config["bot"][side]["unstuck"]
+        assert replay["bot"][side]["risk"]["unstuck"] == config["bot"][side]["risk"]["unstuck"]
     assert get_bot_policy(config)._derived
 
 
@@ -191,7 +191,7 @@ def test_scenario_coupling_preserves_transformed_candidate_before_explicit_overr
     candidate = _finalize_optimizer_vector_config(config)
     source_before_repeat = bot_policy_source_view(candidate)["bot"]
     saved = candidate["backtest"]["scenarios"][0]["overrides"]
-    assert saved["bot.short.unstuck.ema_span_0_minutes"] == (17.2 if scenario_span is None else scenario_span)
+    assert saved["bot.short.risk.unstuck.ema_span_0_minutes"] == (17.2 if scenario_span is None else scenario_span)
     effective_strategy = candidate["bot"]["short"]["strategy"][kind]
     if kind == "trailing_martingale":
         effective_strategy = effective_strategy["entry"]
