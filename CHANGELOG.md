@@ -450,6 +450,10 @@ its own version heading. See [release status](docs/releases.md).
   preparation. Derive trailing inputs from the current cohort after remote acquisition, preserve
   strict receipt checks through execution, release retired plan history, and report discard reasons.
 
+- Correct Bitget Classic hedge closes and one-way forced closes so position sizes and
+  trailing confirmation follow the affected position. Reconstruct cached fills from retained
+  exchange executions on startup.
+
 - Require position-side evidence for break-even OKX net-mode fills before confirming fill
   history. Recheck cached net-mode fill attribution from the original exchange rows.
 

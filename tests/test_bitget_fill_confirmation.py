@@ -5,7 +5,12 @@ from dataclasses import replace
 
 import pytest
 
-from fill_events_manager import BitgetFetcher, FillEvent, FillEventsManager
+from fill_events_manager import (
+    BitgetFetcher,
+    FillEvent,
+    FillEventCacheContractError,
+    FillEventsManager,
+)
 from test_unstucking_safeguards import (
     _dummy_config,
     _make_dummy_bot,
@@ -45,7 +50,7 @@ class BitgetFixtureAPI:
                     orderId=event_id,
                     cTime=str(T0 + delta),
                     symbol="TESTUSDT",
-                    side=side,
+                    side=entry_side,
                     tradeSide=action,
                     posMode="hedge_mode",
                     baseVolume=str(qty),
@@ -351,3 +356,63 @@ def test_linear_category_does_not_override_another_fill_source(tmp_path):
     payload["raw"][0]["source"] = "another_exchange"
     payload["c_mult"] = 10.0
     assert FillEvent.from_dict(payload).c_mult == 10.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pside", ["long", "short"])
+@pytest.mark.parametrize("one_way", [False, True])
+async def test_classic_partial_close_repairs_cached_after_state_and_trailing(tmp_path, pside, one_way):
+    api, fetcher, manager = make_manager(tmp_path, "classic", pside)
+    opening, closing = deepcopy(api.rows[:2])
+    opening.update(baseVolume="2.0", price="110")
+    closing.update(cTime=str(T0 + 120_000), baseVolume="1.0")
+    entry = opening["side"]
+    exit_side = "sell" if entry == "buy" else "buy"
+    if one_way:
+        opening.update(posMode="one_way_mode", tradeSide=f"{entry}_single")
+        closing.update(posMode="one_way_mode", side=exit_side, tradeSide=f"burst_{exit_side}_single")
+    api.rows = [opening, closing]
+
+    await manager.refresh(start_ms=T0 - 1, end_ms=T0 + 300_000)
+    expected = manager.get_events()
+    close = expected[1]
+    assert (close.side, close.position_side, close.psize, close.pprice) == (exit_side, pside, 1.0, 110.0)
+    assert close.qty == (-1.0 if pside == "long" else 1.0)
+    # Old Classic hedge closes retained the wire side. One-way forced closes
+    # retained their economic side but were attributed to the opposing position.
+    wrong = replace(
+        close,
+        side=closing["side"],
+        position_side="short" if pside == "long" else "long",
+        qty=1.0 if closing["side"] == "buy" else -1.0,
+        psize=0.0,
+        pprice=0.0,
+    )
+    manager.cache.save([expected[0], wrong])
+    manager.cache.mark_covered_start(T0 - 1)
+    metadata = manager.cache.load_metadata().copy()
+    api.rows = []  # Repair must work without refetching the original fills.
+    for _ in range(2):
+        manager = FillEventsManager(
+            exchange="bitget", user="offline_fixture", fetcher=fetcher, cache_path=tmp_path / "cache"
+        )
+        await manager.ensure_loaded()
+        assert manager.get_events() == expected
+        assert manager.cache.load_metadata() == metadata
+        bot = make_bot(manager, pside)
+        await bot.update_trailing_data()
+        assert bot._trailing_pending_fill_confirmations == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", [[], [{"source": "fill_history", "data": {}}]])
+async def test_classic_cache_missing_execution_evidence_requires_rebuild(tmp_path, raw):
+    api, fetcher, manager = make_manager(tmp_path, "classic", "long")
+    row = FillEvent.from_dict(fetcher._normalize_fill(api.rows[0]))
+    manager.cache.save([replace(row, raw=raw)])
+    manager.cache.mark_covered_start(T0 - 1)
+    with pytest.raises(FillEventCacheContractError, match="cached Bitget fill"):
+        await manager.ensure_loaded()
+    assert not manager._loaded
+    assert manager.quarantine_cache_for_rebuild(reason="invalid_execution_evidence")
+    assert not manager.cache.get_covered_start_ms()
