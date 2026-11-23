@@ -350,7 +350,7 @@ are emitted as choices are made, including before a later validation failure.
 | Other verified retired metric selectors, including median growth, unsupported weighted/currency/per-side metrics and HSL restart counts | Remove the entire objective/limit and its stale named reducer rules; record the full original entry and path with `new: null` |
 | Retained metric selector crossing the v8-to-v9 metric boundary | Report the changed definition and require fresh thresholds/results |
 | EW half-life absent or `null`, with CAGR EW explicitly selected | Resolve and report the native 180-day default |
-| Root rolling-day memory | Multiply `live.pnls_max_lookback_days` by `1440.0` to initialize independent slow EMA spans |
+| Root rolling-day memory | Multiply `live.pnls_max_lookback_days` by `1440.0` for inferred HSL slow spans and the shared realized-loss span. An active loss gate requires an explicit span choice as described below |
 | Scenario or fixed-override rolling-day memory | Convert each authored duration separately, preserving its scope |
 | Zero or sub-minute rolling window | Use the minimum `1.0` minute span |
 | Missing or all-history root window | Use the canonical `43200.0` minute (30-day) span |
@@ -437,8 +437,9 @@ Live risk acquisition has its own bounded horizon, including supported cooldown,
 `live.startup.risk_bootstrap_max_lookback_minutes`. This is not a finite exponential-memory cutoff.
 HSL retains compact forward state while pruning factual support; cold restart or a correction
 requiring discarded history can need observable approximate reconstruction. Unknown prefix
-error can move HSL timing in either direction. The independent unstuck and loss-gate origin
-contract is unchanged. See [V9 risk model](v9_risk_model.md) and
+error can move HSL timing in either direction. Unstuck and the loss gate use the same
+realized-loss history. If its origin is unknown, replay starts from zero at the retained
+coverage boundary and reports the unknown prefix. See [V9 risk model](v9_risk_model.md) and
 [HSL validation](hsl_testing.md). Offline checks do not establish actual-account readiness.
 
 Released-v8 age behavior changes deliberately: the side gate now applies to every live and

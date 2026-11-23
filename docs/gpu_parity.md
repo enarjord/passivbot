@@ -12,8 +12,8 @@ effects, use the standalone [GPU cohort benchmark](gpu_cohort_benchmark.md).
 
 Native GPU replay uses F32 arithmetic and the declared metric approximations. A
 passing comparison covers only the selected inputs, metrics and policies; it does
-not certify all configurations. V9 uses the shared-account native service on Metal
-and CUDA, including one-coin inputs. Normal GPU optimization consumes native metrics
+not certify all configurations. V9 uses the shared-account native service on Apple Metal,
+NVIDIA CUDA and AMD ROCm, including one-coin inputs. Normal GPU optimization consumes native metrics
 directly and does not call this comparator. The [v9 risk model](v9_risk_model.md)
 defines the current authored arithmetic and causal event contract.
 
@@ -40,6 +40,7 @@ passivbot tool gpu-parity --fixture trailing_martingale --coins 2 --sides short 
 passivbot tool gpu-parity --fixture ema_anchor --coins 2 --sides both --hsl portfolio
 passivbot tool gpu-parity --fixture trailing_martingale --sides both --market-orders
 passivbot tool gpu-parity --fixture trailing_martingale --coins 1 --gpu-engine native
+passivbot tool gpu-parity --fixture ema_anchor --sides both --unstuck --realized-loss-memory-ema-span-minutes 720
 ```
 
 Defaults are 5,760 one-minute candles and seed 7, with two synthetic markets,
@@ -50,11 +51,11 @@ triggers its transitions. Add targeted stress fixtures for behavioral coverage.
 
 Fixture-only `--hsl-drawdown-threshold-fraction`, `--hsl-drawdown-fraction-ema-span-minutes`,
 `--hsl-cooldown-minutes` set the explicit policy before canonical preparation.
-Defaults are 0.05, 30 minutes and 30 minutes. Independent slow-memory controls are
-`--hsl-memory-ema-span-minutes`, `--unstuck-memory-ema-span-minutes` and
-`--loss-gate-memory-ema-span-minutes`, each defaulting to 1440 minutes.
-These settings do not enable HSL; select its mode with `--hsl`. Fractional spans
-remain floats. Each memory belongs to its named risk consumer.
+Defaults are 0.05, 30 minutes and 30 minutes. `--hsl-memory-ema-span-minutes`
+sets the HSL equity drawdown span. `--realized-loss-memory-ema-span-minutes`
+sets one account-wide span shared by unstuck and the loss gate. Both default to
+1440 minutes and accept fractional values. Select HSL with `--hsl` and enable
+unstuck with `--unstuck`.
 Repeat `--price-shock COIN_INDEX BAR FACTOR` to multiply high, low and close from
 that zero-based bar onward. Volume, BTC and timestamps are unchanged; overlapping
 shocks compound in authored order. Invalid indexes and nonpositive/nonfinite factors
@@ -83,7 +84,7 @@ unassessed; evaluate current event and numerical differences case by case,
 without inferring acceptance from execution completing.
 
 The default `--gpu-engine native` uses `NativeBacktestService`, the same shared-account
-route used by GPU optimization on supported Metal or CUDA devices. Explicit
+route used by GPU optimization on supported Metal, CUDA or ROCm devices. Explicit
 `--gpu-engine legacy` is rejected for v9. The report identifies the selected engine
 and replay family; the comparator does not alter metric tolerances.
 

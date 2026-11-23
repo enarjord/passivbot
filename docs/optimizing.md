@@ -200,7 +200,7 @@ Passivbot supports these optimizer backends:
   - Uses pymoo. This is now the default optimizer backend.
   - The default pymoo algorithm mode is `auto`: Passivbot uses `nsga2` when optimizing `3` or fewer objectives, and `nsga3` when optimizing more than `3`.
 - `optimize.backend: gpu`
-  - Uses native NVIDIA/CUDA or Apple Metal simulations with CPU-owned pymoo ask/tell evolution,
+  - Uses native NVIDIA CUDA, Apple Metal or AMD ROCm simulations with CPU-owned pymoo ask/tell evolution,
     scenario selection, scoring, limits and result processing. This backend remains
     experimental; see [the service contract](gpu_backtest_service.md#gpu-optimizer).
 
@@ -230,8 +230,10 @@ fresh seeds instead. A partial checkpoint write leaves the previous checkpoint i
 
 <a id="apple-mps-gpu-backend-experimental"></a>
 
-GPU optimization supports NVIDIA CUDA on Linux/WSL2 or Apple Silicon Metal on macOS.
-Install the matching optional runtime. For NVIDIA:
+GPU optimization supports NVIDIA CUDA on Linux/WSL2, Apple Silicon Metal on macOS and
+AMD ROCm with a compatible PyTorch HIP and CuPy runtime. See the
+[gfx1030 close-sizing qualification](rocm_close_sizing_validation.md) for the AMD device,
+runtime versions and coverage. For NVIDIA, install the CUDA extra:
 
 ```bash
 python3 -m pip install -e ".[full,gpu-cuda]"

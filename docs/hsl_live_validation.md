@@ -14,7 +14,9 @@ launch command and intervention scope.
    In coin or position-side scope, HSL parameters inherit from `bot.global.risk.hsl` with optional
    side overrides under `bot.long.risk.hsl` and `bot.short.risk.hsl`. Portfolio scope uses the explicit
    `bot.portfolio.risk.hsl` policy. Confirm the slow and fast EMA spans, bounded bootstrap horizon,
-   independent realized-loss-gate memory span if enabled, and raw balance or coin-slot budget.
+   and raw balance or coin-slot budget. If unstuck or the loss gate is enabled, confirm their
+   shared account-wide `bot.portfolio.risk.loss_realization.memory_ema_span_minutes` and the
+   configured allowance fraction for each enabled policy.
    `cooldown_after_red_minutes` starts when the scope becomes flat if the assessment immediately
    before the final fill or after final accounting is RED.
    See [configuration migration](v8_to_v9_migration.md) and the

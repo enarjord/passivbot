@@ -19,9 +19,9 @@ its own version heading. See [release status](docs/releases.md).
   before creating them. Bounded exchange lookups can recover closes canceled
   before the open-order refresh. A warning identifies ambiguous or contradictory close
   reservation evidence when it defers a write. Zero-loss limit closes retain order-match
-  tolerance when both projections agree. Metal and NVIDIA CUDA replay support v9
-  close sizing for EMA Anchor and Trailing Martingale, including exposure-targeted
-  unstuck and the portfolio loss gate, on Metal, NVIDIA CUDA and AMD ROCm.
+  tolerance when both projections agree. Metal, NVIDIA CUDA and AMD ROCm replay support
+  v9 close sizing for EMA Anchor and Trailing Martingale, including exposure-targeted
+  unstuck and the portfolio loss gate.
   Close allocation uses the same rounded priority ranks and stable tie-breaks on CPU and GPU.
 
 - Update the Trailing Martingale starter universe and suite subsets. Add ETC and
@@ -1156,12 +1156,10 @@ its own version heading. See [release status](docs/releases.md).
   subtraction or close-wave sum noise; genuinely undersized remainders still close
   in full.
 
-- Adopt the final canonical v9 config with independent HSL, unstuck and loss-gate slow spans;
-  HSL ratio smoothing remains separate. Keep local unstuck controls under each side and put
-  portfolio risk policy under `bot.portfolio`. Share ordered fills and risk arithmetic while retaining
-  separate enabled accumulators and recording each fill once in the economic ledger. Gate-only
-  configurations retain their own realized memory. Preserve raw accounting versus snapped sizing,
-  full loss/fee debits, profit paydown, batch reservations, final sizing and panic exemptions.
+- HSL tracks equity drawdown per policy and separately smooths its drawdown ratio.
+  Unstuck and the portfolio loss gate consume each net-realized fill once through shared
+  account-wide memory, including when only one policy is enabled. The GPU parity and
+  cohort fixtures expose its span as `--realized-loss-memory-ema-span-minutes`.
 
 - Remove trailing-grid-v7 and its migration command, Defx/Paradex adapters, DEAP search,
   legacy `_w` formulas and dependent aliases, obsolete GPU proxy/directional/layout interfaces,

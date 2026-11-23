@@ -9,9 +9,13 @@ a backtest or optimizer run. Follow [release status](releases.md) when selecting
   account-wide policy under `bot.portfolio`. It makes side activation and the per-side coin
   universe explicit. Authored files and their overrides receive strict validation.
   [Configuration workflow](config_workflow.md)
-- HSL, auto-unstuck, and the realized-loss gate use continuous forward-decay loss memory.
-  Unstuck and the loss gate share ordered net-realized fill facts and use independent spans
-  and drawdowns. Historical evidence can be incomplete at live cold start.
+- Each HSL policy tracks its own equity drawdown. Auto-unstuck and the portfolio loss gate
+  share one account-wide drawdown from net-realized fills and one decay span at
+  `bot.portfolio.risk.loss_realization.memory_ema_span_minutes`. Unstuck scales its
+  allowance by the applicable total wallet exposure limit. The gate applies its cap directly
+  to the account. Unstuck sizes a close toward its exposure trigger, subject to available
+  allowance and venue quantity rules. Panic closes bypass the gate. Live cold starts can
+  have incomplete loss history.
   [Risk model](v9_risk_model.md) and [HSL validation](hsl_live_validation.md)
 - Initial entries use the earliest verified price evidence for an asset when evaluating
   minimum coin age. Forager can use RMS directionality alongside volume, EMA readiness, and
@@ -41,9 +45,11 @@ a backtest or optimizer run. Follow [release status](releases.md) when selecting
    ```
 
 3. Review the migration report. Confirm side activation, the coin universe, overrides, fees,
-   and exposure. Choose the HSL scope and forward-decay risk spans, and address any required
-   strategy, risk, or objective changes. A v8 rolling window does not have a unique equivalent
-   EMA span. [Supported schemas and migration choices](v8_to_v9_migration.md)
+   and exposure. Choose the HSL scope, its decay spans, and the shared realized-loss span.
+   An active v8 loss gate requires an explicit span choice and
+   `--acknowledge-realized-loss-gate-memory-change` even in best-effort mode. Review the
+   removed unstuck close-size setting and the exposure trigger used for sizing. A v8 rolling
+   window has no unique equivalent EMA span. [Supported schemas and migration choices](v8_to_v9_migration.md)
 4. Backtest the migrated policy on the intended data and scenarios. Start a fresh optimizer run
    and migrate any v8 candidate configs before reusing them as seeds. V8 fitness and checkpoints
    are tied to the old evaluation contract. [Backtesting](backtesting.md) and [optimization](optimizing.md)
@@ -63,6 +69,9 @@ orders, and protection readiness during rollback.
 
 ## GPU optimization
 
-CUDA and Metal are opt-in experimental backends. Device precision can affect scores and feasibility
-near boundaries. Run the [GPU/CPU parity tool](gpu_parity.md) on representative setups and evaluate
-candidates selected for use with the Rust CPU backtest.
+GPU optimization is opt-in and experimental. EMA Anchor and Trailing Martingale support
+exposure-targeted unstuck and the portfolio loss gate on Apple Metal, NVIDIA CUDA and AMD
+ROCm. The [ROCm qualification](rocm_close_sizing_validation.md) covers close-sizing fixtures
+on gfx1030. Device precision can change scores and feasibility near boundaries. Run the
+[GPU/CPU parity tool](gpu_parity.md) on representative setups and verify finalists with the
+Rust CPU backtest.
