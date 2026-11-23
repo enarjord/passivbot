@@ -18,6 +18,7 @@ from optimization.gpu.ema_bootstrap import (
 )
 
 from optimization.gpu.specialization import unstuck_ema_required, unstuck_required
+from optimization.gpu.parameters import validate_global_risk_params
 from optimization.gpu.decimal import (
     _TM_DECIMAL_KEYS,
     _TM_DECIMAL_WORDS,
@@ -39,7 +40,6 @@ from optimization.gpu.runtime import (
 )
 
 from optimization.gpu.model import (
-    GLOBAL_RISK_PARAM_KEYS,
     MARKET_EXECUTION_TICKS_ABI,
     validate_market_order_slippage_fraction,
     ADAPTIVE_PARAM_KEYS,
@@ -1056,27 +1056,6 @@ def _decode_multicoin_fused_outputs(
         native_factual_hsl=native_factual_hsl,
         interval_ms=interval_ms)
     return output
-
-
-def _validate_global_risk_params(params, keys, *, sides, loss_gate_enabled):
-    """Global request policies may vary by candidate, never by side or coin."""
-    from optimization.gpu.hsl import validate_memory_span
-
-    width = len(keys)
-    for key in GLOBAL_RISK_PARAM_KEYS:
-        column = keys.index(key)
-        values = params[:, column]
-        for side in range(1, sides):
-            if np.any(values != params[:, side * width + column]):
-                raise ValueError(f"GPU {key} must be account-global")
-        if key == "loss_gate_max_drawdown_fraction":
-            if np.any(~np.isfinite(values) | (values < 0.0) | (values >= 1.0)):
-                raise ValueError(f"GPU candidate {key} must be finite and in [0, 1)")
-            if not loss_gate_enabled and np.any(values != 0.0):
-                raise ValueError(f"GPU candidate {key} must be zero when the gate is disabled")
-        else:
-            for value in np.unique(values):
-                validate_memory_span(value)
 
 
 def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
@@ -2135,7 +2114,7 @@ class _MulticoinReplayRunner:
         bootstrap_counts = pack_bootstrap_counts(
             params, self.parameter_keys, self._bootstrap_coin_overrides,
             interval_minutes=self.interval_minutes, available=self.n)
-        _validate_global_risk_params(
+        validate_global_risk_params(
             params, self.parameter_keys, sides=self.replay_sides,
             loss_gate_enabled=self.loss_gate_enabled,
         )

@@ -74,6 +74,7 @@ from optimization.evaluation_payload import (
     unpack_evaluation_payload,
 )
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY
+from optimization.native_checkpoint import CHECKPOINT_VERSION
 from optimization.shape import build_optimization_shape
 from optimization.warmup import build_optimizer_max_config
 from optimize_suite import ScenarioEvalContext
@@ -967,19 +968,20 @@ def test_gpu_preparation_preflight_delegates_effective_suite(monkeypatch):
     }
     calls = []
 
-    monkeypatch.setattr(
-        "config.gpu.validate_gpu_backtest_config",
-        lambda actual_config, *, check_realized_close_policies=True: calls.append(
-            (actual_config, check_realized_close_policies)
-        ),
-    )
+    def record_validation(actual_config, *, check_realized_close_policies=True, target_vendor=None):
+        calls.append((actual_config, check_realized_close_policies, target_vendor))
 
-    optimize._run_gpu_preparation_preflight(config, suite_cfg)
+    monkeypatch.setattr("config.gpu.validate_gpu_backtest_config", record_validation)
+
+    optimize._run_gpu_preparation_preflight(config, suite_cfg, target_vendor="nvidia")
 
     assert len(calls) == 2
-    (effective_config, check_base_policy), (scenario_config, check_scenario_policy) = calls
+    (effective_config, check_base_policy, base_vendor), (
+        scenario_config, check_scenario_policy, scenario_vendor
+    ) = calls
     assert check_base_policy is False
     assert check_scenario_policy is True
+    assert base_vendor == scenario_vendor == "nvidia"
     assert effective_config is not config
     assert effective_config["backtest"]["starting_balance"] == 1500.0
     assert config["backtest"]["starting_balance"] != 1500.0
@@ -5643,7 +5645,7 @@ def test_validate_resume_results_allows_empty_gpu_seed_bootstrap_checkpoint(
     checkpoint_path = tmp_path / "checkpoint.pkl"
     checkpoint = {
         optimize.CONTRACT_KEY: optimize.build_evaluation_contract(config),
-        "backend": "gpu", "version": 4, "completed": 0,
+        "backend": "gpu", "version": CHECKPOINT_VERSION, "completed": 0,
         "screened": 0, "sequence": 0, "phase": "idle",
         "algorithm": object(),
         "resume_config": {
@@ -5674,7 +5676,7 @@ def test_validate_resume_results_rejects_empty_completed_gpu_checkpoint(
     with open(checkpoint_path, "wb") as file:
         pickle.dump(
             {
-                "backend": "gpu", "version": 4, "completed": 1,
+                "backend": "gpu", "version": CHECKPOINT_VERSION, "completed": 1,
                 "screened": 0, "sequence": 1, "phase": "idle", "algorithm": object(),
                 optimize.CONTRACT_KEY: optimize.build_evaluation_contract(config),
                 "resume_config": {

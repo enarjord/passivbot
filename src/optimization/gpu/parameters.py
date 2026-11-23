@@ -4,12 +4,31 @@ from types import SimpleNamespace
 import numpy as np
 
 from config.shared_bot import flatten_shared_bot_side
-from optimization.gpu.hsl import project_bot
+from optimization.gpu.hsl import project_bot, validate_memory_span
 from optimization.gpu.model import (
     adaptive_params, EMA_ANCHOR_MULTICOIN_PARAM_KEYS, GLOBAL_RISK_PARAM_KEYS, RESERVED_RISK_PARAM_KEYS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, UNSTUCK_EMA_PARAM_KEYS,
     flatten_trailing_martingale_params,
 )
+
+
+def validate_global_risk_params(params, keys, *, sides, loss_gate_enabled):
+    """Global request policies may vary by candidate, never by side or coin."""
+    width = len(keys)
+    for key in GLOBAL_RISK_PARAM_KEYS:
+        column = keys.index(key)
+        values = params[:, column]
+        for side in range(1, sides):
+            if np.any(values != params[:, side * width + column]):
+                raise ValueError(f"GPU {key} must be account-global")
+        if key == "loss_gate_max_drawdown_fraction":
+            if np.any(~np.isfinite(values) | (values < 0.0) | (values >= 1.0)):
+                raise ValueError(f"GPU candidate {key} must be finite and in [0, 1)")
+            if not loss_gate_enabled and np.any(values != 0.0):
+                raise ValueError(f"GPU candidate {key} must be zero when the gate is disabled")
+        else:
+            for value in np.unique(values):
+                validate_memory_span(value)
 
 
 def _single_coin_exposure_params(
