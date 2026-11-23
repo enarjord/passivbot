@@ -108,13 +108,19 @@ def test_gpu_preflight_checks_only_evaluated_scenario_risk_policy():
     ]))
     config["optimize"]["backend"] = "gpu"
     config["bot"]["long"]["risk"]["unstuck"]["enabled"] = True
+    # Same unsupported vendor in both arms, so only the scenario override moves the
+    # outcome; an ignored override would surface as an unexpected raise here.
     _run_gpu_preparation_preflight(config, dict(enabled=True, scenarios=[
-        dict(label="supported", overrides={"bot.long.risk.unstuck.enabled": False}),
-    ]), target_vendor="amd")
+        dict(label="overridden", overrides={"bot.long.risk.unstuck.enabled": False}),
+    ]), target_vendor="intel")
     with pytest.raises(ValueError, match="does not support v9 unstuck exposure sizing.*CPU"):
         _run_gpu_preparation_preflight(config, dict(enabled=True, scenarios=[
-            dict(label="unsupported", overrides={}),
+            dict(label="unchanged", overrides={}),
         ]), target_vendor="intel")
+    # AMD admission is separate: the evaluated policy is active and still allowed.
+    _run_gpu_preparation_preflight(config, dict(enabled=True, scenarios=[
+        dict(label="amd", overrides={}),
+    ]), target_vendor="amd")
 
 
 def test_gpu_preflight_validates_active_policy_without_optional_device_imports(monkeypatch):
