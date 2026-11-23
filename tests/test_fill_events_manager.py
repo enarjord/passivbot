@@ -3076,6 +3076,9 @@ async def test_bitget_uta_fetcher_splits_long_lookback_into_30_day_windows(monke
         ],
         options={"uta": True},
     )
+    # UTA requests the oldest inclusive singleton first, followed by the
+    # two 30-day windows.
+    api._batches = [[], *reversed(api._batches)]
     resolver = lambda s: f"{s[:-4]}/USDT:USDT" if s and s.endswith("USDT") else s
     monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: value)
 
@@ -3095,7 +3098,7 @@ async def test_bitget_uta_fetcher_splits_long_lookback_into_30_day_windows(monke
 
     assert [event["id"] for event in events] == ["exec-old", "exec-new"]
     assert len(api.history_calls) == 3
-    assert api.history_calls[-1]["startTime"] == api.history_calls[-1]["endTime"] == 0
+    assert api.history_calls[0]["startTime"] == api.history_calls[0]["endTime"] == 0
     for call in api.history_calls:
         assert int(call["endTime"]) - int(call["startTime"]) < 30 * day_ms
 
@@ -6637,7 +6640,7 @@ async def test_manager_refresh_registers_gap_and_reraises_fetch_failure(
 async def test_bitget_pagination_cap_preserves_unproven_coverage(tmp_path, uta):
     day_ms = 24 * 60 * 60 * 1000
     start_ms = day_ms
-    end_ms = 13_000 * day_ms
+    end_ms = (80 if uta else 13_000) * day_ms
     timestamp = str(end_ms - 1)
     if uta:
         row = {
@@ -6663,11 +6666,12 @@ async def test_bitget_pagination_cap_preserves_unproven_coverage(tmp_path, uta):
             "price": "100",
             "profit": "0",
         }
-    api = _FakeBitgetAPI([[row]], options={"uta": uta})
+    pages = [[dict(row, execId=str(i), createdTime=str(start_ms))] for i in range(401)] if uta else [[row]]
+    api = _FakeBitgetAPI(pages, options={"uta": uta})
     manager = FillEventsManager(
         exchange="bitget",
         user="test",
-        fetcher=BitgetFetcher(api, symbol_resolver=lambda symbol: symbol),
+        fetcher=BitgetFetcher(api, symbol_resolver=lambda symbol: symbol, history_limit=1 if uta else 100, now_func=lambda: end_ms),
         cache_path=tmp_path,
     )
 

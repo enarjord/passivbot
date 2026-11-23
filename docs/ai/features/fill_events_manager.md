@@ -313,8 +313,11 @@ or stalled continuation leaves coverage unproven, including at the inclusive sta
 Previously cached Bitget executions remain available, while their old traversal claims and
 incremental checkpoints are cleared before a new lookback can be certified. A request without a
 start time can fetch recent events but its endpoint-default window cannot certify all history.
-Bitget UTA documents 90 days of retained fills. Use explicit request bounds and propagate venue
-range errors; an earlier cached execution alone cannot establish continuity.
+Bitget UTA verifies requests within 90 days of the acquisition observation. A cold 90-day
+bootstrap uses that same clock for its start and end. An earlier prefix requires a previously
+certified contiguous interval reaching the retained window. Routine refreshes bridge from its
+last proven timestamp, including after restart. A longer unverified gap blocks coverage even
+when the venue returns an empty list. Bounded repairs do not advance this checkpoint.
 [Classic fill history](https://www.bitget.com/docs/catalog/classic-contract-trade/classic-contract-trade#get-historical-transaction-details) · [UTA fill history](https://www.bitget.com/docs/catalog/trading/order-management#get-fill-history)
 
 Position replay requires a resolved long or short side. The OKX fill reader requires the venue's

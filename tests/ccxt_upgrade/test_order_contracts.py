@@ -746,6 +746,7 @@ def test_bitget_uta_fill_side_pside_uses_trade_side_when_pos_side_absent():
 async def test_bitget_fetch_fill_events_uta_uses_exec_id_and_trade_side():
     bot = BitgetBot.__new__(BitgetBot)
     bot.is_uta = True
+    bot.get_exchange_time = lambda: 2000
     bot.get_symbol_id_inv = lambda symbol: "BTC/USDT:USDT" if symbol == "BTCUSDT" else symbol
     calls = []
 
@@ -791,6 +792,7 @@ async def test_bitget_fetch_fill_events_uta_uses_exec_id_and_trade_side():
 async def test_bitget_fetch_fill_events_uta_rejects_malformed_rows():
     bot = BitgetBot.__new__(BitgetBot)
     bot.is_uta = True
+    bot.get_exchange_time = lambda: 2000
     bot.get_symbol_id_inv = lambda symbol: symbol
 
     async def private_uta_get_v3_trade_fills(params):
@@ -822,6 +824,7 @@ async def test_bitget_fetch_fill_events_uta_rejects_malformed_rows():
 async def test_bitget_fetch_closed_orders_routes_uta_to_v3_fills():
     bot = BitgetBot.__new__(BitgetBot)
     bot.is_uta = True
+    bot.get_exchange_time = lambda: 2000
     bot.get_symbol_id_inv = lambda symbol: "BTC/USDT:USDT" if symbol == "BTCUSDT" else symbol
     calls = []
 

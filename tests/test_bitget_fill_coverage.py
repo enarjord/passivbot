@@ -148,14 +148,15 @@ async def test_pagination_rejects_stalled_pages(uta, repeated):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("uta,window", [(False, 7 * DAY), (True, 30 * DAY)])
 async def test_empty_window_still_checks_singleton_at_inclusive_start(uta, window):
-    fetcher, calls = make_fetcher(uta, [page(uta, []), page(uta, [fill(uta, 1)])])
+    pages = [page(uta, []), page(uta, [fill(uta, 1)])]
+    fetcher, calls = make_fetcher(uta, list(reversed(pages)) if uta else pages)
     assert [event["id"] for event in await fetcher.fetch(1000, 1000 + window, {})] == [
         "1"
     ]
-    assert [(c["startTime"], c["endTime"]) for c in calls] == [
-        (1001, 1000 + window),
-        (1000, 1000),
-    ]
+    expected = [(1001, 1000 + window), (1000, 1000)]
+    assert [(c["startTime"], c["endTime"]) for c in calls] == (
+        list(reversed(expected)) if uta else expected
+    )
 
 
 @pytest.mark.asyncio
@@ -252,3 +253,99 @@ async def test_classic_end_id_must_move_backwards():
     )
     with pytest.raises(AuthoritativeSurfaceUnavailable, match="older ID"):
         await fetcher.fetch(500, 1000, {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("uta", [False, True])
+@pytest.mark.parametrize("cursor", ["next", False, {}, " "])
+async def test_empty_with_continuation_cannot_finish_traversal(uta, cursor):
+    fetcher, _ = make_fetcher(uta, [page(uta, [], cursor)])
+    with pytest.raises(AuthoritativeSurfaceUnavailable, match="empty fill page"):
+        await fetcher.fetch(100, 1000, {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("end", [None, 85 * DAY])
+async def test_expired_uta_prefix_fails_before_empty_pages_can_certify_it(
+    tmp_path, end
+):
+    now = 200 * DAY
+    fetcher, calls = make_fetcher(True, [page(True, [])] * 5, now=now)
+    manager = FillEventsManager(
+        exchange="bitget", user="fixture", fetcher=fetcher, cache_path=tmp_path
+    )
+    with pytest.raises(AuthoritativeSurfaceUnavailable, match="90-day retention"):
+        await manager.refresh_for_lookback(80 * DAY, end_ms=end)
+    assert not calls
+    assert not manager.get_coverage_status(start_ms=80 * DAY)["ready"]
+    assert manager.cache.load_metadata()["last_refresh_ms"] == 0
+
+
+@pytest.mark.asyncio
+async def test_uta_cold_starter_then_restart_bridges_certified_prefix(tmp_path):
+    now = 200 * DAY
+    start = now - 90 * DAY
+    fetcher, calls = make_fetcher(True, [page(True, [])] * 4, now=now + 17)
+    manager = FillEventsManager(
+        exchange="bitget", user="fixture", fetcher=fetcher, cache_path=tmp_path
+    )
+    from passivbot import Passivbot
+    from test_realized_loss_gate import _set_memory_horizon
+
+    bot = object.__new__(Passivbot)
+    bot.exchange = "bitget"
+    bot.is_uta = True
+    bot._pnls_manager = manager
+    _set_memory_horizon(bot, minutes=90 * 1440, now_ms=now)
+    assert bot._realized_memory_start_ms(now - 25) == start - 25
+    assert getattr(bot, "_realized_memory_origin_ms", None) is None
+    await manager.refresh_for_lookback(start, observed_at_ms=now)
+    assert bot._realized_memory_start_ms(now) == start
+    assert bot._realized_memory_start_ms(now + DAY) == start
+    assert calls[0]["startTime"] == calls[0]["endTime"] == start
+    assert max(call["endTime"] for call in calls) == now
+    assert manager.cache.load_metadata()["covered_through_ms"] == now
+    fetcher, calls = make_fetcher(
+        True, [page(True, [fill(True, "late", now + 1)])], now=now + DAY
+    )
+    restarted = FillEventsManager(
+        exchange="bitget", user="fixture", fetcher=fetcher, cache_path=tmp_path
+    )
+    await restarted.refresh_for_lookback(start)
+    assert calls == [
+        {"category": "USDT-FUTURES", "limit": 2, "startTime": now, "endTime": now + DAY}
+    ]
+    assert [event.id for event in restarted.get_events()] == ["late"]
+    assert restarted.cache.get_covered_start_ms() == start
+    assert restarted.cache.load_metadata()["covered_through_ms"] == now + DAY
+
+
+@pytest.mark.asyncio
+async def test_uta_retention_gap_cannot_be_bridged_by_unrelated_recent_refresh(
+    tmp_path,
+):
+    old = 200 * DAY
+    now = old + 100 * DAY
+    start = old - DAY
+    fetcher, _ = make_fetcher(True, [page(True, [])], now=old)
+    manager = FillEventsManager(
+        exchange="bitget", user="fixture", fetcher=fetcher, cache_path=tmp_path
+    )
+    await manager.refresh_for_lookback(start)
+    fetcher, calls = make_fetcher(True, [page(True, [])] * 4, now=now)
+    restarted = FillEventsManager(
+        exchange="bitget", user="fixture", fetcher=fetcher, cache_path=tmp_path
+    )
+    await restarted.ensure_loaded()
+    assert (
+        restarted.get_coverage_status(start_ms=start)["reason"] == "uta_retention_gap"
+    )
+    assert restarted.get_coverage_status(start_ms=start, end_ms=old)["ready"]
+    await restarted.refresh(start_ms=now - 1000, end_ms=now)
+    assert restarted.cache.load_metadata()["covered_through_ms"] == old
+    with pytest.raises(AuthoritativeSurfaceUnavailable, match="90-day retention"):
+        await restarted.refresh_for_lookback(start)
+    assert len(calls) == 1
+    await restarted.refresh_for_lookback(now - DAY)
+    assert restarted.cache.get_covered_start_ms() == now - DAY
+    assert not restarted.get_coverage_status(start_ms=start)["ready"]

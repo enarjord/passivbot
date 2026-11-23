@@ -42,6 +42,7 @@ from candlestick_manager import (
     OhlcvTerminalEmptyPage,
     fetch_candles_with_resolution_ladder,
 )
+from bitget_fill_history import BITGET_UTA_RETENTION_MS
 from fill_events_manager import (
     FillEventCacheContractError,
     FillEventsManager,
@@ -1941,14 +1942,25 @@ class Passivbot:
         declares a new approximate bounded origin.
         """
         minutes, _ = risk_bootstrap_horizon_minutes(self.config)
-        requested = max(0, int(now_ms) - int(math.floor(minutes * 60_000 + 0.5)))
+        horizon_ms = int(math.floor(minutes * 60_000 + 0.5))
+        requested = max(0, int(now_ms) - horizon_ms)
         origin = getattr(self, "_realized_memory_origin_ms", None)
-        origin = requested if origin is None else origin
-        self._realized_memory_origin_ms = origin
-        return origin
+        if origin is not None:
+            return origin
+        if (
+            getattr(self, "exchange", None) == "bitget"
+            and horizon_ms == BITGET_UTA_RETENTION_MS
+            and (getattr(self, "is_uta", False) or not getattr(self, "_account_mode_detected", True))
+            and not self._fill_history_coverage_status(start_ms=requested, end_ms=now_ms)["ready"]
+        ):
+            # A readiness probe before first acquisition must not fix the
+            # 90-day origin just outside the range UTA can still return.
+            return requested
+        self._realized_memory_origin_ms = requested
+        return requested
 
-    def _pnl_history_acquisition_lookback(self):
-        now_ms = int(self.get_exchange_time())
+    def _pnl_history_acquisition_lookback(self, now_ms=None):
+        now_ms = int(self.get_exchange_time() if now_ms is None else now_ms)
         starts = []
         if self._live_risk_uses_authoritative_pnl():
             starts.append(self._strict_pnl_history_start_ms(now_ms))
@@ -2002,8 +2014,8 @@ class Passivbot:
 
     def _fill_history_coverage_ready(self) -> bool:
         try:
-            lookback = self._pnl_history_acquisition_lookback()
             now_ms = self.get_exchange_time()
+            lookback = self._pnl_history_acquisition_lookback(now_ms)
             pnl_start_ms = lookback.fill_cache_age_limit_ms(now_ms)
             coverage_required, start_ms = self._required_fill_history_start_ms(
                 now_ms, pnl_start_ms=pnl_start_ms
@@ -11462,8 +11474,9 @@ class Passivbot:
                 )
 
             async def rebuild_fill_cache_from_lookback() -> None:
-                lookback = self._pnl_history_acquisition_lookback()
-                age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
+                observed_at_ms = int(self.get_exchange_time())
+                lookback = self._pnl_history_acquisition_lookback(observed_at_ms)
+                age_limit = lookback.fill_cache_age_limit_ms(observed_at_ms)
                 start_ms = None if age_limit is None else int(age_limit)
                 history_scope = "all" if lookback.is_all else "window"
                 logging.warning(
@@ -11478,7 +11491,12 @@ class Passivbot:
                     end_ms=None,
                     history_scope=history_scope,
                 )
-                await self._pnls_manager.refresh(start_ms=start_ms, end_ms=None)
+                observation = (
+                    {"observed_at_ms": observed_at_ms}
+                    if getattr(self._pnls_manager, "bitget_uta_history", False) is True
+                    else {}
+                )
+                await self._pnls_manager.refresh(start_ms=start_ms, end_ms=None, **observation)
                 cache = getattr(self._pnls_manager, "cache", None)
                 mark_covered_start = getattr(cache, "mark_covered_start", None)
                 if start_ms is not None and callable(mark_covered_start):
@@ -12084,9 +12102,9 @@ class Passivbot:
 
         try:
             # Acquisition/coverage is separate from exponential risk memory.
-            lookback = self._pnl_history_acquisition_lookback()
-            lookback_config_value = lookback.display_value
             exchange_time_ms = self.get_exchange_time()
+            lookback = self._pnl_history_acquisition_lookback(exchange_time_ms)
+            lookback_config_value = lookback.display_value
             pnl_age_limit = lookback.fill_cache_age_limit_ms(exchange_time_ms)
             pnl_required, required_pnl_start_ms = self._required_pnl_history_start_ms(
                 exchange_time_ms,
@@ -12308,9 +12326,14 @@ class Passivbot:
                     self._pnls_manager, "refresh_for_lookback", None
                 )
                 if age_limit is not None and callable(refresh_for_lookback):
+                    observation = (
+                        {"observed_at_ms": exchange_time_ms}
+                        if getattr(self._pnls_manager, "bitget_uta_history", False) is True
+                        else {}
+                    )
                     fill_fetch_completed = bool(
                         await refresh_evidence(
-                            refresh_for_lookback, start_ms=int(age_limit)
+                            refresh_for_lookback, start_ms=int(age_limit), **observation
                         )
                     )
                 else:
@@ -12473,6 +12496,13 @@ class Passivbot:
             # structurally corrected fills awaiting account confirmation.
             if fill_fetch_completed and not account_confirmation_requested:
                 self._hsl_fill_tail_observation = hsl_fill_observation
+            if (
+                fill_fetch_completed
+                and getattr(self._pnls_manager, "bitget_uta_history", False) is True
+                and self._orchestrator_uses_realized_pnl()
+            ):
+                # Pin a newly proven boundary at the same observation used for acquisition.
+                self._realized_memory_start_ms(exchange_time_ms)
             post_now_ms = self.get_exchange_time()
             post_pnl_required, post_pnl_start_ms = self._required_pnl_history_start_ms(
                 post_now_ms,

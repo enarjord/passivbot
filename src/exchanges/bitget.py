@@ -518,9 +518,11 @@ class BitgetBot(CCXTBot):
                             event.get("pb_order_type"),
                         )
 
+        observed_at_ms = int(self.get_exchange_time())
         async for rows in bitget_fill_pages(
             self.cca, uta=False, product_type="USDT-FUTURES", since_ms=start_time,
-            until_ms=int(utc_ms() if end_time is None else end_time), limit=limit, max_fetches=200,
+            until_ms=observed_at_ms if end_time is None else int(end_time), observed_at_ms=observed_at_ms,
+            limit=limit, max_fetches=200,
         ):
             await _enrich_events([_extract_fill(row) for row in rows])
         return sorted(events_map.values(), key=lambda event: event["timestamp"])
@@ -538,9 +540,11 @@ class BitgetBot(CCXTBot):
 
         limit = 100 if limit is None else min(limit, 100)
         events_map: Dict[str, dict] = {}
+        observed_at_ms = int(self.get_exchange_time())
         async for rows in bitget_fill_pages(
             self.cca, uta=True, product_type="USDT-FUTURES", since_ms=start_time,
-            until_ms=int(utc_ms() if end_time is None else end_time), limit=limit, max_fetches=200,
+            until_ms=observed_at_ms if end_time is None else int(end_time), observed_at_ms=observed_at_ms,
+            limit=limit, max_fetches=200,
         ):
             for row in rows:
                 event = _extract(row)

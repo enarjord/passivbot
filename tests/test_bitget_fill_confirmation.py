@@ -89,7 +89,7 @@ class BitgetFixtureAPI:
 
 def make_manager(tmp_path, mode, pside, include_external=True):
     api = BitgetFixtureAPI(mode, pside, include_external)
-    fetcher = BitgetFetcher(api, symbol_resolver=lambda value: SYMBOL)
+    fetcher = BitgetFetcher(api, symbol_resolver=lambda value: SYMBOL, now_func=lambda: T0 + 300_000)
     manager = FillEventsManager(
         exchange="bitget",
         user="offline_fixture",

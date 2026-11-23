@@ -36,7 +36,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Ty
 
 import passivbot_rust as pbr
 from ccxt.base.errors import OrderNotFound, RateLimitExceeded
-from bitget_fill_history import bitget_fill_pages
+from bitget_fill_history import BITGET_UTA_RETENTION_MS, bitget_fill_pages
 from bitget_normalization import (
     deduce_side_pside,
     deduce_uta_side_pside as _deduce_uta_side_pside,
@@ -2168,6 +2168,7 @@ class CacheMetadata(TypedDict, total=False):
     oldest_event_ts: int  # Oldest event timestamp in cache
     newest_event_ts: int  # Newest event timestamp in cache
     covered_start_ms: int  # Earliest open-ended lookback start confirmed against exchange
+    covered_through_ms: int  # Last exchange observation contiguous with the UTA covered start
     known_gaps: List[KnownGap]  # List of known gaps
     history_scope: str  # unknown, window, all
     coverage_contract: str  # exchange-specific traversal that certified the window
@@ -2175,6 +2176,7 @@ class CacheMetadata(TypedDict, total=False):
 
 
 BITGET_FILL_COVERAGE_CONTRACT = "bitget_fill_cursor_v1"
+BITGET_UTA_COVERAGE_CONTRACT = "bitget_uta_fill_cursor_v1"
 
 
 class FillEventCache:
@@ -2452,7 +2454,7 @@ class FillEventCache:
                 # Historical pagination did not prove every fill at page boundaries.
                 # Keep factual rows and retryable gaps. The normal lookback owner
                 # must rebuild the certificate before it may admit dependent actions.
-                data.update(covered_start_ms=0, history_scope="unknown", last_refresh_ms=0,
+                data.update(covered_start_ms=0, covered_through_ms=0, history_scope="unknown", last_refresh_ms=0,
                             coverage_contract=self._coverage_contract)
             # Ensure all keys exist
             for key in default:
@@ -2549,6 +2551,11 @@ class FillEventCache:
         metadata = self.load_metadata()
         start_ts = int(start_ts)
         current = _cache_metadata_timestamp(metadata, "covered_start_ms")
+        if self._coverage_contract == BITGET_UTA_COVERAGE_CONTRACT:
+            through = _cache_metadata_timestamp(metadata, "covered_through_ms")
+            if not 0 < current <= start_ts <= through:
+                raise AuthoritativeSurfaceUnavailable("fills", "Bitget UTA lookback is unproven")
+            return
         if current == 0 or start_ts < current:
             metadata["covered_start_ms"] = start_ts
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
@@ -2932,19 +2939,30 @@ class BitgetFetcher(BaseFetcher):
             raise ValueError("BitgetFetcher requires a symbol_resolver callable")
         self._symbol_resolver = symbol_resolver
 
+    @property
+    def is_uta(self) -> bool:
+        return bool(getattr(self.api, "options", {}).get("uta"))
+
+    def observation_ms(self) -> int:
+        return int(self._now_func())
+
     async def fetch(
         self,
         since_ms: Optional[int],
         until_ms: Optional[int],
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+        *,
+        observed_at_ms: Optional[int] = None,
     ) -> List[Dict[str, object]]:
-        uta = bool(getattr(self.api, "options", {}).get("uta"))
+        uta = self.is_uta
+        observed_at_ms = self.observation_ms() if observed_at_ms is None else observed_at_ms
         normalize = self._normalize_fill_uta if uta else self._normalize_fill
         events = {}
         async for rows in bitget_fill_pages(
             self.api, uta=uta, product_type=self.product_type, since_ms=since_ms,
-            until_ms=int(until_ms) if until_ms is not None else self._now_func(),
+            until_ms=int(until_ms) if until_ms is not None else observed_at_ms,
+            observed_at_ms=observed_at_ms,
             limit=self.history_limit, max_fetches=400,
         ):
             batch = [normalize(row) for row in rows]
@@ -3845,9 +3863,11 @@ class FillEventsManager:
         self.exchange = exchange
         self.user = user
         self.fetcher = fetcher
-        self.cache = FillEventCache(
-            cache_path, coverage_contract=BITGET_FILL_COVERAGE_CONTRACT if exchange.lower() == "bitget" else None
-        )
+        self.bitget_uta_history = isinstance(fetcher, BitgetFetcher) and fetcher.is_uta
+        coverage_contract = None
+        if exchange.lower() == "bitget":
+            coverage_contract = BITGET_UTA_COVERAGE_CONTRACT if self.bitget_uta_history else BITGET_FILL_COVERAGE_CONTRACT
+        self.cache = FillEventCache(cache_path, coverage_contract=coverage_contract)
         self.fallback_fee_fraction = float(fallback_fee_fraction)
         self.max_abs_fee_fraction = float(max_abs_fee_fraction)
         self.fee_conversion_max_age_ms = int(fee_conversion_max_age_ms)
@@ -5198,6 +5218,7 @@ class FillEventsManager:
         start_ms: Optional[int] = None,
         end_ms: Optional[int] = None,
         mark_refreshed: bool = True,
+        observed_at_ms: Optional[int] = None,
         degraded_pnl_aux_range: Optional[Tuple[int, int]] = None,
     ) -> FillRefreshWork:
         async with self._refresh_lock:
@@ -5205,6 +5226,7 @@ class FillEventsManager:
                 start_ms=start_ms,
                 end_ms=end_ms,
                 mark_refreshed=mark_refreshed,
+                observed_at_ms=observed_at_ms,
                 degraded_pnl_aux_range=degraded_pnl_aux_range,
             )
 
@@ -5214,9 +5236,29 @@ class FillEventsManager:
         start_ms: Optional[int] = None,
         end_ms: Optional[int] = None,
         mark_refreshed: bool = True,
+        observed_at_ms: Optional[int] = None,
         degraded_pnl_aux_range: Optional[Tuple[int, int]] = None,
     ) -> FillRefreshWork:
         await self.ensure_loaded()
+        uta_observation = None
+        uta_start = start_ms
+        uta_prefix = None
+        if self.bitget_uta_history:
+            uta_observation = self.fetcher.observation_ms() if observed_at_ms is None else int(observed_at_ms)
+            if end_ms is None:
+                metadata = self.cache.load_metadata()
+                covered = self.cache.get_covered_start_ms()
+                through = _cache_metadata_timestamp(metadata, "covered_through_ms")
+                floor = uta_observation - BITGET_UTA_RETENTION_MS
+                # Bridge downtime even when recent executions or a separate request
+                # have advanced the ordinary overlap checkpoint beyond the proof.
+                if covered > 0 and self.get_coverage_status(start_ms=covered, end_ms=through)["ready"]:
+                    uta_prefix = (covered, through)
+                    if through >= floor - 1 and (start_ms is None or start_ms >= covered):
+                        if start_ms is None or start_ms < floor:
+                            uta_start = max(floor, through)
+                        else:
+                            uta_start = min(start_ms, max(floor, through + 1))
         proof, self._empty_refresh_proof = self._empty_refresh_proof, None
         logger.debug(
             "[fills] refresh: start=%s end=%s current_cache=%d",
@@ -5400,7 +5442,7 @@ class FillEventsManager:
                 timestamp = int(raw.get("timestamp") or 0)
             except (TypeError, ValueError):
                 return True
-            if start_ms is not None and timestamp < start_ms:
+            if uta_start is not None and timestamp < uta_start:
                 return False
             if end_ms is not None and timestamp > end_ms:
                 return False
@@ -5424,6 +5466,11 @@ class FillEventsManager:
                     int(degraded_pnl_aux_range[1]),
                     detail_cache,
                     on_batch=collect_batch,
+                )
+            elif uta_observation is not None:
+                fetched_events = await self.fetcher.fetch(
+                    uta_start, end_ms, detail_cache, on_batch=collect_batch,
+                    observed_at_ms=uta_observation,
                 )
             else:
                 fetched_events = await self.fetcher.fetch(
@@ -5538,6 +5585,15 @@ class FillEventsManager:
                 # are stale. Keeping them would leave coverage permanently blocked
                 # by a cache_metadata_event_mismatch verdict.
                 self.cache.mark_refreshed(reset_event_bounds=True)
+            if uta_observation is not None and end_ms is None and uta_start is not None:
+                cached = self.cache.load_metadata()
+                if uta_prefix is not None:
+                    covered, through = uta_prefix
+                    if uta_start <= through + 1 and covered <= uta_observation + 1:
+                        uta_start = min(uta_start, covered)
+                        uta_observation = max(uta_observation, through)
+                cached.update(covered_start_ms=uta_start, covered_through_ms=uta_observation)
+                self.cache.save_metadata(cached)
             if fetched_bounded_range:
                 # A successful bounded fetch proves the retried range even when the
                 # exchange returns no new fills or only duplicates.
@@ -5847,6 +5903,7 @@ class FillEventsManager:
         *,
         end_ms: Optional[int] = None,
         overlap: int = 20,
+        observed_at_ms: Optional[int] = None,
     ) -> bool:
         """Prove a requested fill lookback through exchange traversal.
 
@@ -5868,7 +5925,9 @@ class FillEventsManager:
             )
             return True
 
-        coverage_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        if self.bitget_uta_history:
+            observed_at_ms = self.fetcher.observation_ms() if observed_at_ms is None else observed_at_ms
+        coverage_end_ms = observed_at_ms if observed_at_ms is not None else int(datetime.now(tz=timezone.utc).timestamp() * 1000)
         latest_refreshed = False
 
         blocking_gaps = self._blocking_known_gaps(
@@ -5958,7 +6017,10 @@ class FillEventsManager:
             "[fills] lookback coverage unproven from %s; traversing the full requested window",
             _format_ms(start_ms),
         )
-        await self.refresh(start_ms=start_ms, end_ms=None)
+        if self.bitget_uta_history:
+            await self.refresh(start_ms=start_ms, observed_at_ms=observed_at_ms)
+        else:
+            await self.refresh(start_ms=start_ms, end_ms=None)
 
         self.cache.mark_covered_start(start_ms)
         return True
@@ -6027,6 +6089,7 @@ class FillEventsManager:
             covered_start_ms = _cache_metadata_timestamp(metadata, "covered_start_ms")
             metadata_oldest = _cache_metadata_timestamp(metadata, "oldest_event_ts")
             metadata_newest = _cache_metadata_timestamp(metadata, "newest_event_ts")
+            through = _cache_metadata_timestamp(metadata, "covered_through_ms") if getattr(self, "bitget_uta_history", False) is True else None
         except FillEventCacheContractError:
             # These bounds are cache evidence, not caller configuration. An
             # unusable bound cannot prove coverage; zeroes below are diagnostic
@@ -6086,6 +6149,11 @@ class FillEventsManager:
             status["reason"] = "full_history_scope_not_proven"
             return status
 
+        if through is not None and covered_start_ms > 0:
+            horizon_end = self.fetcher.observation_ms() if end_ms is None else int(end_ms)
+            if through < covered_start_ms or through + 1 < horizon_end - BITGET_UTA_RETENTION_MS:
+                status["reason"] = "uta_retention_gap"
+                return status
         if covered_start_ms > 0 and covered_start_ms <= int(start_ms):
             status.update({"ready": True, "reason": "window_covered"})
             return status
@@ -8963,6 +9031,7 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
     if exchange == "bitget":
         return BitgetFetcher(
             api=bot.cca,
+            now_func=getattr(bot, "get_exchange_time", None),
             symbol_resolver=lambda value: resolver(value),
         )
     if exchange == "bitunix":

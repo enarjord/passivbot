@@ -5,6 +5,9 @@ from collections.abc import AsyncIterator
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 
 
+BITGET_UTA_RETENTION_MS = 90 * 86_400_000
+
+
 async def bitget_fill_pages(
     api,
     *,
@@ -12,12 +15,18 @@ async def bitget_fill_pages(
     product_type: str,
     since_ms: int | None,
     until_ms: int,
+    observed_at_ms: int,
     limit: int,
     max_fetches: int,
 ) -> AsyncIterator[list[dict]]:
     if not 1 <= limit <= 100:
         raise ValueError("Bitget fill-history limit must be in [1, 100]")
     if uta:
+        oldest_requested = until_ms if since_ms is None else since_ms
+        if oldest_requested < observed_at_ms - BITGET_UTA_RETENTION_MS:
+            raise AuthoritativeSurfaceUnavailable(
+                "fills", "Bitget UTA cannot verify fills outside its 90-day retention"
+            )
         fetch = api.private_uta_get_v3_trade_fills
         params = {"category": product_type, "limit": limit}
         rows_key, id_key, cursor_key, request_cursor = (
@@ -41,9 +50,14 @@ async def bitget_fill_pages(
     if since_ms is not None and since_ms > until_ms:
         raise ValueError("Bitget fill-history start exceeds end")
     timestamp_key = "createdTime" if uta else "cTime"
-    end = int(until_ms)
+    if since_ms is None:
+        window_ends = (until_ms,)
+    else:
+        newest_first = range(until_ms, since_ms - 1, -window_ms)
+        # Read UTA's oldest window first, before later pages consume retention.
+        window_ends = reversed(newest_first) if uta else newest_first
     fetch_count = 0
-    while True:
+    for end in window_ends:
         window = {**params, "endTime": end}
         if since_ms is not None:
             window["startTime"] = max(since_ms, end - window_ms + 1)
@@ -94,9 +108,14 @@ async def bitget_fill_pages(
                 raise AuthoritativeSurfaceUnavailable(
                     "fills", "Bitget fill-history page exceeds requested limit"
                 )
-            if not rows:
-                break
             cursor = data.get(cursor_key)
+            if not rows:
+                if cursor not in (None, ""):
+                    raise AuthoritativeSurfaceUnavailable(
+                        "fills",
+                        f"Bitget empty fill page has a continuation {cursor_key}",
+                    )
+                break
             if len(rows) < limit and cursor in (None, ""):
                 yield rows
                 break
@@ -124,6 +143,3 @@ async def bitget_fill_pages(
             seen_ids.update(page_ids)
             yield rows
             window[request_cursor] = cursor
-        if since_ms is None or window["startTime"] == since_ms:
-            return
-        end = window["startTime"] - 1
