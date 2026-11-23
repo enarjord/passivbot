@@ -662,9 +662,11 @@ retain conservative full-scan behavior instead of assuming identity/length prove
 unchanged content. The persisted JSON schema is unchanged.
 
 Recent-range checks and projection signatures select overlapping records before
-normalizing metadata. Legacy defaults are evaluated at read time, returned enhanced
-records remain detached, and retry eligibility is always computed from current
-clocks. Unknown-gap coverage retains full missing interval widths and excludes
+normalizing metadata. Owned records with a complete canonical scalar shape can
+reuse that validation while the metadata revision still matches. Legacy defaults
+are evaluated at read time, returned enhanced records remain detached, and retry
+eligibility is always computed from current clocks. Unknown-gap coverage retains
+full missing interval widths and excludes
 synthetic candles when determining real coverage. A window without unknown gaps
 skips copying/sorting the retained candle history. This optimization neither
 deletes stale historical gaps nor changes fetch, synthesis, retry or trading policy.
