@@ -5672,6 +5672,15 @@ class FillEventsManager:
                     start_ms = timestamp
                     if cohort_count >= overlap:
                         break
+            elif self.bitget_uta_history:
+                # Retained executions outside the certified suffix do not
+                # widen an incidental overlap. With no eligible row the
+                # contiguous through timestamp still bridges downtime.
+                covered = self.cache.get_covered_start_ms()
+                start_ms = next(
+                    (event.timestamp for event in self._events[-overlap:] if event.timestamp >= covered),
+                    None,
+                )
             else:
                 idx = max(0, len(self._events) - overlap)
                 start_ms = self._events[idx].timestamp
@@ -5680,6 +5689,8 @@ class FillEventsManager:
             last_refresh_ms = _cache_metadata_timestamp(metadata, "last_refresh_ms")
             if last_refresh_ms > 0:
                 metadata_start_ms = max(0, last_refresh_ms - int(last_refresh_overlap_ms))
+                if self.bitget_uta_history:
+                    metadata_start_ms = max(metadata_start_ms, self.cache.get_covered_start_ms())
                 if start_ms is None:
                     start_ms = metadata_start_ms
                 elif is_hyperliquid:

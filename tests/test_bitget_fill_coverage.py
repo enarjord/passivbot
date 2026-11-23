@@ -349,3 +349,35 @@ async def test_uta_retention_gap_cannot_be_bridged_by_unrelated_recent_refresh(
     await restarted.refresh_for_lookback(now - DAY)
     assert restarted.cache.get_covered_start_ms() == now - DAY
     assert not restarted.get_coverage_status(start_ms=start)["ready"]
+
+
+@pytest.mark.asyncio
+async def test_uta_incremental_overlap_ignores_retained_execution_before_certified_window(
+    tmp_path,
+):
+    old = 100 * DAY
+    fetcher, _ = make_fetcher(True, [page(True, [fill(True, "old", old)])], now=old)
+    manager = FillEventsManager(
+        exchange="bitget", user="fixture", fetcher=fetcher, cache_path=tmp_path
+    )
+    await manager.refresh_for_lookback(old)
+
+    now = 300 * DAY
+    start = now - 90 * DAY
+    fetcher, calls = make_fetcher(True, [page(True, [])] * 10, now=now)
+    restarted = FillEventsManager(
+        exchange="bitget", user="fixture", fetcher=fetcher, cache_path=tmp_path
+    )
+    await restarted.refresh_for_lookback(start)
+    assert [event.id for event in restarted.get_events()] == ["old"]
+    assert restarted.cache.get_covered_start_ms() == start
+    calls.clear()
+    await restarted.refresh_for_lookback(start)
+    assert calls
+    assert [(c["startTime"], c["endTime"]) for c in calls] == [(now, now)]
+    calls.clear()
+    restarted.cache.load_metadata()["last_refresh_ms"] = now
+    await restarted.refresh_latest(last_refresh_overlap_ms=200 * DAY)
+    assert min(c["startTime"] for c in calls) == start
+    with pytest.raises(AuthoritativeSurfaceUnavailable, match="90-day retention"):
+        await restarted.refresh_for_lookback(old)
