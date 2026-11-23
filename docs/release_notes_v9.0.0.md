@@ -69,6 +69,9 @@ orders, and protection readiness during rollback.
 
 ## GPU optimization
 
-CUDA and Metal are opt-in experimental backends. Device precision can affect scores and feasibility
-near boundaries. Run the [GPU/CPU parity tool](gpu_parity.md) on representative setups and evaluate
-candidates selected for use with the Rust CPU backtest.
+GPU optimization is opt-in and experimental. EMA Anchor and Trailing Martingale support
+exposure-targeted unstuck and the portfolio loss gate on Apple Metal, NVIDIA CUDA and AMD
+ROCm. The [ROCm qualification](rocm_close_sizing_validation.md) covers close-sizing fixtures
+on gfx1030. Device precision can change scores and feasibility near boundaries. Run the
+[GPU/CPU parity tool](gpu_parity.md) on representative setups and verify finalists with the
+Rust CPU backtest.

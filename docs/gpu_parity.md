@@ -12,8 +12,8 @@ effects, use the standalone [GPU cohort benchmark](gpu_cohort_benchmark.md).
 
 Native GPU replay uses F32 arithmetic and the declared metric approximations. A
 passing comparison covers only the selected inputs, metrics and policies; it does
-not certify all configurations. V9 uses the shared-account native service on Metal
-and CUDA, including one-coin inputs. Normal GPU optimization consumes native metrics
+not certify all configurations. V9 uses the shared-account native service on Apple Metal,
+NVIDIA CUDA and AMD ROCm, including one-coin inputs. Normal GPU optimization consumes native metrics
 directly and does not call this comparator. The [v9 risk model](v9_risk_model.md)
 defines the current authored arithmetic and causal event contract.
 
@@ -84,7 +84,7 @@ unassessed; evaluate current event and numerical differences case by case,
 without inferring acceptance from execution completing.
 
 The default `--gpu-engine native` uses `NativeBacktestService`, the same shared-account
-route used by GPU optimization on supported Metal or CUDA devices. Explicit
+route used by GPU optimization on supported Metal, CUDA or ROCm devices. Explicit
 `--gpu-engine legacy` is rejected for v9. The report identifies the selected engine
 and replay family; the comparator does not alter metric tolerances.
 
