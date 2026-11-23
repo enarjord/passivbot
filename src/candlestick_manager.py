@@ -314,11 +314,36 @@ class GapEntry(TypedDict, total=False):
 class _GapMetadataDict(dict):
     """Owned JSON record whose mutations invalidate the containing range view."""
 
-    __slots__ = ("_revision",)
+    __slots__ = ("_revision", "_canonical_revision", "_canonical")
 
     def __init__(self, values, revision):
         self._revision = revision
+        self._canonical_revision = None
+        self._canonical = False
         super().__init__((key, _track_gap_value(value, revision)) for key, value in values.items())
+
+    def is_canonical(self) -> bool:
+        """Validate whether a shallow copy is already a detached GapEntry."""
+        revision, owned = self._revision
+        if not owned:
+            return False
+        if self._canonical_revision != revision:
+            # Require every field explicitly. Legacy defaults can depend on
+            # the read's clock, and mutable values need fresh conversion.
+            self._canonical = (
+                len(self) == 7
+                and all(type(key) is str for key in self)
+                and type(self.get("start_ts")) is int
+                and type(self.get("end_ts")) is int
+                and type(self.get("retry_count")) is int
+                and type(self.get("reason")) is str
+                and type(self.get("added_at")) is int
+                and type(self.get("last_retry_at")) is int
+                and type(self.get("last_contextual_retry_at")) is int
+                and self["start_ts"] <= self["end_ts"]
+            )
+            self._canonical_revision = revision
+        return self._canonical
 
     def __setitem__(self, key, value):
         self._revision[0] += 1
@@ -3800,7 +3825,9 @@ class CandlestickManager:
         for it in gaps:
             try:
                 # Support both old format [[start, end], ...] and new format [GapEntry, ...]
-                if isinstance(it, dict):
+                if type(it) is _GapMetadataDict and it.is_canonical():
+                    out.append(it.copy())
+                elif isinstance(it, dict):
                     # New enhanced format
                     entry: GapEntry = {
                         "start_ts": int(it.get("start_ts", 0)),
@@ -4722,24 +4749,21 @@ class CandlestickManager:
         }
 
     def _summarize_known_gap_counts(self, gaps: List[GapEntry]) -> Dict[str, Any]:
-        total_minutes = sum((g["end_ts"] - g["start_ts"]) // ONE_MIN_MS + 1 for g in gaps)
-        persistent = sum(
-            1
-            for g in gaps
-            if g.get("retry_count", 0) >= _GAP_MAX_RETRIES and not self._should_retry_gap(g)
-        )
-        retryable = len(gaps) - persistent
-
+        total_minutes = 0
+        persistent = 0
         by_reason: Dict[str, int] = {}
-        for g in gaps:
-            reason = g.get("reason", GAP_REASON_AUTO)
+        for gap in gaps:
+            total_minutes += (gap["end_ts"] - gap["start_ts"]) // ONE_MIN_MS + 1
+            if gap.get("retry_count", 0) >= _GAP_MAX_RETRIES and not self._should_retry_gap(gap):
+                persistent += 1
+            reason = gap.get("reason", GAP_REASON_AUTO)
             by_reason[reason] = by_reason.get(reason, 0) + 1
 
         return {
             "total_gaps": len(gaps),
             "total_minutes": total_minutes,
             "persistent_gaps": persistent,
-            "retryable_gaps": retryable,
+            "retryable_gaps": len(gaps) - persistent,
             "by_reason": by_reason,
         }
 
@@ -4757,10 +4781,13 @@ class CandlestickManager:
         # head gap
         if ts[0] > start_ts:
             spans.append((start_ts, int(ts[0] - ONE_MIN_MS)))
-        # middle gaps
-        for i in range(len(ts) - 1):
-            if ts[i + 1] - ts[i] > ONE_MIN_MS:
-                spans.append((int(ts[i] + ONE_MIN_MS), int(ts[i + 1] - ONE_MIN_MS)))
+        # Find only discontinuities; dense candle ranges need no Python row loop.
+        if ts.size > 1:
+            gap_indices = (ts[1:] - ts[:-1] > ONE_MIN_MS).nonzero()[0]
+            if gap_indices.size:
+                starts = (ts[gap_indices] + ONE_MIN_MS).tolist()
+                ends = (ts[gap_indices + 1] - ONE_MIN_MS).tolist()
+                spans.extend(zip(starts, ends))
         # tail gap
         if ts[-1] < end_ts:
             spans.append((int(ts[-1] + ONE_MIN_MS), end_ts))

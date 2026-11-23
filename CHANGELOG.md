@@ -294,6 +294,8 @@ its own version heading. See [release status](docs/releases.md).
 
 - Skip constructing unused per-gap detail rows when reporting completed-candle health.
 
+- Reduce CPU work when finding missing minute candles and reading known-gap metadata.
+
 - Fail fast on candle index write contention so another cache writer cannot block the live loop.
 - Preserve candle index write contention errors during fetch-lock cleanup so callers can handle
   the underlying persistence failure.
