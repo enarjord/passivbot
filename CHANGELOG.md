@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- On Hyperliquid with HSL enabled, schedule routine fill refreshes after prepared
+  ordinary order attempts when fill inputs are ready. This prevents the bot's own
+  refresh from repeatedly invalidating entry creates queued for submission.
+
 - Finalize v9 risk configuration under `bot.*.risk`. Unstuck and the optional
   portfolio loss gate share one realized-loss memory. Enable the gate explicitly
   and supply a cap in `[0, 1)`. Atomic overrides of the gate or an enclosing object also

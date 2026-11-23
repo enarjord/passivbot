@@ -1100,6 +1100,25 @@ class Owner:
             self._next_history_window = now + 900.0
         self._fill_task = asyncio.create_task(self._refresh_history(kwargs))
 
+    def _schedule_periodic_history(self, now):
+        if now >= self._next_history:
+            self.schedule_history()
+            self._next_history = now + 5.0
+
+    def _can_delay_periodic_history(self, now):
+        bot = self.bot
+        task = getattr(self, "_fill_task", None)
+        if (
+            # Keep bootstrap, history-window repair and fill confirmation eager.
+            getattr(bot, "_hsl_fill_observation", None) is None
+            or now >= getattr(self, "_next_history_window", 0.0)
+            or "fills" in getattr(bot, "_authoritative_pending_confirmations", {})
+            or (task is not None and not task.done())
+        ):
+            return False
+        required_fills = self.required_fill_facts()
+        return required_fills is None or required_fills[1]
+
     async def _refresh_history(self, kwargs):
         import asyncio
         from ccxt.base.errors import NetworkError
@@ -1831,9 +1850,17 @@ class Owner:
                 )
             self.remember_position()
             now = self._schedule_clock()
-            if now >= self._next_history:
-                self.schedule_history()
-                self._next_history = now + 5.0
+            # A routine Hyperliquid fill fetch shares the order limiter and can
+            # replace the consumed receipt while a ready plan waits to submit.
+            history_after_ordinary = (
+                now >= self._next_history
+                and late_calculation
+                and bot.exchange == "hyperliquid"
+                and (preparation is not None or self._ordinary is not None)
+                and self._can_delay_periodic_history(now)
+            )
+            if not history_after_ordinary:
+                self._schedule_periodic_history(now)
             self.schedule_sources()
             if (
                 late_calculation
@@ -1904,6 +1931,8 @@ class Owner:
                             plan, now_ms=gate_ms, handoff=handoff, reason=reason
                         )
                         self._defer_ordinary(reason, phase="after_protection")
+            if history_after_ordinary and not self._shutdown_requested():
+                self._schedule_periodic_history(self._schedule_clock())
             self.schedule_account_reporting()
             if (
                 self._ordinary is None

@@ -1107,3 +1107,101 @@ async def test_late_handoff_sends_refreshed_raw_balance_to_native_and_executes(t
         assert completed
     finally:
         _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refresh_kind", ["routine", "in_flight", "window_repair"])
+async def test_hyperliquid_ordinary_create_and_fill_refresh(owner_handoff, refresh_kind):
+    from ccxt.async_support import hyperliquid
+    from live import executor, hsl_live
+
+    fixture = owner_handoff
+    owner, bot = fixture.owner, fixture.bot
+    bot.exchange = "hyperliquid"
+    bot.positions = {}
+    fixture.ledger.begin_epoch(now_ms=NOW)
+    for surface in (*ACCOUNT_SURFACES, "fills"):
+        fixture.ledger.stamp(surface, now_ms=NOW)
+    bot._orchestrator_uses_realized_pnl = lambda: False
+    confirmations = []
+    bot._request_authoritative_confirmation = confirmations.append
+    bot.cca = client = hyperliquid({"enableRateLimit": True})
+    order = {"symbol": SYMBOL, "position_side": "long"}
+    first_receipt = bot._hsl_fill_observation
+    reconcile = bot._reconcile_prepared_ordinary
+    queued = asyncio.Event()
+    fills_completed = asyncio.Event()
+    results = []
+
+    async def refresh_fills(**kwargs):
+        await queued.wait()
+        fixture.clock[0] += 1_250
+        receipt = observe_fills(bot, (fixture.clock[0] - 1, fixture.clock[0]))
+        assert receipt is not first_receipt and receipt.tape == first_receipt.tape
+        bot._hsl_fill_observation = receipt
+        fixture.events.append("fills")
+        fills_completed.set()
+        return True
+
+    async def throttle(cost):
+        fixture.events.append("queue")
+        queued.set()
+        task = getattr(owner, "_fill_task", None)
+        if task is not None and not task.done():
+            await asyncio.wait_for(fills_completed.wait(), 1.0)
+        fixture.clock[0] = NOW + 2_000
+        wave = owner._waves[order["_hsl_wave"]]
+        if fills_completed.is_set():
+            assert owner._account_mismatch_reason(wave, fixture.clock[0]) == "hsl_fill_receipt_replaced"
+
+    async def fetch(*args):
+        fixture.events.append("transport")
+        return {"id": "offline order"}
+
+    async def reconcile_create(strategy, quotes, receipts):
+        await reconcile(strategy, quotes, receipts)
+        owner.bind(bot._hsl_planning_wave, [], [order], ordinary=True)
+        return [], [order]
+
+    @hsl_live.connector_write("create")
+    async def write(bot, order):
+        return await bot.cca.fetch2("exchange", "private", "POST")
+
+    async def execute(cancels, creates):
+        assert not cancels and creates == [order]
+        results.append(await write(bot, order))
+
+    bot.update_pnls = refresh_fills
+    bot._reconcile_prepared_ordinary = reconcile_create
+    bot.execute_order_plan_to_exchange = execute
+    client.throttle = throttle
+    client.fetch = fetch
+    client.sign = lambda *args: dict(url="https://offline.invalid", method="POST", headers={}, body=None)
+
+    original = await start_preparation(fixture)
+    try:
+        fixture.release.set()
+        await asyncio.wait_for(original, 1.0)
+        fixture.events.clear()
+        owner.schedule_history = hsl_live.Owner.schedule_history.__get__(owner)
+        owner._next_history = owner._schedule_clock()
+        if refresh_kind != "window_repair":
+            owner._next_history_window = owner._next_history + 900.0
+        if refresh_kind == "in_flight":
+            owner.schedule_history()
+
+        result = await owner.cycle()
+        await asyncio.wait_for(owner._fill_task, 1.0)
+        assert result["ordinary_completed"]
+        assert fixture.events[:4] == ["protection", "account", "protection", "calculate"]
+        if refresh_kind != "routine":
+            assert isinstance(results[0], executor.DeferredOrderCreation)
+            assert confirmations == []
+            assert fixture.events[4:] == ["queue", "fills"]
+        else:
+            assert results == [{"id": "offline order"}]
+            assert confirmations == [{"balance", "positions", "open_orders"}]
+            assert fixture.events[4:] == ["queue", "transport", "fills"]
+    finally:
+        await stop_preparation(owner, original, getattr(owner, "_fill_task", None))
+        await client.close()
