@@ -9,7 +9,7 @@ import pytest
 
 from candlestick_manager import (
     CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS, _GAP_MAX_RETRIES,
-    _GAP_PERSISTENT_RETRY_MS, _KnownGapIndex,
+    _GAP_PERSISTENT_RETRY_MS, _GapMetadataList, _KnownGapIndex,
 )
 
 NOW = 1_800_000_000_000
@@ -265,6 +265,75 @@ def test_candle_health_counts_gaps_without_detail_retry_pass(
         assert health["known_gaps_retryable"] == details["retryable_gaps"] == 4 - persistent
         assert health["known_gaps_by_reason"] == details["by_reason"]
         assert retry_checks == [gap["start_ts"] for gap in records[:3]]
+    finally:
+        cm.close()
+
+
+def test_gap_normalization_uses_current_clocks_and_detaches_canonical_records(tmp_path):
+    cm = CandlestickManager(exchange_name="fixture", cache_dir=str(tmp_path))
+    clock = NOW
+    cm._now_ms_callback = lambda: clock
+    boundary = NOW - _GAP_PERSISTENT_RETRY_MS
+    canonical = {
+        "start_ts": NOW - 5 * ONE_MIN_MS,
+        "end_ts": NOW - 4 * ONE_MIN_MS,
+        "retry_count": _GAP_MAX_RETRIES,
+        "reason": "fetch_failed",
+        "added_at": boundary,
+        "last_retry_at": boundary,
+        "last_contextual_retry_at": 0,
+    }
+    records = _GapMetadataList([
+        canonical,
+        [NOW - 3 * ONE_MIN_MS, NOW - 3 * ONE_MIN_MS],
+        {"start_ts": NOW - 2 * ONE_MIN_MS, "end_ts": NOW - 2 * ONE_MIN_MS},
+    ])
+    try:
+        for clock, expected_persistent in ((NOW - 1, 2), (NOW, 1), (NOW - 1, 2)):
+            normalized = cm._normalize_gap_entries(records)
+            assert type(normalized[0]) is dict
+            assert normalized[0] == canonical
+            assert normalized[1]["added_at"] == normalized[1]["last_retry_at"] == clock
+            assert "last_contextual_retry_at" not in normalized[1]
+            assert normalized[2]["added_at"] == normalized[2]["last_retry_at"] == clock
+            summary = cm._summarize_known_gap_counts(normalized)
+            assert summary["total_minutes"] == 4
+            assert summary["persistent_gaps"] == expected_persistent
+            normalized[0]["reason"] = "manual"
+
+        # In-place metadata changes invalidate validation as well as the range
+        # index. A malformed record must still be dropped after a warm read.
+        records[0]["last_retry_at"] = "broken"
+        assert len(cm._normalize_gap_entries(records)) == 2
+        del records[0]["last_retry_at"]
+        assert cm._normalize_gap_entries(records)[0] == canonical
+
+        # An inserted alias keeps its ambient coercions and defaults live.
+        injected = dict(canonical, last_retry_at=str(boundary))
+        records[0] = injected
+        assert type(cm._normalize_gap_entries(records)[0]["last_retry_at"]) is int
+        injected["last_retry_at"] = None
+        assert len(cm._normalize_gap_entries(records)) == 2
+    finally:
+        cm.close()
+
+
+@pytest.mark.parametrize("timestamps,start,end,expected", [
+    ([], 0, 5, [(0, 5)]),
+    ([0, 1, 1, 4, 2, 6], 0, 6, [(2, 3), (3, 5)]),
+    ([0, 2, 4, 9], 1, 6, [(1, 1), (3, 3), (5, 6)]),
+    ([0, 7], 1, 6, [(1, 6)]),
+    ([1, 2], 2, 1, []),
+    ([2], 0, 6, [(0, 1), (3, 6)]),
+])
+def test_minute_missing_span_order_and_bounds(tmp_path, timestamps, start, end, expected):
+    cm = CandlestickManager(exchange_name="fixture", cache_dir=str(tmp_path))
+    rows = np.zeros(len(timestamps), dtype=CANDLE_DTYPE)
+    rows["ts"] = np.asarray(timestamps, dtype=np.int64) * ONE_MIN_MS
+    try:
+        actual = cm._missing_spans(rows, start * ONE_MIN_MS, end * ONE_MIN_MS)
+        assert actual == [(lo * ONE_MIN_MS, hi * ONE_MIN_MS) for lo, hi in expected]
+        assert all(type(lo) is type(hi) is int for lo, hi in actual)
     finally:
         cm.close()
 

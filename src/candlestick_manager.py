@@ -56,6 +56,7 @@ from typing import (
     Any,
     AsyncIterator,
     Awaitable,
+    BinaryIO,
     Callable,
     Dict,
     Iterable,
@@ -313,11 +314,36 @@ class GapEntry(TypedDict, total=False):
 class _GapMetadataDict(dict):
     """Owned JSON record whose mutations invalidate the containing range view."""
 
-    __slots__ = ("_revision",)
+    __slots__ = ("_revision", "_canonical_revision", "_canonical")
 
     def __init__(self, values, revision):
         self._revision = revision
+        self._canonical_revision = None
+        self._canonical = False
         super().__init__((key, _track_gap_value(value, revision)) for key, value in values.items())
+
+    def is_canonical(self) -> bool:
+        """Validate whether a shallow copy is already a detached GapEntry."""
+        revision, owned = self._revision
+        if not owned:
+            return False
+        if self._canonical_revision != revision:
+            # Require every field explicitly. Legacy defaults can depend on
+            # the read's clock, and mutable values need fresh conversion.
+            self._canonical = (
+                len(self) == 7
+                and all(type(key) is str for key in self)
+                and type(self.get("start_ts")) is int
+                and type(self.get("end_ts")) is int
+                and type(self.get("retry_count")) is int
+                and type(self.get("reason")) is str
+                and type(self.get("added_at")) is int
+                and type(self.get("last_retry_at")) is int
+                and type(self.get("last_contextual_retry_at")) is int
+                and self["start_ts"] <= self["end_ts"]
+            )
+            self._canonical_revision = revision
+        return self._canonical
 
     def __setitem__(self, key, value):
         self._revision[0] += 1
@@ -536,6 +562,9 @@ CANDLE_DTYPE = np.dtype(
         ("bv", "float32"),
     ]
 )
+
+_MAX_DECODED_SHARDS = 256
+_MAX_DECODED_SHARD_BYTES = 8 * 1024 * 1024
 
 CANDLE_RESOLUTION_LADDER: tuple[tuple[str, int], ...] = (
     ("1m", 1),
@@ -1287,6 +1316,8 @@ class CandlestickManager:
         # Parsed disk rows only, never projected candles, EMA values or permissions.
         # File identities are checked on every use; returned arrays are detached.
         self._disk_rows_cache = OrderedDict()
+        self._decoded_shards: OrderedDict[str, tuple[tuple, np.ndarray]] = OrderedDict()
+        self._decoded_shard_bytes = 0
         self._cache: Dict[str, np.ndarray] = {}
         # Recent public websocket observations are RAM-only provenance used to
         # distinguish a fresh/changed CCXT update from rows repeated out of
@@ -2783,14 +2814,25 @@ class CandlestickManager:
             )
         return mapping
 
-    def _load_shard(self, path: str, *, strict: bool = False) -> np.ndarray:
+    def _load_shard(
+        self, path: str, *, strict: bool = False, reuse_decoded: bool = False
+    ) -> np.ndarray:
+        # Only disk-range assembly may consume a shared read-only array. A
+        # strict audit or merge-before-write must still decode the current file.
+        reuse_decoded = reuse_decoded and not strict and not sys.platform.startswith("win")
         if not strict and not os.path.exists(path):
+            if reuse_decoded:
+                self._discard_decoded_shard(path)
             # Missing file is expected for pre-inception dates - log at debug level
             self.log.debug(f"Shard not found (expected for pre-inception): {path}")
             return np.empty((0,), dtype=CANDLE_DTYPE)
         try:
             with open(path, "rb") as f:
-                arr = load_candle_array(f, CANDLE_DTYPE)
+                arr = (
+                    self._read_decoded_shard(path, f)
+                    if reuse_decoded
+                    else load_candle_array(f, CANDLE_DTYPE)
+                )
             if isinstance(arr, np.ndarray) and arr.dtype == CANDLE_DTYPE:
                 return arr
             # Legacy downloader shards are often stored as 2D float arrays:
@@ -2809,12 +2851,55 @@ class CandlestickManager:
         except Exception as e:  # pragma: no cover - best effort
             if strict:
                 raise
+            if reuse_decoded:
+                self._discard_decoded_shard(path)
             self.log.warning(
                 "Failed loading shard %s error_type=%s",
                 path,
                 bounded_exception_type(e),
             )
             return np.empty((0,), dtype=CANDLE_DTYPE)
+
+    def _discard_decoded_shard(self, path: str) -> None:
+        previous = self._decoded_shards.pop(path, None)
+        if previous is not None:
+            self._decoded_shard_bytes -= previous[1].nbytes
+
+    def _read_decoded_shard(self, path: str, handle: BinaryIO) -> np.ndarray:
+        # Use the opened file's identity so an atomic replacement between
+        # discovery and open cannot certify data from the wrong inode.
+        try:
+            identity = (str(path), *self._disk_stat_identity(os.fstat(handle.fileno())))
+        except OSError:
+            self._discard_decoded_shard(path)
+            return load_candle_array(handle, CANDLE_DTYPE)
+        cached = self._decoded_shards.get(path)
+        if cached is not None and cached[0] == identity:
+            self._decoded_shards.move_to_end(path)
+            return cached[1]
+        self._discard_decoded_shard(path)
+        rows = load_candle_array(handle, CANDLE_DTYPE)
+        if (
+            isinstance(rows, np.ndarray)
+            and rows.dtype == CANDLE_DTYPE
+            and rows.ndim == 1
+            and 0 < rows.nbytes <= _MAX_DECODED_SHARD_BYTES
+        ):
+            try:
+                stable = identity == self._disk_file_identity(path)
+            except OSError:
+                stable = False
+            if stable:
+                rows.flags.writeable = False
+                self._decoded_shards[path] = (identity, rows)
+                self._decoded_shard_bytes += rows.nbytes
+                while (
+                    len(self._decoded_shards) > _MAX_DECODED_SHARDS
+                    or self._decoded_shard_bytes > _MAX_DECODED_SHARD_BYTES
+                ):
+                    _, (_, evicted) = self._decoded_shards.popitem(last=False)
+                    self._decoded_shard_bytes -= evicted.nbytes
+        return rows
 
     def _legacy_day_is_complete(self, symbol: str, tf: str, date_key: str) -> bool:
         """Return True if legacy has a continuous shard for this day.
@@ -2864,12 +2949,14 @@ class CandlestickManager:
         return bool(ok)
 
     @staticmethod
-    def _disk_file_identity(path: str) -> tuple:
-        stat = os.stat(path)
+    def _disk_stat_identity(stat: os.stat_result) -> tuple[int, ...]:
         return (
-            str(path), stat.st_dev, stat.st_ino, stat.st_size,
-            stat.st_mtime_ns, stat.st_ctime_ns,
+            stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
         )
+
+    @staticmethod
+    def _disk_file_identity(path: str) -> tuple[str, int, int, int, int, int]:
+        return (str(path), *CandlestickManager._disk_stat_identity(os.stat(path)))
 
     def _disk_rows_signature(self, load_keys, day_ctx, symbol, tf_norm):
         """Identify every selected shard and index, including atomic replacements."""
@@ -3037,12 +3124,14 @@ class CandlestickManager:
                 ctx = day_ctx.get(day_key, {})
                 src = str(ctx.get("source") or "")
                 if tf_norm == "1m" and src == "merge":
-                    legacy_arr = self._load_shard(path, strict=strict)
+                    legacy_arr = self._load_shard(path, strict=strict, reuse_decoded=True)
                     primary_arr = np.empty((0,), dtype=CANDLE_DTYPE)
                     try:
                         pp = ctx.get("primary_path")
                         if pp:
-                            primary_arr = self._load_shard(str(pp), strict=strict)
+                            primary_arr = self._load_shard(
+                                str(pp), strict=strict, reuse_decoded=True
+                            )
                     except Exception:
                         if strict:
                             raise
@@ -3055,7 +3144,7 @@ class CandlestickManager:
                     # Keep legacy canonical: primary should only fill legacy gaps.
                     a = self._merge_overwrite(primary_arr, legacy_arr)
                 else:
-                    a = self._load_shard(path, strict=strict)
+                    a = self._load_shard(path, strict=strict, reuse_decoded=True)
                     all_sources_loaded = all_sources_loaded and bool(a.size)
 
                 # NOTE: We intentionally do NOT write legacy data into primary shards.
@@ -3736,7 +3825,9 @@ class CandlestickManager:
         for it in gaps:
             try:
                 # Support both old format [[start, end], ...] and new format [GapEntry, ...]
-                if isinstance(it, dict):
+                if type(it) is _GapMetadataDict and it.is_canonical():
+                    out.append(it.copy())
+                elif isinstance(it, dict):
                     # New enhanced format
                     entry: GapEntry = {
                         "start_ts": int(it.get("start_ts", 0)),
@@ -4658,24 +4749,21 @@ class CandlestickManager:
         }
 
     def _summarize_known_gap_counts(self, gaps: List[GapEntry]) -> Dict[str, Any]:
-        total_minutes = sum((g["end_ts"] - g["start_ts"]) // ONE_MIN_MS + 1 for g in gaps)
-        persistent = sum(
-            1
-            for g in gaps
-            if g.get("retry_count", 0) >= _GAP_MAX_RETRIES and not self._should_retry_gap(g)
-        )
-        retryable = len(gaps) - persistent
-
+        total_minutes = 0
+        persistent = 0
         by_reason: Dict[str, int] = {}
-        for g in gaps:
-            reason = g.get("reason", GAP_REASON_AUTO)
+        for gap in gaps:
+            total_minutes += (gap["end_ts"] - gap["start_ts"]) // ONE_MIN_MS + 1
+            if gap.get("retry_count", 0) >= _GAP_MAX_RETRIES and not self._should_retry_gap(gap):
+                persistent += 1
+            reason = gap.get("reason", GAP_REASON_AUTO)
             by_reason[reason] = by_reason.get(reason, 0) + 1
 
         return {
             "total_gaps": len(gaps),
             "total_minutes": total_minutes,
             "persistent_gaps": persistent,
-            "retryable_gaps": retryable,
+            "retryable_gaps": len(gaps) - persistent,
             "by_reason": by_reason,
         }
 
@@ -4693,10 +4781,13 @@ class CandlestickManager:
         # head gap
         if ts[0] > start_ts:
             spans.append((start_ts, int(ts[0] - ONE_MIN_MS)))
-        # middle gaps
-        for i in range(len(ts) - 1):
-            if ts[i + 1] - ts[i] > ONE_MIN_MS:
-                spans.append((int(ts[i] + ONE_MIN_MS), int(ts[i + 1] - ONE_MIN_MS)))
+        # Find only discontinuities; dense candle ranges need no Python row loop.
+        if ts.size > 1:
+            gap_indices = (ts[1:] - ts[:-1] > ONE_MIN_MS).nonzero()[0]
+            if gap_indices.size:
+                starts = (ts[gap_indices] + ONE_MIN_MS).tolist()
+                ends = (ts[gap_indices + 1] - ONE_MIN_MS).tolist()
+                spans.extend(zip(starts, ends))
         # tail gap
         if ts[-1] < end_ts:
             spans.append((int(ts[-1] + ONE_MIN_MS), end_ts))
