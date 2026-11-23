@@ -103,9 +103,9 @@ def test_gpu_close_sizing_accepts_qualified_targets_and_device_free_preparation(
         config["coin_overrides"] = {
             "COIN00": {"bot": {"long": {"risk": {"unstuck": {"enabled": True}}}}},
         }
-    for target_vendor in (None, "apple", "nvidia"):
+    for target_vendor in (None, "apple", "nvidia", "amd"):
         validate_gpu_backtest_config(config, target_vendor=target_vendor)
-    for target_vendor in ("amd", "none"):
+    for target_vendor in ("none",):
         with pytest.raises(ValueError, match=error):
             validate_gpu_backtest_config(config, target_vendor=target_vendor)
 
@@ -114,11 +114,11 @@ def test_native_registry_checks_close_sizing_for_known_target(monkeypatch):
     guard_cpu(monkeypatch)
     with managed_arrays() as manager:
         base = coupled_inputs(manager, "trailing_martingale", loss_gate_enabled=True)
-        for target_vendor in (None, "apple", "nvidia"):
+        for target_vendor in (None, "apple", "nvidia", "amd"):
             with registry_for(base, False, target_vendor=target_vendor) as registry:
                 assert registry.planner.prepare("gate-zero", candidate(base, 2.0)).requests
-        with pytest.raises(ValueError, match="AMD ROCm.*realized-loss close sizing.*CPU"):
-            registry_for(base, False, target_vendor="amd")
+        with pytest.raises(ValueError, match="realized-loss close sizing.*CPU"):
+            registry_for(base, False, target_vendor="none")
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
