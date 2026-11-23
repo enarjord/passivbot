@@ -36,6 +36,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Ty
 
 import passivbot_rust as pbr
 from ccxt.base.errors import OrderNotFound, RateLimitExceeded
+from bitget_fill_history import bitget_fill_pages
 from bitget_normalization import (
     deduce_side_pside,
     deduce_uta_side_pside as _deduce_uta_side_pside,
@@ -2169,13 +2170,18 @@ class CacheMetadata(TypedDict, total=False):
     covered_start_ms: int  # Earliest open-ended lookback start confirmed against exchange
     known_gaps: List[KnownGap]  # List of known gaps
     history_scope: str  # unknown, window, all
+    coverage_contract: str  # exchange-specific traversal that certified the window
     pnl_contract: str  # gross_pnl_quote_fee_best_effort_v2
+
+
+BITGET_FILL_COVERAGE_CONTRACT = "bitget_fill_cursor_v1"
 
 
 class FillEventCache:
     """JSON cache storing fills split by UTC day."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, coverage_contract: str | None = None) -> None:
+        self._coverage_contract = coverage_contract
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self._metadata: Optional[CacheMetadata] = None
@@ -2430,6 +2436,9 @@ class FillEventCache:
             "pnl_contract": PNL_CONTRACT_CURRENT,
         }
 
+        if self._coverage_contract is not None:
+            default["coverage_contract"] = self._coverage_contract
+
         if not self.metadata_path.exists():
             self._metadata = default
             return self._metadata
@@ -2439,6 +2448,12 @@ class FillEventCache:
                 data = json.load(fh)
             if not isinstance(data, dict):
                 data = default
+            if self._coverage_contract is not None and data.get("coverage_contract") != self._coverage_contract:
+                # Historical pagination did not prove every fill at page boundaries.
+                # Keep factual rows and retryable gaps. The normal lookback owner
+                # must rebuild the certificate before it may admit dependent actions.
+                data.update(covered_start_ms=0, history_scope="unknown", last_refresh_ms=0,
+                            coverage_contract=self._coverage_contract)
             # Ensure all keys exist
             for key in default:
                 data.setdefault(key, default[key])
@@ -2924,144 +2939,37 @@ class BitgetFetcher(BaseFetcher):
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
-        # UTA / Elite (copy-trading) accounts speak the v3 API; the classic
-        # v2 fill-history endpoint returns error 40731 for them.
-        if getattr(self.api, "options", {}).get("uta"):
-            return await self._fetch_uta(since_ms, until_ms, detail_cache, on_batch)
-        buffer_step_ms = 24 * 60 * 60 * 1000
-        end_time = int(until_ms) if until_ms is not None else self._now_func() + buffer_step_ms
-        params: Dict[str, object] = {
-            "productType": self.product_type,
-            "limit": self.history_limit,
-            "endTime": end_time,
-        }
-        events: Dict[str, Dict[str, object]] = {}
-
-        detail_hits = 0
-        detail_fetches = 0
-        max_fetches = 400
-        fetch_count = 0
-
-        logger.debug(
-            "BitgetFetcher.fetch: start (since=%s, until=%s, limit=%d)",
-            _format_ms(since_ms),
-            _format_ms(until_ms),
-            self.history_limit,
-        )
-
-        while True:
-            if fetch_count >= max_fetches:
-                raise AuthoritativeSurfaceUnavailable(
-                    "fills",
-                    "BitgetFetcher.fetch: incomplete history after "
-                    f"pagination cap ({max_fetches})"
-                )
-            fetch_count += 1
-            payload = await self.api.private_mix_get_v2_mix_order_fill_history(dict(params))
-            fill_list = payload.get("data", {}).get("fillList") or []
-            if fetch_count > 1:
-                logger.debug(
-                    "BitgetFetcher.fetch: fetch #%d endTime=%s size=%d",
-                    fetch_count,
-                    _format_ms(params.get("endTime")),
-                    len(fill_list),
-                )
-            if not fill_list:
-                if since_ms is None:
-                    logger.debug("BitgetFetcher.fetch: empty batch without start bound; stopping")
-                    break
-                end_param = int(params.get("endTime", self._now_func()))
-                if end_param <= since_ms:
-                    logger.debug(
-                        "BitgetFetcher.fetch: empty batch and cursor reached start; stopping"
-                    )
-                    break
-                new_end_time = max(since_ms, end_param - buffer_step_ms)
-                if new_end_time == end_param:
-                    new_end_time = max(since_ms, end_param - 1)
-                params["endTime"] = new_end_time
-                logger.debug(
-                    "BitgetFetcher.fetch: empty batch, continuing with endTime=%s",
-                    _format_ms(params["endTime"]),
-                )
-                continue
-            logger.debug(
-                "BitgetFetcher.fetch: received batch size=%d endTime=%s",
-                len(fill_list),
-                params.get("endTime"),
-            )
-            batch_ids: List[str] = []
-            pending_tasks: List[asyncio.Task[int]] = []
-            for raw in fill_list:
-                event = self._normalize_fill(raw)
+        uta = bool(getattr(self.api, "options", {}).get("uta"))
+        normalize = self._normalize_fill_uta if uta else self._normalize_fill
+        events = {}
+        async for rows in bitget_fill_pages(
+            self.api, uta=uta, product_type=self.product_type, since_ms=since_ms,
+            until_ms=int(until_ms) if until_ms is not None else self._now_func(),
+            limit=self.history_limit, max_fetches=400,
+        ):
+            batch = [normalize(row) for row in rows]
+            pending = []
+            for event in batch:
                 event_id = event["id"]
-                if not event_id:
-                    continue
-                batch_ids.append(event_id)
-                if event_id in detail_cache:
-                    client_oid, pb_type = detail_cache[event_id]
-                    event["client_order_id"] = client_oid
-                    event["pb_order_type"] = pb_type
-                    detail_hits += 1
-                if not event.get("client_order_id"):
-                    pending_tasks.append(
-                        asyncio.create_task(self._enrich_with_details(event, detail_cache))
-                    )
-                    if len(pending_tasks) >= self.detail_concurrency:
-                        detail_fetches += await self._flush_detail_tasks(pending_tasks)
+                if uta:
+                    if event.get("client_order_id"):
+                        detail_cache[event_id] = (event["client_order_id"], event.get("pb_order_type", ""))
+                elif event_id in detail_cache:
+                    event["client_order_id"], event["pb_order_type"] = detail_cache[event_id]
+                if not uta and not event.get("client_order_id"):
+                    pending.append(asyncio.create_task(self._enrich_with_details(event, detail_cache)))
+                    if len(pending) >= self.detail_concurrency:
+                        await self._flush_detail_tasks(pending)
                 events[event_id] = event
-            detail_fetches += await self._flush_detail_tasks(pending_tasks)
+            await self._flush_detail_tasks(pending)
             if on_batch:
-                # Client IDs describe attribution, not whether an exchange fill
-                # belongs in position/PnL history. Keep external executions too.
-                batch_events = [dict(events[event_id]) for event_id in batch_ids]
-                if batch_events:
-                    on_batch(batch_events)
-            oldest = min(int(raw["cTime"]) for raw in fill_list)
-            if len(fill_list) < self.history_limit:
-                if since_ms is None:
-                    logger.debug(
-                        "BitgetFetcher.fetch: short batch size=%d without start bound; stopping",
-                        len(fill_list),
-                    )
-                    break
-                end_param = int(params.get("endTime", oldest))
-                if end_param - since_ms < buffer_step_ms:
-                    logger.debug(
-                        "BitgetFetcher.fetch: short batch size=%d close to requested start; stopping",
-                        len(fill_list),
-                    )
-                    break
-                new_end_time = max(since_ms, min(end_param, oldest) - 1)
-                if new_end_time <= since_ms:
-                    logger.debug(
-                        "BitgetFetcher.fetch: rewound endTime to start boundary; stopping",
-                    )
-                    break
-                params["endTime"] = new_end_time
-                logger.debug(
-                    "BitgetFetcher.fetch: short batch size=%d, continuing with endTime=%s",
-                    len(fill_list),
-                    _format_ms(params["endTime"]),
-                )
-                continue
-            first_ts = min(ev["timestamp"] for ev in events.values()) if events else None
-            if since_ms is not None and first_ts is not None and first_ts <= since_ms:
-                break
-            params["endTime"] = max(since_ms or oldest, oldest - 1)
-
-        ordered = sorted(events.values(), key=lambda ev: ev["timestamp"])
-        if since_ms is not None:
-            ordered = [ev for ev in ordered if ev["timestamp"] >= since_ms]
-        if until_ms is not None:
-            ordered = [ev for ev in ordered if ev["timestamp"] <= until_ms]
-        logger.debug(
-            "BitgetFetcher.fetch: done (events=%d, detail_cache_hits=%d, detail_fetches=%d)",
-            len(ordered),
-            detail_hits,
-            detail_fetches,
+                on_batch([dict(event) for event in batch])
+        return sorted(
+            (event for event in events.values()
+             if (since_ms is None or event["timestamp"] >= since_ms)
+             and (until_ms is None or event["timestamp"] <= until_ms)),
+            key=lambda event: event["timestamp"],
         )
-        return ordered
 
     async def _enrich_with_details(
         self,
@@ -3155,95 +3063,6 @@ class BitgetFetcher(BaseFetcher):
     @staticmethod
     def _deduce_uta_side_pside(raw: Dict[str, object]) -> Tuple[str, str]:
         return deduce_uta_side_pside(raw)
-
-    async def _fetch_uta(
-        self,
-        since_ms: Optional[int],
-        until_ms: Optional[int],
-        detail_cache: Dict[str, Tuple[str, str]],
-        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
-    ) -> List[Dict[str, object]]:
-        """UTA/Elite variant: source fills from the v3 trade/fills endpoint.
-        v3 fills already carry clientOid, so no per-order detail enrichment."""
-        end_time = int(until_ms) if until_ms is not None else self._now_func() + 24 * 60 * 60 * 1000
-        max_window_ms = 30 * 24 * 60 * 60 * 1000 - 1
-        params: Dict[str, object] = {
-            "category": self.product_type,
-            "limit": self.history_limit,
-        }
-        events: Dict[str, Dict[str, object]] = {}
-        max_fetches = 400
-        fetch_count = 0
-        cursor: Optional[str] = None
-        while True:
-            if fetch_count >= max_fetches:
-                raise AuthoritativeSurfaceUnavailable(
-                    "fills",
-                    "BitgetFetcher._fetch_uta: incomplete history after "
-                    f"pagination cap ({max_fetches})"
-                )
-            fetch_count += 1
-            request_params = dict(params)
-            request_params["endTime"] = end_time
-            window_start = None
-            if since_ms is not None:
-                window_start = max(int(since_ms), int(end_time) - max_window_ms)
-                request_params["startTime"] = window_start
-            if cursor:
-                request_params["cursor"] = cursor
-            payload = await self.api.private_uta_get_v3_trade_fills(request_params)
-            data = payload.get("data") or {}
-            rows = data.get("list") or []
-            if not rows:
-                if since_ms is not None and window_start is not None and window_start > since_ms:
-                    next_end = window_start - 1
-                    if next_end <= since_ms:
-                        break
-                    end_time = next_end
-                    cursor = None
-                    continue
-                break
-            batch_ids: List[str] = []
-            for raw in rows:
-                event = self._normalize_fill_uta(raw)
-                event_id = event["id"]
-                if not event_id:
-                    continue
-                batch_ids.append(event_id)
-                if event.get("client_order_id"):
-                    detail_cache[event_id] = (event["client_order_id"], event.get("pb_order_type", ""))
-                events[event_id] = event
-            if on_batch:
-                # Match the complete returned history even without a clientOid.
-                batch_events = [dict(events[i]) for i in batch_ids]
-                if batch_events:
-                    on_batch(batch_events)
-            oldest = min(int(event["timestamp"]) for event in events.values() if event["id"] in batch_ids)
-            next_cursor = data.get("cursor")
-            if len(rows) >= self.history_limit and next_cursor:
-                cursor = str(next_cursor)
-                continue
-            cursor = None
-            if len(rows) < self.history_limit:
-                if since_ms is not None and window_start is not None and window_start > since_ms:
-                    next_end = window_start - 1
-                    if next_end <= since_ms:
-                        break
-                    end_time = next_end
-                    continue
-                break
-            if since_ms is not None and oldest <= since_ms:
-                break
-            new_end = oldest - 1
-            if since_ms is not None and new_end <= since_ms:
-                break
-            end_time = new_end
-        ordered = sorted(events.values(), key=lambda ev: ev["timestamp"])
-        if since_ms is not None:
-            ordered = [ev for ev in ordered if ev["timestamp"] >= since_ms]
-        if until_ms is not None:
-            ordered = [ev for ev in ordered if ev["timestamp"] <= until_ms]
-        return ordered
 
     def _normalize_fill_uta(self, raw: Dict[str, object]) -> Dict[str, object]:
         event = normalize_uta_fill_payload(raw, self._resolve_symbol)
@@ -4026,7 +3845,9 @@ class FillEventsManager:
         self.exchange = exchange
         self.user = user
         self.fetcher = fetcher
-        self.cache = FillEventCache(cache_path)
+        self.cache = FillEventCache(
+            cache_path, coverage_contract=BITGET_FILL_COVERAGE_CONTRACT if exchange.lower() == "bitget" else None
+        )
         self.fallback_fee_fraction = float(fallback_fee_fraction)
         self.max_abs_fee_fraction = float(max_abs_fee_fraction)
         self.fee_conversion_max_age_ms = int(fee_conversion_max_age_ms)
@@ -6427,6 +6248,12 @@ class FillEventsManager:
         return self.cache.get_history_scope()
 
     def set_history_scope(self, scope: str) -> None:
+        if self.exchange.lower() == "bitget" and scope == "all":
+            # A request without a lower bound uses the endpoint's own time
+            # window. Its exhaustion cannot prove older requested intervals.
+            raise AuthoritativeSurfaceUnavailable(
+                "fills", "Bitget fill history requires a bounded lookback to certify coverage"
+            )
         self.cache.set_history_scope(scope)
 
     @staticmethod

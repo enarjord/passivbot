@@ -137,8 +137,12 @@ class _FakeBitgetAPI:
     async def private_mix_get_v2_mix_order_fill_history(self, params: Dict[str, object]):
         self.history_calls.append(dict(params))
         if not self._batches:
-            return {"data": {"fillList": []}}
-        return {"data": {"fillList": self._batches.pop(0)}}
+            return {"code": "00000", "data": {"fillList": []}}
+        rows = self._batches.pop(0)
+        data = {"fillList": rows}
+        if len(rows) == int(params["limit"]):
+            data["endId"] = str(len(self._batches))
+        return {"code": "00000", "data": data}
 
     async def private_mix_get_v2_mix_order_detail(self, params: Dict[str, object]):
         self.detail_calls.append(dict(params))
@@ -148,8 +152,12 @@ class _FakeBitgetAPI:
     async def private_uta_get_v3_trade_fills(self, params: Dict[str, object]):
         self.history_calls.append(dict(params))
         if not self._batches:
-            return {"data": {"list": []}}
-        return {"data": {"list": self._batches.pop(0)}}
+            return {"code": "00000", "data": {"list": []}}
+        rows = self._batches.pop(0)
+        data = {"list": rows}
+        if len(rows) == int(params["limit"]):
+            data["cursor"] = str(len(self._batches))
+        return {"code": "00000", "data": data}
 
 
 class _StaticFetcher(BaseFetcher):
@@ -2780,8 +2788,16 @@ async def test_bitget_fetcher_paginates_across_sparse_history(monkeypatch):
             "profit": "-1",
         }
     ]
-    raw_batches = [recent, sparse, older, []]
-    api = _FakeBitgetAPI([list(batch) for batch in raw_batches])
+    raw_batches = [recent, sparse, older]
+
+    class SparseApi(_FakeBitgetAPI):
+        async def private_mix_get_v2_mix_order_fill_history(self, params):
+            self.history_calls.append(dict(params))
+            rows = [row for batch in raw_batches for row in batch
+                    if params["startTime"] <= int(row["cTime"]) <= params["endTime"]]
+            return {"code": "00000", "data": {"fillList": rows}}
+
+    api = SparseApi([])
 
     monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: value)
 
@@ -2799,7 +2815,7 @@ async def test_bitget_fetcher_paginates_across_sparse_history(monkeypatch):
 
     fetcher = BitgetFetcher(
         api,
-        history_limit=2,
+        history_limit=100,
         detail_calls_per_minute=5,
         now_func=lambda: end,
         symbol_resolver=resolver,
@@ -2812,8 +2828,10 @@ async def test_bitget_fetcher_paginates_across_sparse_history(monkeypatch):
         on_batch=None,
     )
     ids = [ev["id"] for ev in events]
-    assert "tid-old" in ids
-    assert len(api.history_calls) >= 3
+    assert set(ids) == {row["tradeId"] for batch in raw_batches for row in batch}
+    assert api.history_calls[-1]["startTime"] == start
+    assert all(older_call["endTime"] == recent_call["startTime"] - 1
+               for recent_call, older_call in zip(api.history_calls, api.history_calls[1:]))
 
 
 @pytest.mark.asyncio
@@ -2825,7 +2843,7 @@ async def test_bitget_fetcher_handles_empty_batches(monkeypatch):
             {
                 "tradeId": "tid-gap-old",
                 "orderId": "oid-gap-old",
-                "cTime": str(15 * day),
+                "cTime": str(12 * day),
                 "symbol": "BTCUSDT",
                 "tradeSide": "open",
                 "posMode": "hedge_mode",
@@ -2879,7 +2897,7 @@ async def test_bitget_fetcher_reuses_detail_cache(monkeypatch):
         ]
     ]
     api = _FakeBitgetAPI(fills)
-    clock = _Clock(start_ms=0)
+    clock = _Clock(start_ms=5000)
 
     monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: value)
 
@@ -3076,7 +3094,8 @@ async def test_bitget_uta_fetcher_splits_long_lookback_into_30_day_windows(monke
     )
 
     assert [event["id"] for event in events] == ["exec-old", "exec-new"]
-    assert len(api.history_calls) == 2
+    assert len(api.history_calls) == 3
+    assert api.history_calls[-1]["startTime"] == api.history_calls[-1]["endTime"] == 0
     for call in api.history_calls:
         assert int(call["endTime"]) - int(call["startTime"]) < 30 * day_ms
 
@@ -5671,6 +5690,7 @@ async def test_manager_cache_load_does_not_advance_last_exchange_refresh(
             "known_gaps": [],
             "history_scope": "window",
             "pnl_contract": fem.PNL_CONTRACT_CURRENT,
+            "coverage_contract": fem.BITGET_FILL_COVERAGE_CONTRACT,
         }
     )
     fetcher = _StaticFetcher([])

@@ -457,6 +457,11 @@ its own version heading. See [release status](docs/releases.md).
   leaves the requested range unproven. Reject fills with unresolved position sides before
   replay, while preserving Binance income-only accounting records.
 
+- Traverse Bitget Classic and UTA fills by cursor within each requested time window, including
+  executions sharing the same millisecond. Malformed pages defer fill-dependent actions. Existing
+  Bitget caches retain their rows and recheck their lookback coverage on the next request.
+  Use a bounded lookback for Bitget coverage; an endpoint-default window cannot prove all history.
+
 - Reuse proven fill history when a refresh returns only exact duplicates, while still checking
   disk state, coverage, and fresh exchange receipts.
 

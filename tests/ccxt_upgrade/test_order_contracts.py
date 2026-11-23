@@ -413,8 +413,9 @@ async def test_bitget_legacy_fill_events_keep_multiple_fills_per_order():
         async def private_mix_get_v2_mix_order_fill_history(self, params):
             self.history_calls += 1
             if self.history_calls > 1:
-                return {"data": {"fillList": []}}
+                return {"code": "00000", "data": {"fillList": []}}
             return {
+                "code": "00000",
                 "data": {
                     "fillList": [
                         {
@@ -751,8 +752,9 @@ async def test_bitget_fetch_fill_events_uta_uses_exec_id_and_trade_side():
     async def private_uta_get_v3_trade_fills(params):
         calls.append(dict(params))
         if len(calls) > 1:
-            return {"data": {"list": []}}
+            return {"code": "00000", "data": {"list": []}}
         return {
+            "code": "00000",
             "data": {
                 "list": [
                     {
@@ -793,6 +795,7 @@ async def test_bitget_fetch_fill_events_uta_rejects_malformed_rows():
 
     async def private_uta_get_v3_trade_fills(params):
         return {
+            "code": "00000",
             "data": {
                 "list": [
                     {
@@ -825,8 +828,9 @@ async def test_bitget_fetch_closed_orders_routes_uta_to_v3_fills():
     async def private_uta_get_v3_trade_fills(params):
         calls.append(dict(params))
         if len(calls) > 1:
-            return {"data": {"list": []}}
+            return {"code": "00000", "data": {"list": []}}
         return {
+            "code": "00000",
             "data": {
                 "list": [
                     {
