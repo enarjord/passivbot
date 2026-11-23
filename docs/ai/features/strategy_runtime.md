@@ -474,9 +474,10 @@ Remaining alternatives are re-evaluated against the shared headroom after each r
 
 Within the reducer tier and the ordinary tier, immediately executable closes take priority,
 followed by favorable signed entry distance at executable touch. Passive closes are ranked
-by normalized distance to their resting touch, then signed entry distance. Canonical order
-identity resolves ties across both sides and all symbols. CPU risk planning uses completed
-market observations. The projected route determines fees and loss, while subsequent candles
+by normalized distance to their resting touch, then signed entry distance. The rank keys
+round these binary32 fractions to the nearest multiple of `2^-20`, with halfway values
+rounded away from zero. Canonical order identity resolves equal keys across sides and
+symbols. CPU risk planning uses completed market observations. The projected route determines fees and loss, while subsequent candles
 determine simulated fills. Limit fills in the candle simulator use its resting-maker contract.
 
 Ordinary grid, trailing and EMA-anchor closes share the remaining position capacity. The

@@ -131,6 +131,35 @@ inline void close_risk_probe(device float* out, float initial_headroom, float sm
     float off_tick_touch = replay_close_priority_touch(100.304f, 10030, 10031, 0.01f);
     out[35] = aligned_touch == aligned_quote;
     out[36] = off_tick_touch == 100.304f && off_tick_touch != aligned_quote;
+
+    // Opposite positions with economically equal moves share one rank.
+    ReplayCloseProjection adverse_long = long_loss;
+    ReplayCloseProjection adverse_short = short_loss;
+    adverse_long.position_price = 102.0f;
+    adverse_short.position_price = 102.5f;
+    ReplayClosePriority near_long =
+        replay_close_priority(adverse_long, 87.72f, 87.72f, 20, 9, 1.0f);
+    ReplayClosePriority near_short =
+        replay_close_priority(adverse_short, 116.85f, 116.85f, 25, 20, 1.0f);
+    ReplayClosePriority better =
+        replay_close_priority(adverse_short, 116.84f, 116.84f, 30, 20, 1.0f);
+    out[37] = near_long.signed_entry_distance_rank == near_short.signed_entry_distance_rank;
+    out[38] = replay_close_preferred(near_long, near_short);
+    out[39] = replay_close_preferred(better, near_long);
+    out[40] = as_type<uint>(replay_close_priority_rank(-1.0e-9f)) == 0u;
+    out[41] = replay_close_priority_rank(0x1p-21f) == 0x1p-20f
+        && replay_close_priority_rank(-0x1p-21f) == -0x1p-20f;
+    ReplayClosePriority candidates[3] = {near_long, near_short, better};
+    bool same_winner = true;
+    for (int start = 0; start < 3; ++start) {
+        ReplayClosePriority winner = candidates[start];
+        for (int i = 1; i < 3; ++i) {
+            ReplayClosePriority next = candidates[(start + i) % 3];
+            if (replay_close_preferred(next, winner)) winner = next;
+        }
+        same_winner = same_winner && winner.stable_coin_index == 30;
+    }
+    out[42] = same_winner;
 }
 """
 
@@ -142,6 +171,7 @@ _EXPECTED = (
     100.0, 0.0, 2 ** -17, 1.0, 10.0,
     100.0, 2 ** -17 - 6e-6, 0.0, 0.0,
     1.0, 1.0,
+    1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
 )
 
 

@@ -136,8 +136,13 @@ Panic bypasses the loss gate. For each other position, Rust compares protective 
 at their admissible sizes and reserves one final reducer before ordinary closes. Competing
 lossy orders within each tier share a long/short account budget. Fillable routes come first,
 then the most favorable signed entry distance. Passive orders use distance to the resting
-touch, signed entry distance and stable order identity. Backtest priority uses its decision
-snapshot of completed bars. Later candle prices determine whether selected orders can fill.
+touch, signed entry distance and stable order identity. CPU and GPU close allocation express
+these two scale-one fractions as binary32 and round to the nearest multiple of `2^-20`
+(about 0.000095 percentage points), with halfway values rounded away from zero. Equal rank
+keys use canonical symbol, side and order identity. Execution prices, fees, projected loss,
+venue minimums and quantity budgets retain their own arithmetic. Backtest priority uses its
+decision snapshot of completed bars. Later candle prices determine whether selected orders
+can fill.
 
 For unstuck, the observed exposure ratio must be strictly above the trigger. The quantity
 rounded down to the exposure floor must leave positive projected raw balance and lower

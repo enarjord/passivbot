@@ -444,8 +444,8 @@ inline bool size_replay_unstuck(
 
 struct ReplayClosePriority {
     bool immediately_executable;
-    float resting_gap_fraction;
-    float signed_entry_distance_fraction;
+    float resting_gap_rank;
+    float signed_entry_distance_rank;
     int stable_coin_index;
     int position_side;
     int order_type;
@@ -459,17 +459,26 @@ inline float replay_close_priority_touch(float raw_touch, int touch_down, int to
     return touch_down > 0 && touch_down == touch_up ? float(touch_down) * price_step : raw_touch;
 }
 
+// Same normalized priority lattice as the Rust close allocator. Every
+// binary32 value with magnitude at least 16 is already on this lattice.
+inline float replay_close_priority_rank(float fraction) {
+    float rank = fabs(fraction) >= 16.0f
+        ? fraction : round(fraction * 0x1p20f) * 0x1p-20f;
+    return rank == 0.0f ? 0.0f : rank;
+}
+
 inline ReplayClosePriority replay_close_priority(
     ReplayCloseProjection projection, float quote, float touch, int stable_coin_index,
     int order_type, float proposed_abs_qty
 ) {
     float reference_price = projection.immediately_executable ? touch : quote;
-    float relative = reference_price / projection.position_price;
+    float entry_distance = (reference_price - projection.position_price) / projection.position_price;
     ReplayClosePriority result;
     result.immediately_executable = projection.immediately_executable;
-    result.resting_gap_fraction = projection.immediately_executable
-        ? 0.0f : fabs(quote / touch - 1.0f);
-    result.signed_entry_distance_fraction = projection.is_long ? relative - 1.0f : 1.0f - relative;
+    result.resting_gap_rank = projection.immediately_executable
+        ? 0.0f : replay_close_priority_rank(fabs((quote - touch) / touch));
+    result.signed_entry_distance_rank =
+        replay_close_priority_rank(projection.is_long ? entry_distance : -entry_distance);
     result.stable_coin_index = stable_coin_index;
     result.position_side = projection.is_long ? 0 : 1;
     result.order_type = order_type;
@@ -481,10 +490,10 @@ inline ReplayClosePriority replay_close_priority(
 inline bool replay_close_preferred(ReplayClosePriority candidate, ReplayClosePriority incumbent) {
     if (candidate.immediately_executable != incumbent.immediately_executable)
         return candidate.immediately_executable;
-    if (candidate.resting_gap_fraction != incumbent.resting_gap_fraction)
-        return candidate.resting_gap_fraction < incumbent.resting_gap_fraction;
-    if (candidate.signed_entry_distance_fraction != incumbent.signed_entry_distance_fraction)
-        return candidate.signed_entry_distance_fraction > incumbent.signed_entry_distance_fraction;
+    if (candidate.resting_gap_rank != incumbent.resting_gap_rank)
+        return candidate.resting_gap_rank < incumbent.resting_gap_rank;
+    if (candidate.signed_entry_distance_rank != incumbent.signed_entry_distance_rank)
+        return candidate.signed_entry_distance_rank > incumbent.signed_entry_distance_rank;
     if (candidate.stable_coin_index != incumbent.stable_coin_index)
         return candidate.stable_coin_index < incumbent.stable_coin_index;
     if (candidate.position_side != incumbent.position_side)
