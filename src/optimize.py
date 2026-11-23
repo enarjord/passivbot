@@ -3460,9 +3460,11 @@ def _materialize_suite_run_contract(
         validate_forager_weight_search(config)
 
 
-def _run_gpu_preparation_preflight(config: Dict[str, Any], suite_cfg: Mapping[str, Any]) -> None:
+def _run_gpu_preparation_preflight(
+    config: Dict[str, Any], suite_cfg: Mapping[str, Any], *, target_vendor: str | None = None
+) -> None:
     from simulation_preparation import validate_optimizer_preparation
-    validate_optimizer_preparation(config, suite_cfg)
+    validate_optimizer_preparation(config, suite_cfg, target_vendor=target_vendor)
 
 
 def _gpu_cached_input_preflight(path, shape, dtype, *, strategy_kind=None, input_memory_budget=None):
@@ -4020,10 +4022,12 @@ async def main():
         gpu_input_memory_budget = None
         if is_gpu:
             import torch
-            from optimization.gpu.runtime import gpu_device
+            from optimization.gpu.runtime import gpu_device, gpu_vendor
             from optimization.gpu.residency import (
                 capture_mps_input_memory_budget, capture_cuda_input_memory_budget,
             )
+            gpu_target_vendor = gpu_vendor(torch)
+            _run_gpu_preparation_preflight(config, suite_cfg, target_vendor=gpu_target_vendor)
             # Freeze a run-level preference before file-cache pages are read.
             tuning_mode = resolve_gpu_tuning_mode(
                 config["optimize"].get("gpu", {}).get("tuning_mode", GPU_TUNING_DEFAULT)
@@ -4327,6 +4331,7 @@ async def main():
 
         if is_gpu:
             evaluator_for_pool._gpu_input_memory_budget = gpu_input_memory_budget
+            evaluator_for_pool._gpu_target_vendor = gpu_target_vendor
 
         logging.info(f"Finished initializing evaluator...")
         flush_interval = 60  # or read from your config

@@ -31,6 +31,7 @@ from optimization.gpu.autotune import (
     record_compilation, record_replay_chunk,
 )
 from optimization.gpu.runtime import (
+    gpu_close_sizing_vendor,
     gpu_device,
     compile_shader,
     synchronize,
@@ -2153,9 +2154,11 @@ class _MulticoinReplayRunner:
         self.dispatch_unstuck_enabled = unstuck_required(
             policy_matrix, self.parameter_keys, self._unstuck_ema_overrides,
         )
-        require_gpu_close_sizing_support(
-            loss_gate_enabled=self.loss_gate_enabled, unstuck_enabled=self.dispatch_unstuck_enabled,
-        )
+        if self.loss_gate_enabled or self.dispatch_unstuck_enabled:
+            require_gpu_close_sizing_support(
+                target_vendor=gpu_close_sizing_vendor(),
+                loss_gate_enabled=self.loss_gate_enabled, unstuck_enabled=self.dispatch_unstuck_enabled,
+            )
         self.dispatch_unstuck_ema_enabled = self.dispatch_unstuck_enabled and unstuck_ema_required(
             policy_matrix, self.parameter_keys, self._unstuck_ema_overrides,
         )

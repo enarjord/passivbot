@@ -20,6 +20,18 @@ def gpu_vendor(torch_module=None) -> str:
     return "amd" if getattr(getattr(torch_module, "version", None), "hip", None) else "nvidia"
 
 
+def gpu_close_sizing_vendor() -> str:
+    """Identify the physical replay vendor, including the CUDA shader compiler."""
+    vendor = gpu_vendor()
+    if vendor == "nvidia":
+        import cupy
+        from optimization.gpu.cuda_kernel import shader_vendor
+
+        if shader_vendor(cupy) == "hip":
+            return "amd"
+    return vendor
+
+
 def gpu_device(torch_module=None) -> str:
     if torch_module is None:
         import torch as torch_module

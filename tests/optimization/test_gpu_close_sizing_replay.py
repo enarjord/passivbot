@@ -6,18 +6,18 @@ import pytest
 
 
 @pytest.fixture
-def close_sizing_device(monkeypatch):
+def close_sizing_device():
     torch = pytest.importorskip("torch")
-    if not (torch.cuda.is_available() or torch.backends.mps.is_available()):
-        pytest.skip("actual Metal or CUDA device required")
+    from optimization.gpu.runtime import gpu_vendor
+
+    if gpu_vendor(torch) not in {"apple", "nvidia"}:
+        pytest.skip("actual Metal or NVIDIA CUDA device required")
 
     import passivbot_rust
     from rust_utils import verify_loaded_runtime_extension
 
     assert not getattr(passivbot_rust, "__is_stub__", False)
     verify_loaded_runtime_extension()
-    # Exercise the production runner while hardware qualification is in progress.
-    monkeypatch.setattr("config.gpu.require_gpu_close_sizing_support", lambda **_: None)
 
 
 def assert_fill_summary(fills, result, sides, index=0):
@@ -136,3 +136,32 @@ def test_coin_override_enables_ema_gated_unstuck(
     assert runner.dispatch_unstuck_enabled
     assert runner.dispatch_unstuck_ema_enabled
     assert_fill_summary(fills, result, sides)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_disabled_loss_gate_ignores_dormant_cap(strategy, close_sizing_device):
+    from backtest import run_backtest
+    from optimization.gpu.service import SharedAccountReplay
+    from test_gpu_hsl_multicoin import compare, raw
+
+    sides = ("long", "short")
+    without_cap, inputs = fee_only_replay(strategy, sides, None)
+    candles, markets, config, exchange, btc, timestamps = inputs
+    dormant_config = deepcopy(config)
+    loss_gate = dormant_config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]
+    loss_gate["max_realized_drawdown_fraction"] = 0.42
+    dormant_replay = SharedAccountReplay(
+        config=dormant_config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
+        exchange=exchange, batch_size=2, needed_metrics={
+            "cagr_fraction_strategy_equity", "gross_turnover_ratio_per_day",
+        },
+    )
+
+    expected_fills, _, _ = run_backtest(*inputs)
+    dormant_fills, _, _ = run_backtest(candles, markets, dormant_config, exchange, btc, timestamps)
+    absent_runner, expected = raw(without_cap, [{}])
+    dormant_runner, result = raw(dormant_replay, [{}])
+    assert not absent_runner.loss_gate_enabled and not dormant_runner.loss_gate_enabled
+    assert_fill_summary(expected_fills, expected, sides)
+    assert_fill_summary(dormant_fills, result, sides)
+    compare(expected, result)

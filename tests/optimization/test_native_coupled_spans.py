@@ -13,7 +13,7 @@ from test_native_backend import guard_cpu, inputs, managed_arrays
 from test_native_datasets import contexts
 
 
-def coupled_inputs(manager, strategy, *, pinned=True, coupled=True):
+def coupled_inputs(manager, strategy, *, pinned=True, coupled=True, loss_gate_enabled=False):
     from tools.gpu_parity import build_parser, fixture_inputs
 
     original = inputs(manager)
@@ -28,6 +28,9 @@ def coupled_inputs(manager, strategy, *, pinned=True, coupled=True):
             enabled=False, ema_gating_enabled=True, exposure_trigger_ratio=0.0, loss_allowance_fraction=0.1,
         )
         config["optimize"]["bounds"][side]["strategy"] = {strategy: {}}
+    if loss_gate_enabled:
+        gate = config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]
+        gate.update(enabled=True, max_realized_drawdown_fraction=0.0)
     strategy_bounds = {"ema_span_0_minutes": [2.0, 20.0]}
     if strategy == "trailing_martingale":
         strategy_bounds = {"entry": strategy_bounds}
@@ -57,7 +60,7 @@ def candidate(base, value):
     return optimize.config_to_individual(config, base.bounds, optimization_shape=base.optimization_shape)
 
 
-def registry_for(base, suite):
+def registry_for(base, suite, *, target_vendor=None):
     evaluator = base
     if suite:
         prepared = contexts(base, base.timestamps["binance"], lazy=True)
@@ -65,9 +68,11 @@ def registry_for(base, suite):
         entry = "entry." if kind == "trailing_martingale" else ""
         prepared[1].overrides = {f"bot.long.strategy.{kind}.{entry}ema_span_1_minutes": 3.5}
         evaluator = optimize.SuiteEvaluator(base, prepared, {"default": "mean"})
-    return NativeDatasetRegistry(evaluator, standalone_candle_coins={
-        "binance": ("COIN00", "COIN01", "COIN02"),
-    })
+    return NativeDatasetRegistry(
+        evaluator,
+        standalone_candle_coins={"binance": ("COIN00", "COIN01", "COIN02")},
+        target_vendor=target_vendor,
+    )
 
 
 @pytest.mark.parametrize(
@@ -78,7 +83,7 @@ def registry_for(base, suite):
         ("coin_unstuck", "unstuck exposure sizing"),
     ],
 )
-def test_gpu_rejects_unsupported_v9_close_sizing(policy, error):
+def test_gpu_close_sizing_accepts_qualified_targets_and_device_free_preparation(policy, error):
     from config.gpu import validate_gpu_backtest_config
     from tools.gpu_parity import build_parser, fixture_inputs
 
@@ -87,7 +92,8 @@ def test_gpu_rejects_unsupported_v9_close_sizing(policy, error):
     ]))
     gate = config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]
     gate.update(enabled=False, max_realized_drawdown_fraction=0.0)
-    validate_gpu_backtest_config(config)
+    for target_vendor in (None, "apple", "nvidia", "amd", "none"):
+        validate_gpu_backtest_config(config, target_vendor=target_vendor)
 
     if policy == "gate":
         gate["enabled"] = True
@@ -97,8 +103,22 @@ def test_gpu_rejects_unsupported_v9_close_sizing(policy, error):
         config["coin_overrides"] = {
             "COIN00": {"bot": {"long": {"risk": {"unstuck": {"enabled": True}}}}},
         }
-    with pytest.raises(ValueError, match=error):
-        validate_gpu_backtest_config(config)
+    for target_vendor in (None, "apple", "nvidia"):
+        validate_gpu_backtest_config(config, target_vendor=target_vendor)
+    for target_vendor in ("amd", "none"):
+        with pytest.raises(ValueError, match=error):
+            validate_gpu_backtest_config(config, target_vendor=target_vendor)
+
+
+def test_native_registry_checks_close_sizing_for_known_target(monkeypatch):
+    guard_cpu(monkeypatch)
+    with managed_arrays() as manager:
+        base = coupled_inputs(manager, "trailing_martingale", loss_gate_enabled=True)
+        for target_vendor in (None, "apple", "nvidia"):
+            with registry_for(base, False, target_vendor=target_vendor) as registry:
+                assert registry.planner.prepare("gate-zero", candidate(base, 2.0)).requests
+        with pytest.raises(ValueError, match="AMD ROCm.*realized-loss close sizing.*CPU"):
+            registry_for(base, False, target_vendor="amd")
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])

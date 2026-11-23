@@ -2303,25 +2303,31 @@ def test_suite_materialization_preserves_parameter_and_metric_defaults():
     assert original == [{"long_ema_span_0_minutes": 64}]
 
 
-def test_gpu_config_rejects_unsupported_risk_policy_before_dispatch():
-    from config.gpu import validate_gpu_backtest_config
+@pytest.mark.parametrize(
+    "policy, feature",
+    [("gate", "realized-loss close sizing"), ("coin_unstuck", "unstuck exposure sizing")],
+)
+def test_gpu_replay_rejects_active_close_sizing_on_rocm_before_payload(monkeypatch, policy, feature):
+    from optimization.gpu import service
+    from tools.gpu_parity import build_parser, fixture_inputs
 
-    config = get_expanded_config_prototype()
-    for side in ("long", "short"):
-        config["bot"][side]["risk"]["unstuck"]["enabled"] = False
-    realization = config["bot"]["portfolio"]["risk"]["loss_realization"]
-    validate_gpu_backtest_config(config)
-    realization["loss_gate"]["max_realized_drawdown_fraction"] = 0.0
-    validate_gpu_backtest_config(config)
-    realization["loss_gate"]["enabled"] = True
-    with pytest.raises(ValueError, match="realized-loss close sizing.*CPU"):
-        validate_gpu_backtest_config(config)
-    realization["loss_gate"]["enabled"] = False
-    config["coin_overrides"] = {
-        "BTC": {"bot": {"long": {"risk": {"unstuck": {"enabled": True}}}}}
-    }
-    with pytest.raises(ValueError, match="unstuck exposure sizing.*CPU"):
-        validate_gpu_backtest_config(config)
+    config, *_ = fixture_inputs(build_parser().parse_args([
+        "--fixture", "trailing_martingale", "--sides", "long", "--coins", "2", "--bars", "128",
+    ]))
+    gate = config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]
+    gate.update(enabled=policy == "gate", max_realized_drawdown_fraction=0.0)
+    if policy == "coin_unstuck":
+        config["coin_overrides"] = {
+            "COIN00": {"bot": {"long": {"risk": {"unstuck": {"enabled": True}}}}}
+        }
+    monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
+    monkeypatch.setattr(service, "gpu_device", lambda _: "cuda")
+    monkeypatch.setattr(service, "gpu_vendor", lambda _: "amd")
+    with pytest.raises(ValueError, match=rf"AMD ROCm.*{feature}.*CPU"):
+        SharedAccountReplay(
+            config=config, hlcvs=None, mss={}, btc=None, timestamps=None,
+            exchange="binance", batch_size=1, needed_metrics=["cagr_fraction_strategy_equity"],
+        )
 
 
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])

@@ -121,7 +121,7 @@ def gpu_loss_gate_transport_cap(enabled: bool, cap: float | None) -> float:
 
 
 def validate_gpu_backtest_config(
-    config: dict, *, check_realized_close_policies: bool = True
+    config: dict, *, check_realized_close_policies: bool = True, target_vendor: str | None = None
 ) -> None:
     """Reject unsupported simulation contracts without importing a device runtime."""
     from config.validate import validate_limit_order_fill_buffer_fraction
@@ -152,31 +152,51 @@ def validate_gpu_backtest_config(
     validate_limit_order_fill_buffer_fraction(backtest["limit_order_fill_buffer_fraction"])
     validate_hsl_gpu_inputs(config)
     if check_realized_close_policies:
-        validate_gpu_realized_close_policies(config)
+        validate_gpu_realized_close_policies(config, target_vendor=target_vendor)
 
 
-def require_gpu_close_sizing_support(*, loss_gate_enabled: bool, unstuck_enabled: bool) -> None:
-    """Guard production replay while realized close sizing awaits device qualification."""
-    if loss_gate_enabled:
-        raise ValueError("GPU replay does not support v9 realized-loss close sizing; use a CPU backend")
-    if unstuck_enabled:
-        raise ValueError("GPU replay does not support v9 unstuck exposure sizing; use a CPU backend")
+_CLOSE_SIZING_GPU_VENDORS = frozenset({"apple", "nvidia"})
 
 
-def validate_gpu_realized_close_policies(config: dict) -> None:
+def require_gpu_close_sizing_support(
+    *, target_vendor: str, loss_gate_enabled: bool, unstuck_enabled: bool
+) -> None:
+    """Keep active close sizing on qualified shader runtimes."""
+    if target_vendor in _CLOSE_SIZING_GPU_VENDORS or not (loss_gate_enabled or unstuck_enabled):
+        return
+    platform = "AMD ROCm" if target_vendor == "amd" else "the selected GPU backend"
+    feature = "realized-loss close sizing" if loss_gate_enabled else "unstuck exposure sizing"
+    raise ValueError(f"GPU replay on {platform} does not support v9 {feature}; use a CPU backend")
+
+
+def validate_gpu_realized_close_policies(config: dict, *, target_vendor: str | None = None) -> None:
     from config.bot_inheritance import get_bot_policy, get_side_field_catalog, resolve_bot_policy
     from config.risk_memory import require_loss_realization_policy
+    from optimization.gpu.model import gpu_side_enabled
 
     _, gate_enabled, gate_cap = require_loss_realization_policy(config)
     validate_gpu_loss_gate_policy(gate_enabled, gate_cap)
+    # Configuration preparation is also used without a runtime. The physical
+    # replay entry points always enforce the known device and packed features.
+    if target_vendor is None or target_vendor in _CLOSE_SIZING_GPU_VENDORS:
+        return
+
     bot = config["bot"]
     if get_bot_policy(config) is None:
         bot = resolve_bot_policy(bot, get_side_field_catalog()).effective_view()
+    effective = {**config, "bot": bot}
+    overrides = config.get("coin_overrides") or {}
     unstuck_enabled = any(
-        bot[side]["risk"]["unstuck"]["enabled"] or any(
-            patch.get("bot", {}).get(side, {}).get("risk", {}).get("unstuck", {}).get("enabled")
-            for patch in config.get("coin_overrides", {}).values()
+        gpu_side_enabled(effective, side)
+        and (
+            bot[side]["risk"]["unstuck"]["enabled"]
+            or any(
+                patch.get("bot", {}).get(side, {}).get("risk", {}).get("unstuck", {}).get("enabled")
+                for patch in overrides.values()
+            )
         )
         for side in ("long", "short")
     )
-    require_gpu_close_sizing_support(loss_gate_enabled=gate_enabled, unstuck_enabled=unstuck_enabled)
+    require_gpu_close_sizing_support(
+        target_vendor=target_vendor, loss_gate_enabled=gate_enabled, unstuck_enabled=unstuck_enabled,
+    )

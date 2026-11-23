@@ -371,8 +371,10 @@ strategy before default hydration, including coin overrides and external-file/in
 Explicit unstuck spans win. Converted optimizer bounds copy fixed legacy bounds, or freeze at the migrated starting values for
 varying legacy ranges unless supplied; a warning explains that independent genes cannot preserve
 the old coupled search. New defaults expose tunable spans.
-Use CPU evaluation with active unstuck or the realized-loss gate. GPU optimization
-rejects those policies during preparation.
+Metal and NVIDIA CUDA replay support exposure-targeted unstuck and the portfolio
+realized-loss gate for EMA Anchor and Trailing Martingale. The GPU optimizer validates
+effective scenario and coin policies against its selected backend. AMD ROCm requires CPU
+evaluation for active unstuck or the realized-loss gate.
 
 The opt-in optimizer override `couple_unstuck_ema_spans` derives each side/coin's unstuck pair
 from its effective strategy, after mirroring and fixed/scenario overrides. It removes redundant

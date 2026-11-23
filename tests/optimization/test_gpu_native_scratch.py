@@ -443,7 +443,7 @@ def test_physical_attempt_checks_scratch_before_first_device_allocation(monkeypa
     # strategy/hourly admission has its own complete-layout regression tests.
     monkeypatch.setattr(kernel, "validate_hourly_bootstrap_inputs", lambda *_, **__: None)
     monkeypatch.setattr(kernel, "unstuck_required", lambda *_, **__: False)
-    monkeypatch.setattr("config.gpu.require_gpu_close_sizing_support", lambda **_: None)
+    monkeypatch.setattr(kernel, "gpu_close_sizing_vendor", lambda: "nvidia")
     value._unstuck_ema_overrides = ()
     value.parameter_keys = ("realized_loss_memory_ema_span_minutes", "loss_gate_max_drawdown_fraction")
     value.loss_gate_enabled = True

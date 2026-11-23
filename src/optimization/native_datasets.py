@@ -46,7 +46,8 @@ def _worker_config(config):
 
 
 class NativeDatasetRegistry:
-    def __init__(self, evaluator, *, standalone_candle_coins=None, metrics=None, overrides_list=None):
+    def __init__(self, evaluator, *, standalone_candle_coins=None, metrics=None, overrides_list=None,
+                 target_vendor: str | None = None):
         from optimize import config_to_individual, _canonicalize_optimizer_individual
 
         self._arrays = SharedArrayManager()
@@ -95,7 +96,9 @@ class NativeDatasetRegistry:
                         base.btc_usd_specs.get(exchange), base.timestamps.get(exchange), columns,
                         None, None, requested, len(bindings), getattr(base, "selection_specs", {}).get(exchange),
                     ))
-            self.bindings = self._execution_variants(base, evaluator, bindings, vector, overrides)
+            self.bindings = self._execution_variants(
+                base, evaluator, bindings, vector, overrides, target_vendor=target_vendor,
+            )
             self.planner = NativeCandidatePlanner(evaluator, self.bindings, overrides_list=overrides)
             # Metric surface and effective static inputs must be valid before registration.
             started = time.perf_counter()
@@ -110,7 +113,7 @@ class NativeDatasetRegistry:
             raise
 
     @staticmethod
-    def _execution_variants(base, evaluator, bindings, vector, overrides):
+    def _execution_variants(base, evaluator, bindings, vector, overrides, *, target_vendor):
         from optimize import _canonicalize_optimizer_individual
 
         # Anchors and side enablement have finite choices. All other transported
@@ -154,7 +157,7 @@ class NativeDatasetRegistry:
                         f"GPU search space permits both sides disabled in scenario {binding.scenario!r}; "
                         "constrain at least one side to remain enabled or use a CPU backend"
                     )
-                validate_gpu_backtest_config(effective)
+                validate_gpu_backtest_config(effective, target_vendor=target_vendor)
                 identity = binding.dataset_id if index == 0 else f"{binding.dataset_id}:variant:{index}"
                 dataset = binding.dataset if index == 0 else binding.dataset.with_config(effective)
                 result.append(ScenarioBinding(binding.scenario, identity, dataset))

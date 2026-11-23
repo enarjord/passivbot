@@ -2,6 +2,7 @@
 
 import pytest
 
+from test_gpu_close_sizing_replay import close_sizing_device
 from test_gpu_hsl_multicoin import compare, raw
 from test_gpu_unstuck_lookback import make_inputs
 
@@ -81,12 +82,19 @@ def test_tm_ordinary_close_uses_configured_loss_allowance(sides, coins, memory_s
         assert output[key].item() == pytest.approx(abs(expected), abs=2e-5)
 
 
-@pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
-@pytest.mark.parametrize("slope", [-0.02, 0.0, 0.02])
-@pytest.mark.parametrize("market", [False, True])
-@pytest.mark.parametrize("reducer", ["disabled", "wel", "twel"])
-@pytest.mark.skip(reason="GPU v9 realized-loss close sizing awaits parity with Rust")
-def test_tm_recursive_loss_plan_matches_finalized_rust_orders(sides, slope, market, reducer):
+@pytest.mark.parametrize(
+    "sides,slope",
+    [
+        pytest.param(("long",), -0.02, id="long-decreasing"),
+        pytest.param(("short",), 0.02, id="short-increasing"),
+        pytest.param(("long", "short"), 0.0, id="fused-flat"),
+    ],
+)
+@pytest.mark.parametrize("market", [False, True], ids=["limit", "market"])
+@pytest.mark.parametrize("reducer", ["wel", "twel"])
+def test_tm_recursive_loss_plan_matches_finalized_rust_orders(
+    sides, slope, market, reducer, close_sizing_device,
+):
     from backtest import run_backtest
     from optimization.gpu.service import SharedAccountReplay
 

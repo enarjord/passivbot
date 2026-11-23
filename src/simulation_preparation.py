@@ -33,7 +33,7 @@ def optimizer_data_config(config: dict) -> dict:
 
 
 def validate_optimizer_preparation(
-    config: dict, suite_cfg: dict
+    config: dict, suite_cfg: dict, *, target_vendor: str | None = None
 ) -> None:
     """Validate effective GPU contracts before historical preparation or device imports."""
 
@@ -48,7 +48,8 @@ def validate_optimizer_preparation(
     if effective_config['bot']["portfolio"]['strategy_kind'] != config['bot']["portfolio"]['strategy_kind']:
         raise ValueError("fixed_runtime_overrides may not change bot.portfolio.strategy_kind")
     validate_gpu_backtest_config(
-        effective_config, check_realized_close_policies=not suite_cfg.get("enabled")
+        effective_config, check_realized_close_policies=not suite_cfg.get("enabled"),
+        target_vendor=target_vendor,
     )
     for field in ("batch_size", "max_dispatch_candidate_bars"):
         resolve_gpu_sizing(config["optimize"]["gpu"].get(field), field=field)
@@ -64,7 +65,7 @@ def validate_optimizer_preparation(
         for scenario in scenarios:
             scenario_config = deepcopy(effective_config)
             _apply_config_overrides(scenario_config, dict(scenario.overrides or {}))
-            validate_gpu_backtest_config(scenario_config)
+            validate_gpu_backtest_config(scenario_config, target_vendor=target_vendor)
     elif screening["scenarios"]:
         raise ValueError("GPU screening.scenarios requires a scenario suite")
 

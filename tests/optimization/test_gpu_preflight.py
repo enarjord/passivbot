@@ -1,4 +1,4 @@
-"""Unsupported GPU simulation policies fail on CPU before device preparation."""
+"""GPU simulation policy preflights run independently of shader dispatch."""
 
 from copy import deepcopy
 import builtins
@@ -101,13 +101,38 @@ def test_ema_position_enforcers_rejected_before_device_imports(monkeypatch, side
 
 
 def test_gpu_preflight_checks_only_evaluated_scenario_risk_policy():
-    config = get_template_config()
-    config["optimize"]["backend"] = "gpu"
-    config["bot"]["global"]["risk"]["unstuck"]["enabled"] = True
-    _run_gpu_preparation_preflight(config, dict(enabled=True, scenarios=[
-        dict(label="supported", overrides={"bot.global.risk.unstuck.enabled": False}),
+    from tools.gpu_parity import build_parser, fixture_inputs
+
+    config, *_ = fixture_inputs(build_parser().parse_args([
+        "--fixture", "trailing_martingale", "--sides", "long", "--coins", "2", "--bars", "128",
     ]))
-    with pytest.raises(ValueError, match="unstuck exposure sizing.*CPU"):
+    config["optimize"]["backend"] = "gpu"
+    config["bot"]["long"]["risk"]["unstuck"]["enabled"] = True
+    _run_gpu_preparation_preflight(config, dict(enabled=True, scenarios=[
+        dict(label="supported", overrides={"bot.long.risk.unstuck.enabled": False}),
+    ]), target_vendor="amd")
+    with pytest.raises(ValueError, match="AMD ROCm.*unstuck exposure sizing.*CPU"):
         _run_gpu_preparation_preflight(config, dict(enabled=True, scenarios=[
             dict(label="unsupported", overrides={}),
-        ]))
+        ]), target_vendor="amd")
+
+
+def test_gpu_preflight_validates_active_policy_without_optional_device_imports(monkeypatch):
+    config = get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    gate = config["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]
+    gate.update(enabled=True, max_realized_drawdown_fraction=0.0)
+    original = builtins.__import__
+
+    def guarded(name, *args, **kwargs):
+        if name.split(".")[0] in {"torch", "cupy"}:
+            pytest.fail("CPU-only preparation reached device imports")
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded)
+    for target_vendor in (None, "apple", "nvidia"):
+        _run_gpu_preparation_preflight(config, {"enabled": False}, target_vendor=target_vendor)
+
+    gate["max_realized_drawdown_fraction"] = 1.0
+    with pytest.raises(ValueError, match="max_realized_drawdown_fraction"):
+        _run_gpu_preparation_preflight(config, {"enabled": False})
