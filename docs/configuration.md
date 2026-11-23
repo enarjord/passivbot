@@ -180,9 +180,9 @@ side `approved_coins: null` inherits, while `ignored_coins: null` clears the ign
 Unknown fields are rejected. Runtime/scenario object replacements still obey their complete-object
 validation contracts, including normalized score-weight groups.
 
-`bot.portfolio` owns strategy selection, hedge mode, execution, warmup, the loss gate,
-portfolio HSL policy and shared unstuck realized-PnL memory. These settings have no side overrides.
-The unstuck memory remains one account-wide memory; local unstuck parameters can inherit.
+`bot.portfolio` owns strategy selection, hedge mode, execution, warmup, portfolio HSL policy,
+and the realized-loss policy. Unstuck and the loss gate share one account-wide realized
+drawdown and decay span. Directional unstuck settings can inherit from `bot.global.risk.unstuck`.
 
 For example, this authored config enables long with a common profile:
 
@@ -847,13 +847,13 @@ In this example:
 - `forager.score_weights.volume`: Values 0.0, 0.01, 0.02, ..., 1.0
 - `ema_span_0_minutes` and `ema_span_1_minutes`: Continuous optimization (no step defined)
 
-HSL bounds use `optimize.bounds.<side>.hsl` in coin and position_side modes, with
+Directional HSL bounds use `optimize.bounds.<side>.risk.hsl` in coin and position_side modes, with
 `drawdown_threshold_fraction`, `drawdown_fraction_ema_span_minutes`, `memory_ema_span_minutes`, and
 `cooldown_after_red_minutes` leaves. Portfolio HSL uses `optimize.bounds.portfolio.risk.hsl`.
-Independent slow spans use their canonical consumer-owned bound blocks. There is no
-restart-policy field. Use independent ordinary account-equity definitions for cross-version
-economic comparison; HSL signal metrics are model-dependent and all fitness is recomputed
-after migration.
+For unstuck and the loss gate, use one portfolio bound at
+`optimize.bounds.portfolio.risk.loss_realization.memory_ema_span_minutes`. HSL has no
+restart-policy field. Compare ordinary account equity across versions. HSL signal metrics
+depend on the risk model. Recompute fitness after migration.
 
 **Validation:**
 

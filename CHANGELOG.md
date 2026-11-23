@@ -1152,12 +1152,10 @@ its own version heading. See [release status](docs/releases.md).
   subtraction or close-wave sum noise; genuinely undersized remainders still close
   in full.
 
-- Adopt the final canonical v9 config with independent HSL, unstuck and loss-gate slow spans;
-  HSL ratio smoothing remains separate. Keep local unstuck controls under each side and put
-  portfolio risk policy under `bot.portfolio`. Share ordered fills and risk arithmetic while retaining
-  separate enabled accumulators and recording each fill once in the economic ledger. Gate-only
-  configurations retain their own realized memory. Preserve raw accounting versus snapped sizing,
-  full loss/fee debits, profit paydown, batch reservations, final sizing and panic exemptions.
+- HSL tracks equity drawdown per policy and separately smooths its drawdown ratio.
+  Unstuck and the portfolio loss gate consume each net-realized fill once through shared
+  account-wide memory, including when only one policy is enabled. The GPU parity and
+  cohort fixtures expose its span as `--realized-loss-memory-ema-span-minutes`.
 
 - Remove trailing-grid-v7 and its migration command, Defx/Paradex adapters, DEAP search,
   legacy `_w` formulas and dependent aliases, obsolete GPU proxy/directional/layout interfaces,

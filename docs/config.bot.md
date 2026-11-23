@@ -1,12 +1,13 @@
 # Bot Configuration Deep Dive
 
 Account-wide strategy selection, hedge mode, execution, warmup, HSL scope and portfolio policy,
-loss-gate policy, and unstuck realized memory live under `bot.portfolio`. `bot.global` supplies
+and realized-loss policy live under `bot.portfolio`. `bot.global` supplies
 defaults for registered inheritable directional leaves, including the active strategy, local risk,
 universe, forager, HSL and unstuck parameters. Sparse `bot.long`/`bot.short` objects override
-individual leaves; omission inherits and explicit equal values remain pins. HSL, unstuck, and
-loss-gate memories remain independent. Portfolio HSL policy is
-explicit and is never inferred from directional policies.
+individual leaves; omission inherits and explicit equal values remain pins. Each HSL policy
+tracks its own equity drawdown. Unstuck and the portfolio loss gate share one account-wide
+realized drawdown and one decay span at `bot.portfolio.risk.loss_realization.memory_ema_span_minutes`.
+Portfolio HSL requires an explicit policy.
 Optimizer bounds mirror these scopes. A global bound is one coordinate for inheriting sides;
 a side bound creates its own coordinate, while an explicit side value without a side bound
 stays fixed. Omitted domains never open recommended ranges. Exposure limits remain per side,
