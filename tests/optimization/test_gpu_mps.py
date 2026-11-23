@@ -341,7 +341,15 @@ kernel void passivbot_ema_multicoin_side_state_isolation_probe(
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-def test_mps_ema_multicoin_fused_reducers_share_loss_budget_and_fallback():
+@pytest.mark.parametrize(
+    "cap,long_order",
+    [
+        pytest.param(0.006, [0.0, 0.0, 0.0, 0.0], id="no-headroom-after-short"),
+        pytest.param(0.011, [1.0, 1.0, 1.0, 1.0], id="same-sized-unstuck-wins"),
+        pytest.param(0.012, [2.0, 1.0, 1.0, 0.0], id="positive-quota-rounds-up"),
+    ],
+)
+def test_mps_ema_multicoin_fused_reducers_share_loss_budget_and_fallback(cap, long_order):
     import passivbot_rust
 
     probe_kernel = r"""
@@ -350,54 +358,23 @@ kernel void passivbot_ema_multicoin_fused_reducer_budget_probe(
     constant float* bars,
     constant float* coin_settings,
     device float* output,
+    constant float& cap,
     uint b [[thread_position_in_grid]]
 ) {
     if (b > 0) return;
     EmaMulticoinSideState long_side = {};
     EmaMulticoinSideState short_side = {};
-    for (int c = 0; c < MAX_COINS; ++c) {
-        long_side.psize[c] = 0.0f;
-        long_side.pprice[c] = 0.0f;
-        long_side.close_qty[c] = 0.0f;
-        long_side.close_tick[c] = 0;
-        long_side.close_market[c] = false;
-        long_side.secondary_close_qty[c] = 0.0f;
-        long_side.secondary_close_tick[c] = 0;
-        long_side.secondary_close_market[c] = false;
-        long_side.twel_close_qty[c] = 0.0f;
-        long_side.twel_close_tick[c] = 0;
-        long_side.unstuck_close_qty[c] = 0.0f;
-        long_side.unstuck_close_tick[c] = 0;
-        long_side.close_is_protective_reducer[c] = false;
-        long_side.close_is_unstuck_reducer[c] = false;
-        long_side.close_is_hsl_panic[c] = false;
-
-        short_side.psize[c] = 0.0f;
-        short_side.pprice[c] = 0.0f;
-        short_side.close_qty[c] = 0.0f;
-        short_side.close_tick[c] = 0;
-        short_side.close_market[c] = false;
-        short_side.secondary_close_qty[c] = 0.0f;
-        short_side.secondary_close_tick[c] = 0;
-        short_side.secondary_close_market[c] = false;
-        short_side.twel_close_qty[c] = 0.0f;
-        short_side.twel_close_tick[c] = 0;
-        short_side.unstuck_close_qty[c] = 0.0f;
-        short_side.unstuck_close_tick[c] = 0;
-        short_side.close_is_protective_reducer[c] = false;
-        short_side.close_is_unstuck_reducer[c] = false;
-        short_side.close_is_hsl_panic[c] = false;
-    }
-
-    // The long preferred TWEL close loses 15 and cannot spend the 10 budget.
-    // Its unstuck fallback loses 5. The short TWEL close loses 6, wins the
-    // next global quantity comparison, and leaves only 4 for that fallback.
+    // The short TWEL close wins the global priority and spends 6 first.
+    // The remaining quota, at 5 loss per long lot, determines the nominee.
     long_side.psize[0] = 5.0f;
     long_side.pprice[0] = 105.0f;
     long_side.twel_close_qty[0] = 3.0f;
     long_side.twel_close_tick[0] = 100;
     long_side.unstuck_close_qty[0] = 1.0f;
     long_side.unstuck_close_tick[0] = 100;
+    long_side.unstuck_close_allowance[0] = 10.0f;
+    long_side.unstuck_close_wel[0] = 1.0f;
+    long_side.unstuck_close_trigger[0] = 0.1f;
 
     short_side.psize[1] = 5.0f;
     short_side.pprice[1] = 97.0f;
@@ -405,11 +382,12 @@ kernel void passivbot_ema_multicoin_fused_reducer_budget_probe(
     short_side.twel_close_tick[1] = 100;
 
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    // This probe uses zero slippage and an aligned touch in both directions.
     finalize_ema_multicoin_reducers_fused(
-        market_execution_ticks,
+        market_execution_ticks, market_execution_ticks,
         long_side, short_side, account,
         bars, coin_settings, 1, 2,
-        true, true, true, 0.0f, 0.0f, 0.01f, true
+        true, true, true, 0.0f, cap, true
     );
 
     output[0] = long_side.close_qty[0];
@@ -475,11 +453,12 @@ kernel void passivbot_ema_multicoin_fused_reducer_budget_probe(
         bars,
         coin_settings,
         output,
+        cap,
         threads=(1, 1, 1),
     )
     synchronize()
 
-    assert output.cpu().tolist() == [0.0, 0.0, 0.0, 0.0, 2.0, 1.0, 1.0, 0.0]
+    assert output.cpu().tolist() == long_order + [2.0, 1.0, 1.0, 0.0]
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
@@ -1015,7 +994,7 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides, coin_fill_counts,
         0, 1, 1, false, true, true, false,
-        1.0f, false, 0.0f, 0.0f, false, long_equity
+        false, 0.0f, 0.0f, false, long_equity
     );
     bool short_entry = process_tm_multicoin_side_fills(
         market_execution_ticks,
@@ -1024,7 +1003,7 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides, coin_fill_counts,
         0, 1, 1, true, true, true, false,
-        1.0f, false, 0.0f, 0.0f, false, short_equity
+        false, 0.0f, 0.0f, false, short_equity
     );
     long_side.close_qty[0] = 1.0f;
     short_side.close_qty[0] = 1.0f;
@@ -1039,7 +1018,7 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides, coin_fill_counts,
         0, 2, 1, false, true, true, false,
-        1.0f, false, 0.0f, 0.0f, false, long_equity
+        false, 0.0f, 0.0f, false, long_equity
     );
     bool short_close = process_tm_multicoin_side_fills(
         market_execution_ticks,
@@ -1048,7 +1027,7 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides, coin_fill_counts,
         0, 2, 1, true, true, true, false,
-        1.0f, false, 0.0f, 0.0f, false, short_equity
+        false, 0.0f, 0.0f, false, short_equity
     );
     output[0] = long_entry && short_entry && long_close && short_close
         ? 1.0f : 0.0f;
@@ -1339,16 +1318,14 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 1, false, true, 1, 1, 0, false, 1.0f,
-        false, 0.001f, 0.0f, -2, 0ul
+        1, 1, false, true, 1, 1, 0, false, false, 0.001f, 0ul
     );
     generate_tm_multicoin_side_orders(
         short_side, short_config, account,
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 1, true, true, 1, 1, 0, false, 1.0f,
-        false, 0.001f, 0.0f, -2, 0ul
+        1, 1, true, true, 1, 1, 0, false, false, 0.001f, 0ul
     );
     output[0] = long_side.entry_qty[0];
     output[1] = short_side.entry_qty[0];
@@ -1363,8 +1340,7 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 1, false, true, 1, 1, 0, false, 1.0f,
-        false, 0.001f, 0.0f, -2, 1ul
+        1, 1, false, true, 1, 1, 0, false, false, 0.001f, 1ul
     );
     output[8] = long_side.entry_qty[0];
     output[9] = long_side.entry_candidate[0] ? 1.0f : 0.0f;
@@ -2095,15 +2071,15 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
     generate_ema_multicoin_side_orders(
         long_side, long_config, account,
-        bars, touch_ticks, coin_settings, coin_overrides,
+        bars, touch_ticks, touch_ticks, coin_settings, coin_overrides,
         1, 1, false, true, 1, 1, 0,
-        false, 0.001f, -2, 0ul
+        false, 0.001f, 0ul
     );
     generate_ema_multicoin_side_orders(
         short_side, short_config, account,
-        bars, touch_ticks, coin_settings, coin_overrides,
+        bars, touch_ticks, touch_ticks, coin_settings, coin_overrides,
         1, 1, true, true, 1, 1, 0,
-        false, 0.001f, -2, 0ul
+        false, 0.001f, 0ul
     );
     output[0] = long_side.entry_qty[0];
     output[1] = short_side.entry_qty[0];
@@ -2115,9 +2091,9 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     output[7] = account.realized_pnl_total;
     generate_ema_multicoin_side_orders(
         long_side, long_config, account,
-        bars, touch_ticks, coin_settings, coin_overrides,
+        bars, touch_ticks, touch_ticks, coin_settings, coin_overrides,
         1, 1, false, true, 1, 1, 0,
-        false, 0.001f, -2, 1ul
+        false, 0.001f, 1ul
     );
     output[8] = long_side.entry_qty[0];
     output[9] = long_side.entry_candidate[0] ? 1.0f : 0.0f;
@@ -2202,7 +2178,6 @@ def _tm_twel_enforcer_fields(
     enabled=False,
     unstuck_enabled=False,
     unstuck_ema_gating_enabled=True,
-    reserved_unstuck_sizing_slot=0.1,
     unstuck_ema_distance_fraction=0.0,
     unstuck_loss_allowance_fraction=0.1,
     unstuck_exposure_trigger_ratio=0.5,
@@ -2211,7 +2186,7 @@ def _tm_twel_enforcer_fields(
         float(enabled),
         float(unstuck_enabled),
         float(unstuck_ema_gating_enabled),
-        reserved_unstuck_sizing_slot,
+        0.0,
         unstuck_ema_distance_fraction,
         unstuck_loss_allowance_fraction,
         unstuck_exposure_trigger_ratio,
@@ -2236,7 +2211,7 @@ _ADAPTIVE_DISABLED_VALUES = dict(
 _UNSTUCK_DISABLED_VALUES = {
     "unstuck_enabled": 0.0,
     "unstuck_ema_gating_enabled": 1.0,
-    "reserved_unstuck_sizing_slot": 0.1,
+    "reserved_unstuck_sizing_slot": 0.0,
     "unstuck_ema_distance_fraction": 0.0,
     "unstuck_loss_allowance_fraction": 0.1,
     "unstuck_exposure_trigger_ratio": 0.5,
@@ -2989,7 +2964,7 @@ def _multicoin_exposure_fixture(
             "unstuck_ema_span_1_minutes": 3.0,
             **_HSL_DISABLED_VALUES,
         "realized_loss_memory_ema_span_minutes": 43200.0,
-        "reserved_realized_memory_slot": 0.0,
+        "loss_gate_max_drawdown_fraction": 0.0,
         }
         row = [values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
         runner = MpsEmaAnchorMulticoinRunner(
@@ -3059,7 +3034,7 @@ def _multicoin_exposure_fixture(
             "unstuck_ema_span_1_minutes": 3.0,
             **_HSL_DISABLED_VALUES,
         "realized_loss_memory_ema_span_minutes": 43200.0,
-        "reserved_realized_memory_slot": 0.0,
+        "loss_gate_max_drawdown_fraction": 0.0,
         }
         row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
         runner = MpsTrailingMartingaleMulticoinRunner(
@@ -4334,22 +4309,17 @@ kernel void passivbot_ema_multicoin_tail_twel_probe(
     side.pprice[0] = 100.0f;
     side.pprice[1] = 100.0f;
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
-    float selected_entry_distance_fraction = -INFINITY;
-    int selected_unstuck = select_ema_multicoin_unstuck_coin(
-        side, config, account, bars, touch_ticks, coin_settings,
-        coin_overrides, 1, 2, short_side, 1, selected_entry_distance_fraction
-    );
     generate_ema_multicoin_side_orders(
         side, config, account,
-        bars, touch_ticks, coin_settings, coin_overrides,
+        bars, touch_ticks, touch_ticks, coin_settings, coin_overrides,
         1, 2, short_side, true, 1, 1, 0,
-        false, 0.001f, -2, 0ul
+        false, 0.001f, 0ul
     );
     output[0] = side.twel_close_qty[0];
     output[1] = side.twel_close_qty[1];
     output[2] = side.unstuck_close_qty[0];
     output[3] = side.unstuck_close_qty[1];
-    output[4] = float(selected_unstuck);
+    output[4] = output[2] > 0.0f ? 0.0f : (output[3] > 0.0f ? 1.0f : -1.0f);
     output[5] = accumulate_ema_multicoin_side_unrealized_pnl(
         side, bars, coin_settings, 1, 2, short_side, 0.0f
     );
@@ -4397,24 +4367,18 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
     side.pprice[0] = 100.0f;
     side.pprice[1] = 100.0f;
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
-    float selected_entry_distance_fraction = -INFINITY;
-    int selected_unstuck = select_tm_multicoin_unstuck_coin(
-        side, config, account, bars, touch_ticks, coin_settings,
-        coin_overrides, 1, 2, short_side, 1, selected_entry_distance_fraction
-    );
     generate_tm_multicoin_side_orders(
         side, config, account,
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 2, short_side, true, 1, 1, 0, false, 1.0f,
-        false, 0.001f, 0.0f, -2, 0ul
+        1, 2, short_side, true, 1, 1, 0, true, false, 0.001f, 0ul
     );
     output[0] = side.twel_close_qty[0];
     output[1] = side.twel_close_qty[1];
-    output[2] = side.unstuck_close_qty[0];
-    output[3] = side.unstuck_close_qty[1];
-    output[4] = float(selected_unstuck);
+    output[2] = side.close_admission[0].valid ? side.close_admission[0].reducers[2].qty : 0.0f;
+    output[3] = side.close_admission[1].valid ? side.close_admission[1].reducers[2].qty : 0.0f;
+    output[4] = output[2] > 0.0f ? 0.0f : (output[3] > 0.0f ? 1.0f : -1.0f);
     output[5] = accumulate_tm_multicoin_side_unrealized_pnl(
         side, bars, coin_settings, 1, 2, short_side, 0.0f
     );
@@ -4461,7 +4425,6 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
             "twel_enforcer_reduce_portfolio": 1.0,
             "unstuck_enabled": 1.0,
             "unstuck_ema_gating_enabled": 0.0,
-            "reserved_unstuck_sizing_slot": 0.1,
             "unstuck_loss_allowance_fraction": 1.0,
             "unstuck_exposure_trigger_ratio": 0.1,
         }
@@ -5694,7 +5657,8 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "secondary_close_qty" in source
     assert "finalize_ema_multicoin_reducers_one_side(" in source
     assert "finalize_ema_multicoin_reducers_fused(" in source
-    assert "gate_ema_multicoin_close(" in source
+    assert "size_capped_replay_unstuck(" in source
+    assert "finalize_ema_multicoin_closes(" in source
     assert "realized_loss_proxy_allows_close" not in source
     assert "day_min_balance" not in source
     assert "coin_override_or" in source
@@ -5751,7 +5715,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         unstuck_ema_span_0_minutes=2.0,
         unstuck_ema_span_1_minutes=3.0,
         realized_loss_memory_ema_span_minutes=43200.0,
-        reserved_realized_memory_slot=0.0,
+        loss_gate_max_drawdown_fraction=0.0,
     )
     parameter_values.update(_UNSTUCK_DISABLED_VALUES)
     parameter_values.update(_HSL_DISABLED_VALUES)
@@ -7439,7 +7403,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         forager_log_range_ema_span_minutes=60., forager_score_weights_ema_readiness=1.,
         n_positions=2., twel_entry_gate_enabled=1., twel_enforcer_threshold_ratio=1.,
         unstuck_ema_span_0_minutes=2., unstuck_ema_span_1_minutes=3.,
-        realized_loss_memory_ema_span_minutes=43200., reserved_realized_memory_slot=43200.)
+        realized_loss_memory_ema_span_minutes=43200., loss_gate_max_drawdown_fraction=0.0)
     candidate_values.update(_UNSTUCK_DISABLED_VALUES)
     candidate_values.update(_ADAPTIVE_DISABLED_VALUES)
     candidate_values.update(_HSL_DISABLED_VALUES)
@@ -7736,7 +7700,7 @@ def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
         )
     values.update(
         unstuck_ema_span_0_minutes=17.25, unstuck_ema_span_1_minutes=211.75,
-        realized_loss_memory_ema_span_minutes=43200.0, reserved_realized_memory_slot=0.0,
+        realized_loss_memory_ema_span_minutes=43200.0, loss_gate_max_drawdown_fraction=0.0,
     )
     side_row = [values[key] for key in param_keys]
     params = np.asarray([side_row + side_row], dtype=np.float64)
@@ -7873,7 +7837,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "unstuck_ema_span_1_minutes": 3.0,
         **_HSL_DISABLED_VALUES,
         "realized_loss_memory_ema_span_minutes": 43200.0,
-        "reserved_realized_memory_slot": 0.0,
+        "loss_gate_max_drawdown_fraction": 0.0,
     }
 
     def side_row(signal_mode):
@@ -8224,7 +8188,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "unstuck_ema_span_1_minutes": 3.0,
         **_HSL_DISABLED_VALUES,
         "realized_loss_memory_ema_span_minutes": 43200.0,
-        "reserved_realized_memory_slot": 0.0,
+        "loss_gate_max_drawdown_fraction": 0.0,
     }
     row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
@@ -8480,7 +8444,7 @@ def _tm_parameter_row():
     values.update(_ADAPTIVE_DISABLED_VALUES)
     values.update(unstuck_ema_span_0_minutes=2.0, unstuck_ema_span_1_minutes=3.0,
                   realized_loss_memory_ema_span_minutes=43200.0,
-                  reserved_realized_memory_slot=0.0)
+                  loss_gate_max_drawdown_fraction=0.0)
     return [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
 
 
@@ -8654,8 +8618,7 @@ kernel void passivbot_tm_multicoin_market_wel_reservation_probe(
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 1, short_side, true, 1, 1, 0, false, 1.0f,
-        true, 1.1f, 0.0f, -2, 0ul
+        1, 1, short_side, true, 1, 1, 0, false, true, 1.1f, 0ul
     );
     output[0] = side.close_qty[0];
     output[1] = side.close_grid_gen_psize[0];
@@ -8811,7 +8774,7 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides, coin_fill_counts,
         0, 1, 1, false, true, false, false,
-        1.0f, true, 0.0f, 0.001f, false, hsl_equity_before_fills
+        true, 0.0f, 0.001f, false, hsl_equity_before_fills
     );
     output[0] = side.psize[0];
     output[1] = fills.fill_count;

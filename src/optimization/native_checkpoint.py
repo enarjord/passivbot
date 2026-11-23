@@ -11,7 +11,7 @@ from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_cont
 from optimization.gpu.search_budget import CudaMaxSearchBudget
 
 
-CHECKPOINT_VERSION = 4
+CHECKPOINT_VERSION = 5
 
 
 def checkpoint_config(config, contract):

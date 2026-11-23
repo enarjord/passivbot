@@ -9132,6 +9132,9 @@ mod core {
                 (true, [(93.0, 94.0, 93.0), (90.0, 91.0, 90.0)], "b"),
                 // Equal signed distances and normalized resting gaps use name.
                 (true, [(87.5, 87.5, 87.5), (90.0, 90.0, 90.0)], "a"),
+                // Both are down 15%. A binary rounding artifact must not favor the short.
+                (true, [(85.0, 85.0, 85.0), (92.0, 92.0, 92.0)], "a"),
+                (false, [(85.0, 85.0, 85.0), (92.0, 92.0, 92.0)], "a"),
             ];
             for (post_only, quotes, winner) in cases {
                 for permutation in [[0, 1], [1, 0]] {

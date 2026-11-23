@@ -259,6 +259,10 @@ Only one unstuck close can survive reducer arbitration per planning batch.
 Lossy reducers and ordinary closes use the fillability and price priority
 described in the [risk model](v9_risk_model.md).
 
+Metal and NVIDIA CUDA optimizer replays support exposure-targeted unstuck and the active
+portfolio loss gate for EMA Anchor and Trailing Martingale. For these policies, use the CPU
+backend on AMD ROCm.
+
 `unstuck.ema_distance_fraction` must keep the EMA-derived trigger price positive:
 - `bot.long.risk.unstuck.ema_distance_fraction > -1.0`
 - `bot.short.risk.unstuck.ema_distance_fraction < 1.0`

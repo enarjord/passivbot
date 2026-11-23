@@ -496,8 +496,10 @@ def run_backend(*, config, evaluator_for_pool, recorder, overrides_list,
         # Metal max sizes its first cohort before the registry owns input buffers.
         state = build_initial_state(candidate_limit)
 
-    with NativeDatasetRegistry(evaluator_for_pool, standalone_candle_coins=standalone_candle_coins,
-                               overrides_list=overrides_list) as registry:
+    with NativeDatasetRegistry(
+        evaluator_for_pool, standalone_candle_coins=standalone_candle_coins,
+        overrides_list=overrides_list, target_vendor=getattr(evaluator_for_pool, "_gpu_target_vendor", None),
+    ) as registry:
         startup_limit = candidate_limit
         if device == "cuda" and batch_size is None:
             from optimization.native_planner_capacity import cuda_plan_parallel_window

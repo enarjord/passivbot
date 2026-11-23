@@ -500,7 +500,7 @@ hard crash. Native evolution restores the checkpoint's cohort and generation sta
 archive row counts do not determine its generation budget. Perfect replay of scheduling
 is not required, and the result log, Pareto files and checkpoint are not a single transaction.
 An initial zero-result checkpoint can resume before its first completed seed/candidate.
-Version 4 retains compact partial screening evidence separately from fitness
+Version 5 retains compact partial screening evidence separately from fitness
 and distinguishes screening, promoted full evaluation and idle stages. Row-cache loss may
 repeat GPU work, while already checkpointed selection progress is retained. Earlier
 experimental native and screening/validation checkpoints require a fresh run; saved result
@@ -530,17 +530,18 @@ copying candle histories. Numeric candidate values still travel in compact reque
 Continuous changes to dataset-owned coin patches remain explicit errors. Search spaces
 with a reachable both-sides-disabled execution view are rejected before evolution;
 constrain at least one side to remain enabled. EMA Anchor position-exposure enforcers
-on an enabled side, including coin overrides, require the CPU backend. Measured parity, specialized/general equivalence and resource limits are recorded in the
-acceptance map. They certify the stated cases rather than every possible trajectory.
+on an enabled side, including coin overrides, require the CPU backend. The acceptance
+map records the measured parity, specialized/general equivalence and resource limits
+for its stated cases.
 
 Prepared market execution prices use tick ABI 1. Rust selects SELL/BUY counts from the
 original f64 closes and slippage before f32 packing; active counts must be uniquely
 representable positive int32 values. Preparation rejects unrepresentable active prices.
 Each candle/coin adds two int32 values (eight bytes). Packing remains chunked, with bounded
 conversion scratch and shared price-step metadata for each coin within a chunk. Original f64
-slippage and the ABI participate in immutable packing and
-residency identity. Prepared execution contract version 6 rejects older layouts; source
-and evaluation identities also prevent reuse of incompatible saved fitness.
+slippage and the ABI participate in immutable packing and residency identity.
+The prepared execution contract checks the layout. Source and evaluation identities
+prevent reuse of incompatible saved fitness.
 
 Each replay attempt packs its current end-step limits with the small readonly sizes
 prefix in a fresh control tensor. This keeps stop limits current when a batch shape is
@@ -634,17 +635,15 @@ EMA/TM runner constructors reject execution with a capability error directing ca
 to `NativeBacktestService`, including one-coin datasets. Compiler specialization and adaptive dispatch select execution
 policy within the native service.
 
-The final v9 GPU evaluator supports configurations with both the portfolio loss
-gate and auto-unstuck disabled. Metal and CUDA reject either active policy before
-dispatch because the native GPU sizing path does not implement the final allocation
-contract. Use the CPU evaluator for those cases. The requirement also applies to
-effective scenario and coin overrides.
+The Metal and NVIDIA CUDA evaluators support the portfolio realized-loss gate
+and exposure-targeted unstuck for EMA Anchor and Trailing Martingale. The optimizer
+checks the effective scenario and coin policies before replay. Active policies require
+CPU evaluation on AMD ROCm.
 
 The transport requires explicit loss-gate enablement and a separate nullable cap.
 A disabled gate with a valid dormant cap has the same device behavior as a disabled
-gate with its cap omitted. The shared GPU risk accumulator holds one realized-loss
-memory. The supported optimizer dispatches leave it inactive, while HSL retains its
-own equity memory and behavior.
+gate with its cap omitted. Active loss admission and unstuck share one account-wide
+realized-loss memory. HSL retains its own equity memory.
 
 GPU HSL time-in-red reporting includes both current panic and terminal cooldown.
 Reporting state is separate from the panic tier used by the simulation; counting

@@ -371,8 +371,10 @@ strategy before default hydration, including coin overrides and external-file/in
 Explicit unstuck spans win. Converted optimizer bounds copy fixed legacy bounds, or freeze at the migrated starting values for
 varying legacy ranges unless supplied; a warning explains that independent genes cannot preserve
 the old coupled search. New defaults expose tunable spans.
-Use CPU evaluation with active unstuck or the realized-loss gate. GPU optimization
-rejects those policies during preparation.
+Metal and NVIDIA CUDA replay support exposure-targeted unstuck and the portfolio
+realized-loss gate for EMA Anchor and Trailing Martingale. The GPU optimizer validates
+effective scenario and coin policies against its selected backend. AMD ROCm requires CPU
+evaluation for active unstuck or the realized-loss gate.
 
 The opt-in optimizer override `couple_unstuck_ema_spans` derives each side/coin's unstuck pair
 from its effective strategy, after mirroring and fixed/scenario overrides. It removes redundant
@@ -472,9 +474,10 @@ Remaining alternatives are re-evaluated against the shared headroom after each r
 
 Within the reducer tier and the ordinary tier, immediately executable closes take priority,
 followed by favorable signed entry distance at executable touch. Passive closes are ranked
-by normalized distance to their resting touch, then signed entry distance. Canonical order
-identity resolves ties across both sides and all symbols. CPU risk planning uses completed
-market observations. The projected route determines fees and loss, while subsequent candles
+by normalized distance to their resting touch, then signed entry distance. The rank keys
+round these binary32 fractions to the nearest multiple of `2^-20`, with halfway values
+rounded away from zero. Canonical order identity resolves equal keys across sides and
+symbols. CPU risk planning uses completed market observations. The projected route determines fees and loss, while subsequent candles
 determine simulated fills. Limit fills in the candle simulator use its resting-maker contract.
 
 Ordinary grid, trailing and EMA-anchor closes share the remaining position capacity. The

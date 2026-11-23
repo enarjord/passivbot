@@ -136,8 +136,13 @@ Panic bypasses the loss gate. For each other position, Rust compares protective 
 at their admissible sizes and reserves one final reducer before ordinary closes. Competing
 lossy orders within each tier share a long/short account budget. Fillable routes come first,
 then the most favorable signed entry distance. Passive orders use distance to the resting
-touch, signed entry distance and stable order identity. Backtest priority uses its decision
-snapshot of completed bars. Later candle prices determine whether selected orders can fill.
+touch, signed entry distance and stable order identity. CPU and GPU close allocation express
+these two scale-one fractions as binary32 and round to the nearest multiple of `2^-20`
+(about 0.000095 percentage points), with halfway values rounded away from zero. Equal rank
+keys use canonical symbol, side and order identity. Execution prices, fees, projected loss,
+venue minimums and quantity budgets retain their own arithmetic. Backtest priority uses its
+decision snapshot of completed bars. Later candle prices determine whether selected orders
+can fill.
 
 For unstuck, the observed exposure ratio must be strictly above the trigger. The quantity
 rounded down to the exposure floor must leave positive projected raw balance and lower
@@ -150,8 +155,8 @@ attempts against the budget. Matched resting ideals are reserved once. When an o
 conflicts with its replacement, confirmation must account for cancels and fills before a new
 allocation can fund the replacement. Bitunix uses its standard create path with the gate enabled.
 
-CPU replay implements both policies. The Metal and CUDA optimization paths currently
-require both the loss gate and unstuck to be disabled. Active policies require the CPU backend.
+CPU replay supports both policies. Metal and NVIDIA CUDA optimizer replays support them
+for EMA Anchor and Trailing Martingale. Use the CPU backend for active policies on AMD ROCm.
 Use fresh evaluation for the changed optimizer search space and order behavior.
 
 ## Bootstrap, correction and restart

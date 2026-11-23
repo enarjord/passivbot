@@ -150,8 +150,11 @@ COUPLED_UNSTUCK_EMA_SOURCE_KEYS = {
 }
 
 
-GLOBAL_RISK_PARAM_KEYS = ("realized_loss_memory_ema_span_minutes",)
-RESERVED_RISK_PARAM_KEYS = ("reserved_unstuck_sizing_slot", "reserved_realized_memory_slot")
+GLOBAL_RISK_PARAM_KEYS = (
+    "realized_loss_memory_ema_span_minutes",
+    "loss_gate_max_drawdown_fraction",
+)
+RESERVED_RISK_PARAM_KEYS = ("reserved_unstuck_sizing_slot",)
 
 HSL_PARAM_KEYS = (
     "hsl_enabled",
@@ -234,7 +237,6 @@ EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
     *UNSTUCK_EMA_PARAM_KEYS,
     *ADAPTIVE_PARAM_KEYS,
     *GLOBAL_RISK_PARAM_KEYS,
-    "reserved_realized_memory_slot",
 )
 
 TRAILING_MARTINGALE_PARAM_KEYS = (
@@ -284,7 +286,6 @@ TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
     *UNSTUCK_EMA_PARAM_KEYS,
     *ADAPTIVE_PARAM_KEYS,
     *GLOBAL_RISK_PARAM_KEYS,
-    "reserved_realized_memory_slot",
 )
 
 TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (

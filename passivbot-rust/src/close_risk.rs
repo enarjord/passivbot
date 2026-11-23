@@ -189,6 +189,24 @@ pub(crate) fn project_close(
     .then_some(projection)
 }
 
+/// Normalize order ranking to a shared binary32 lattice with a 2^-20 fraction
+/// quantum. Keep economic projections at their original precision.
+fn close_rank_bucket(fraction: f64) -> f32 {
+    const SCALE: f32 = 1_048_576.0;
+    let fraction = fraction as f32;
+    // At |fraction| >= 16, binary32 already has a spacing of at least 2^-20.
+    let ranked = if fraction.abs() < 16.0 {
+        (fraction * SCALE).round() / SCALE
+    } else {
+        fraction
+    };
+    if ranked == 0.0 {
+        0.0
+    } else {
+        ranked
+    }
+}
+
 /// Executable closes compare entry-relative touch; passive closes compare
 /// distance to their own resting touch first.
 pub(crate) fn close_fill_priority(
@@ -197,32 +215,25 @@ pub(crate) fn close_fill_priority(
     position_price: f64,
     book: &OrderBook,
     immediately_executable: bool,
-) -> (bool, f64, f64) {
-    use crate::utils::{
-        calc_ask_order_price_gap_fraction, calc_bid_order_price_gap_fraction,
-        calc_signed_entry_distance_fraction,
-    };
+) -> (bool, f32, f32) {
     let short = pside == PositionSide::Short;
     let (gap, reference_price) = if immediately_executable {
         (0.0, if short { book.ask } else { book.bid })
     } else {
-        let gap = if short {
-            calc_bid_order_price_gap_fraction(price, book.bid)
-        } else {
-            calc_ask_order_price_gap_fraction(price, book.ask)
-        };
-        (gap.abs(), price)
+        let touch = if short { book.bid } else { book.ask };
+        (close_rank_bucket(((price - touch) / touch).abs()), price)
     };
-    (
-        immediately_executable,
-        gap,
-        calc_signed_entry_distance_fraction(pside.to_pside_int(), position_price, reference_price),
-    )
+    let distance = if short {
+        (position_price - reference_price) / position_price
+    } else {
+        (reference_price - position_price) / position_price
+    };
+    (immediately_executable, gap, close_rank_bucket(distance))
 }
 
 pub(crate) fn compare_close_fill_priority(
-    (a_immediate, a_gap, a_distance): (bool, f64, f64),
-    (b_immediate, b_gap, b_distance): (bool, f64, f64),
+    (a_immediate, a_gap, a_distance): (bool, f32, f32),
+    (b_immediate, b_gap, b_distance): (bool, f32, f32),
 ) -> std::cmp::Ordering {
     b_immediate
         .cmp(&a_immediate)
@@ -378,6 +389,80 @@ mod tests {
         )
         .unwrap();
         (projection, exchange)
+    }
+
+    #[test]
+    fn close_rank_buckets_preserve_meaningful_differences_and_canonicalize_zero() {
+        let quantum = 1.0f64 / 1_048_576.0;
+        for sign in [-1.0, 1.0] {
+            assert_eq!(
+                close_rank_bucket(sign * 0.1399999999999999),
+                close_rank_bucket(sign * 0.14),
+            );
+            assert_ne!(
+                close_rank_bucket(sign * 0.14),
+                close_rank_bucket(sign * 0.14001),
+            );
+            assert_eq!(
+                close_rank_bucket(sign * quantum * 0.5),
+                (sign * quantum) as f32,
+            );
+            assert_eq!(
+                close_rank_bucket(sign * quantum * 0.25).to_bits(),
+                0.0f32.to_bits(),
+            );
+            assert_eq!(close_rank_bucket(sign * 16.0), (sign * 16.0) as f32);
+            assert_eq!(
+                close_rank_bucket(sign * f64::from(f32::MAX)),
+                (sign as f32) * f32::MAX
+            );
+        }
+    }
+
+    #[test]
+    fn passive_close_ranks_use_absolute_resting_gap_then_side_adjusted_distance() {
+        let long = close_fill_priority(
+            PositionSide::Long,
+            57.0,
+            50.0,
+            &OrderBook {
+                bid: 49.0,
+                ask: 50.0,
+            },
+            false,
+        );
+        let short = close_fill_priority(
+            PositionSide::Short,
+            86.0,
+            100.0,
+            &OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            },
+            false,
+        );
+        assert_eq!(
+            long,
+            (false, close_rank_bucket(0.14), close_rank_bucket(0.14))
+        );
+        assert_eq!(
+            compare_close_fill_priority(long, short),
+            std::cmp::Ordering::Equal
+        );
+        let farther = close_fill_priority(
+            PositionSide::Short,
+            85.999,
+            100.0,
+            &OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            },
+            false,
+        );
+        assert_eq!(
+            compare_close_fill_priority(long, farther),
+            std::cmp::Ordering::Less
+        );
     }
 
     #[test]

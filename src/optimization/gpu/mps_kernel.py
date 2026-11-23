@@ -17,7 +17,8 @@ from optimization.gpu.ema_bootstrap import (
     BOOTSTRAP_COUNT_COLS, effective_end_steps, pack_bootstrap_counts, validate_hourly_bootstrap_inputs,
 )
 
-from optimization.gpu.specialization import unstuck_required
+from optimization.gpu.specialization import unstuck_ema_required, unstuck_required
+from optimization.gpu.parameters import validate_global_risk_params
 from optimization.gpu.decimal import (
     _TM_DECIMAL_KEYS,
     _TM_DECIMAL_WORDS,
@@ -31,6 +32,7 @@ from optimization.gpu.autotune import (
     record_compilation, record_replay_chunk,
 )
 from optimization.gpu.runtime import (
+    gpu_close_sizing_vendor,
     gpu_device,
     compile_shader,
     synchronize,
@@ -38,7 +40,6 @@ from optimization.gpu.runtime import (
 )
 
 from optimization.gpu.model import (
-    GLOBAL_RISK_PARAM_KEYS,
     MARKET_EXECUTION_TICKS_ABI,
     validate_market_order_slippage_fraction,
     ADAPTIVE_PARAM_KEYS,
@@ -163,12 +164,9 @@ def _with_tm_loss_gate_disabled(source: str, disabled: bool) -> str:
 
 
 def _encode_loss_gate_policy(enabled: bool, cap: float | None) -> float:
-    from config.gpu import validate_gpu_loss_gate_policy
+    from config.gpu import gpu_loss_gate_transport_cap
 
-    validate_gpu_loss_gate_policy(enabled, cap)
-    # The settings buffer retains a numeric column. The independent flag owns
-    # enablement; dormant caps have identical device inputs to an absent cap.
-    return 0.0
+    return gpu_loss_gate_transport_cap(enabled, cap)
 
 
 def _validate_unstuck_ema_spans(
@@ -509,9 +507,9 @@ def _with_metal_tick_windows(source, *, strategy="trailing_martingale"):
     declaration surface so source drift fails before replay.
     """
     if strategy == "ema_anchor":
-        declarations = dict(fill_ticks=6, touch_ticks=7)
+        declarations = dict(fill_ticks=6, touch_ticks=11)
     else:
-        declarations = dict(fill_ticks=9, touch_ticks=8, touch_nearest_ticks=7,
+        declarations = dict(fill_ticks=9, touch_ticks=7, touch_nearest_ticks=7,
                             touch_min_qty_bits=7, touch_min_qty_relation=7)
     for name, expected in declarations.items():
         pattern = rf"\bconstant int\* {name}\b"
@@ -1058,21 +1056,6 @@ def _decode_multicoin_fused_outputs(
         native_factual_hsl=native_factual_hsl,
         interval_ms=interval_ms)
     return output
-
-
-def _validate_global_memory_params(params, keys, *, sides):
-    """Global request policies may vary by candidate, never by side or coin."""
-    from optimization.gpu.hsl import validate_memory_span
-
-    width = len(keys)
-    for key in GLOBAL_RISK_PARAM_KEYS:
-        column = keys.index(key)
-        values = params[:, column]
-        for value in np.unique(values):
-            validate_memory_span(value)
-        for side in range(1, sides):
-            if np.any(values != params[:, side * width + column]):
-                raise ValueError(f"GPU {key} must be account-global")
 
 
 def _validate_hsl_params(runner, params, keys, *, effective_enabled=None):
@@ -2131,7 +2114,10 @@ class _MulticoinReplayRunner:
         bootstrap_counts = pack_bootstrap_counts(
             params, self.parameter_keys, self._bootstrap_coin_overrides,
             interval_minutes=self.interval_minutes, available=self.n)
-        _validate_global_memory_params(params, self.parameter_keys, sides=self.replay_sides)
+        validate_global_risk_params(
+            params, self.parameter_keys, sides=self.replay_sides,
+            loss_gate_enabled=self.loss_gate_enabled,
+        )
         validate_hourly_bootstrap_inputs(
             params, self.parameter_keys, self._bootstrap_coin_overrides,
             first_observed=self._hourly_first_observed, coin_ranges=self._hourly_coin_ranges,
@@ -2142,10 +2128,19 @@ class _MulticoinReplayRunner:
         # additionally carries private decimal operands after each side block.
         policy_matrix = np.asarray(params, dtype=np.float32)
         self.dispatch_hsl_disabled = self._use_disabled_hsl_specialization(policy_matrix)
-        if unstuck_required(policy_matrix, self.parameter_keys, self._unstuck_ema_overrides):
-            raise ValueError("GPU replay does not support v9 unstuck exposure sizing; use a CPU backend")
-        self.dispatch_unstuck_ema_enabled = False
-        self.dispatch_unstuck_enabled = False
+        from config.gpu import require_gpu_close_sizing_support
+
+        self.dispatch_unstuck_enabled = unstuck_required(
+            policy_matrix, self.parameter_keys, self._unstuck_ema_overrides,
+        )
+        if self.loss_gate_enabled or self.dispatch_unstuck_enabled:
+            require_gpu_close_sizing_support(
+                target_vendor=gpu_close_sizing_vendor(),
+                loss_gate_enabled=self.loss_gate_enabled, unstuck_enabled=self.dispatch_unstuck_enabled,
+            )
+        self.dispatch_unstuck_ema_enabled = self.dispatch_unstuck_enabled and unstuck_ema_required(
+            policy_matrix, self.parameter_keys, self._unstuck_ema_overrides,
+        )
         packed = time.perf_counter() if profile else 0.0
         loader, library_args = self._library_cache_call()
         library, cold = _cached_library_with_miss(loader, *library_args)

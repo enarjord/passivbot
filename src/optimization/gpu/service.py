@@ -24,7 +24,7 @@ from optimization.gpu.parameters import (
 from optimization.gpu.coin_parameters import build_coin_override_parameters
 from config.validate import validate_limit_order_fill_buffer_fraction
 from optimizer_overrides import unstuck_ema_spans_coupled
-from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
+from optimization.gpu.runtime import checkpoint_runtime, gpu_device, gpu_vendor, synchronize
 from optimization.gpu.autotune import ReplayScratchLimit, history_dispatch_ceiling
 from optimization.gpu.residency import CudaReplayMemoryPressure
 from optimization.gpu.metric_registry import UTILIZATION_METRICS, requested_metric_features
@@ -531,7 +531,7 @@ def _gpu_proxy_execution_checkpoint_contract(
         "taker_fee_fraction",
     )
     contract = {
-        "version": 12,
+        "version": 13,
         "core_metric_definition_version": CORE_METRIC_DEFINITION_VERSION,
         "forager_hysteresis_abi": FORAGER_HYSTERESIS_ABI,
         "age_admission_abi": 1,
@@ -950,6 +950,7 @@ def _candidate_parameter_matrix(
     *,
     static_overrides: dict | None = None,
     couple_unstuck_emas: bool = False,
+    loss_gate_enabled: bool = False,
 ) -> np.ndarray:
     """Pack columns directly, preserving base < candidate < fixed override precedence."""
     if not candidates:
@@ -970,7 +971,9 @@ def _candidate_parameter_matrix(
                 continue
             source_key = coupled_sources.get(key, key)
             target = side_index * len(param_keys) + column
-            if source_key in RESERVED_RISK_PARAM_KEYS:
+            if source_key in RESERVED_RISK_PARAM_KEYS or (
+                source_key == "loss_gate_max_drawdown_fraction" and not loss_gate_enabled
+            ):
                 matrix[:, target] = 0.0
             elif source_key in overrides:
                 matrix[:, target] = float(overrides[source_key])
@@ -1090,7 +1093,7 @@ class SharedAccountReplay:
     ):
         if factual_hsl is not True:
             raise ValueError("Retired GPU replay layout; current shared-account replay requires factual_hsl=True")
-        from config.gpu import validate_gpu_backtest_config
+        from config.gpu import validate_gpu_backtest_config, validate_gpu_realized_close_policies
         validate_gpu_backtest_config(config)
         try:
             import torch
@@ -1101,10 +1104,11 @@ class SharedAccountReplay:
                 "or `pip install -e '.[full,gpu-cuda]'` (NVIDIA)"
             ) from exc
         device = gpu_device(torch)
+        validate_gpu_realized_close_policies(config, target_vendor=gpu_vendor(torch))
         from optimization.gpu.metrics import validate_gpu_metric_names
 
         self.needed_metrics = set(validate_gpu_metric_names(
-            needed_metrics, native_replay=factual_hsl, device=gpu_device(torch),
+            needed_metrics, native_replay=factual_hsl, device=device,
         ))
         from config.ew import validate_ew_half_life_days
         half_life = validate_ew_half_life_days(config["backtest"].get("ew_half_life_days"))
@@ -1298,6 +1302,7 @@ class SharedAccountReplay:
             for side in ("long", "short")
         }
         self.couple_unstuck_emas = unstuck_ema_spans_coupled(config)
+        self.loss_gate_enabled = backtest_params["loss_gate_enabled"]
         base_parameters = prepare_candidate_parameters(config, mss, exchange)
         self.core_hsl_policy_enabled = {
             side: bool(base_parameters[f"_core_hsl_policy_enabled_{side}"])
@@ -1690,6 +1695,7 @@ class SharedAccountReplay:
             param_keys,
             {side: self.base_params[side]},
             couple_unstuck_emas=getattr(self, "couple_unstuck_emas", False),
+            loss_gate_enabled=getattr(self, "loss_gate_enabled", False),
         )
 
     def suite_batch_key(self):
