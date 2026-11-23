@@ -1,10 +1,12 @@
-"""NPY metadata reuse must never reuse candle data or waive source validation."""
+"""NPY header reuse and independently verified decoded candle reads."""
 
 import os
+import sys
 
 import numpy as np
 import pytest
 
+import candlestick_manager as candle_manager
 from candle_shard_io import _parsed_header, load_candle_array
 from candlestick_manager import CANDLE_DTYPE, CandlestickManager
 
@@ -130,3 +132,128 @@ def test_manager_strict_failure_and_legacy_conversion(tmp_path):
         assert manager._load_shard(str(path)).size == 0
     finally:
         manager._cleanup_on_exit()
+
+
+@pytest.fixture
+def manager(tmp_path):
+    value = CandlestickManager(exchange=None, exchange_name='synthetic', cache_dir=str(tmp_path))
+    yield value
+    value._cleanup_on_exit()
+
+
+@pytest.mark.skipif(sys.platform.startswith('win'), reason='reuse requires a change-time clock')
+def test_overlapping_daily_selections_decode_each_shard_once(manager, monkeypatch):
+    symbol = 'TEST/USDT:USDT'
+    daily_rows = []
+    one_day_ms = 24 * 60 * 60_000
+    for day in range(3):
+        daily = rows(4)
+        daily['ts'] = 1_700_006_400_000 + day * one_day_ms + np.arange(4) * 3_600_000
+        daily_rows.append(daily)
+    manager._save_range_incremental(symbol, np.concatenate(daily_rows), timeframe='1h')
+    decoded = []
+
+    def record_decode(handle, dtype):
+        decoded.append(handle.name)
+        return load_candle_array(handle, dtype)
+
+    monkeypatch.setattr(candle_manager, 'load_candle_array', record_decode)
+    for start, end in ((0, 1), (1, 2), (0, 2)):
+        actual = manager._load_from_disk(
+            symbol, int(daily_rows[start]['ts'][0]), int(daily_rows[end]['ts'][-1]), timeframe='1h'
+        )
+        np.testing.assert_array_equal(actual, np.concatenate(daily_rows[start : end + 1]))
+        actual['c'][0] = -1
+    assert len(decoded) == len(set(decoded)) == 3
+    assert all(not entry[1].flags.writeable for entry in manager._decoded_shards.values())
+    strict = manager._load_from_disk(
+        symbol, int(daily_rows[1]['ts'][0]), int(daily_rows[2]['ts'][-1]), timeframe='1h', strict=True
+    )
+    np.testing.assert_array_equal(strict, np.concatenate(daily_rows[1:]))
+    assert len(decoded) == 5
+
+
+@pytest.mark.skipif(sys.platform.startswith('win'), reason='reuse requires a change-time clock')
+@pytest.mark.parametrize('change', ['overwrite', 'replace', 'corrupt', 'delete'])
+def test_decoded_shard_invalidates_after_source_changes(manager, tmp_path, change):
+    path = tmp_path / 'daily.npy'
+    expected = rows()
+    write(path, expected)
+    manager._load_shard(str(path), reuse_decoded=True)
+    old = path.stat()
+    expected['c'][0] += 1
+    if change == 'overwrite':
+        write(path, expected)
+    elif change == 'replace':
+        replacement = tmp_path / 'replacement.npy'
+        write(replacement, expected)
+        os.replace(replacement, path)
+    elif change == 'corrupt':
+        original = path.read_bytes()
+        path.write_bytes(original.replace(b"'shape':", b"'shope':", 1))
+    else:
+        path.unlink()
+    if path.exists():
+        os.utime(path, ns=(old.st_atime_ns, old.st_mtime_ns))
+        assert path.stat().st_size == old.st_size
+    if change in {'corrupt', 'delete'}:
+        assert manager._load_shard(str(path), reuse_decoded=True).size == 0
+        assert not manager._decoded_shards
+        write(path, expected)
+    np.testing.assert_array_equal(manager._load_shard(str(path), reuse_decoded=True), expected)
+
+
+@pytest.mark.skipif(sys.platform.startswith('win'), reason='reuse requires a change-time clock')
+def test_decoded_shard_is_not_retained_if_replaced_during_read(manager, monkeypatch, tmp_path):
+    path = tmp_path / 'daily.npy'
+    replacement = tmp_path / 'replacement.npy'
+    before = rows()
+    after = before.copy()
+    after['c'][-1] += 1
+    write(path, before)
+    write(replacement, after)
+
+    def replace_after_decode(handle, dtype):
+        result = load_candle_array(handle, dtype)
+        os.replace(replacement, path)
+        return result
+
+    monkeypatch.setattr(candle_manager, 'load_candle_array', replace_after_decode)
+    np.testing.assert_array_equal(manager._load_shard(str(path), reuse_decoded=True), before)
+    assert not manager._decoded_shards
+    monkeypatch.setattr(candle_manager, 'load_candle_array', load_candle_array)
+    np.testing.assert_array_equal(manager._load_shard(str(path), reuse_decoded=True), after)
+
+
+@pytest.mark.skipif(sys.platform.startswith('win'), reason='reuse requires a change-time clock')
+def test_decoded_shard_metadata_failure_still_decodes_open_file(manager, monkeypatch, tmp_path):
+    path = tmp_path / 'daily.npy'
+    expected = rows()
+    write(path, expected)
+    manager._load_shard(str(path), reuse_decoded=True)
+    fstat = os.fstat
+
+    def fail_identity_once(fd):
+        monkeypatch.setattr(os, 'fstat', fstat)
+        raise OSError('synthetic descriptor identity failure')
+
+    monkeypatch.setattr(os, 'fstat', fail_identity_once)
+    np.testing.assert_array_equal(manager._load_shard(str(path), reuse_decoded=True), expected)
+    assert not manager._decoded_shards
+
+
+@pytest.mark.skipif(sys.platform.startswith('win'), reason='reuse requires a change-time clock')
+def test_decoded_shard_lru_enforces_both_limits(manager, monkeypatch, tmp_path):
+    one_shard = rows()
+    monkeypatch.setattr(candle_manager, '_MAX_DECODED_SHARDS', 2)
+    monkeypatch.setattr(candle_manager, '_MAX_DECODED_SHARD_BYTES', 3 * one_shard.nbytes)
+    paths = [tmp_path / f'{ix}.npy' for ix in range(4)]
+    for path in paths[:3]:
+        write(path, one_shard)
+    for path in (paths[0], paths[1], paths[0], paths[2]):
+        manager._load_shard(str(path), reuse_decoded=True)
+    assert list(manager._decoded_shards) == [str(paths[0]), str(paths[2])]
+    write(paths[3], rows(3 * len(one_shard) - 1))
+    manager._load_shard(str(paths[3]), reuse_decoded=True)
+    assert list(manager._decoded_shards) == [str(paths[3])]
+    assert manager._decoded_shard_bytes == rows(3 * len(one_shard) - 1).nbytes

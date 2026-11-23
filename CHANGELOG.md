@@ -166,6 +166,9 @@ its own version heading. See [release status](docs/releases.md).
 - Reuse validated candle shards across overlapping EMA windows and reduce work when
   merging contiguous candle rows into the live cache.
 
+- Reuse unchanged daily candle data across different disk windows to avoid
+  repeated decoding of overlapping shards.
+
 - Persist the Bitunix pending-create journal in the documented live container
   setups so unresolved submissions survive container replacement.
 

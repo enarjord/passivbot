@@ -629,12 +629,20 @@ ctime currently reports creation time, which cannot detect same-size in-place
 corrections with restored mtime. Ordinary disk reads remain authoritative there.
 Clearing the cache or restarting reconstructs identical rows.
 
+When window selections differ, non-strict range reads may reuse individual
+nonempty, decoded one-dimensional candle shards in a separate per-manager LRU
+of at most 256 paths and 8 MiB of row arrays. Each hit opens the source and
+checks its file identity. A new entry is retained only if the path still
+identifies the file after decoding. Failed, empty, or changed reads do not
+produce entries. Strict reads, legacy format conversion, and Windows keep
+their usual disk read paths.
+
 Canonical one-dimensional candle NPY reads may reuse up to 128 validated headers,
 keyed by the complete header bytes and format version read on that call. Each
-header is bounded to NumPy's default 10,000-byte limit. Every payload is read
-again; same-size corrections, replacement files, malformed headers and truncated
-payloads remain visible. Other NPY shapes/dtypes/formats retain NumPy's loader
-and its no-pickle policy. This metadata cache does not certify any source rows.
+header is bounded to NumPy's default 10,000-byte limit. The header cache still
+reads and validates the payload on every decode. Other NPY shapes/dtypes/formats
+retain NumPy's loader and its no-pickle policy. This metadata cache does not
+certify any source rows.
 
 Only factual source rows are cached. Mutable consumer arrays and the one-minute
 memory cache never alias retained immutable rows. One-minute reads still merge
