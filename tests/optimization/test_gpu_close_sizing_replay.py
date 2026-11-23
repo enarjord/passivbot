@@ -10,8 +10,8 @@ def close_sizing_device():
     torch = pytest.importorskip("torch")
     from optimization.gpu.runtime import gpu_vendor
 
-    if gpu_vendor(torch) not in {"apple", "nvidia"}:
-        pytest.skip("actual Metal or NVIDIA CUDA device required")
+    if gpu_vendor(torch) not in {"apple", "nvidia", "amd"}:
+        pytest.skip("actual Metal, NVIDIA CUDA or AMD ROCm device required")
 
     import passivbot_rust
     from rust_utils import verify_loaded_runtime_extension

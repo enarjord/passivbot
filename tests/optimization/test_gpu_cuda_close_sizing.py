@@ -1,4 +1,4 @@
-"""Exercise active close sizing through the CUDA service and its candidate transport."""
+"""Exercise active close sizing through the CUDA/ROCm service and its candidate transport."""
 
 from copy import deepcopy
 
@@ -8,8 +8,8 @@ import pytest
 @pytest.fixture
 def cuda_service():
     torch = pytest.importorskip("torch")
-    if not torch.cuda.is_available() or torch.version.hip:
-        pytest.skip("NVIDIA CUDA required")
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA or ROCm required")
     from optimization.gpu.native import CudaBacktestService
 
     return CudaBacktestService

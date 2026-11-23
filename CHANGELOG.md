@@ -21,7 +21,7 @@ its own version heading. See [release status](docs/releases.md).
   reservation evidence when it defers a write. Zero-loss limit closes retain order-match
   tolerance when both projections agree. Metal and NVIDIA CUDA replay support v9
   close sizing for EMA Anchor and Trailing Martingale, including exposure-targeted
-  unstuck and the portfolio loss gate. AMD ROCm requires CPU evaluation for these policies.
+  unstuck and the portfolio loss gate, on Metal, NVIDIA CUDA and AMD ROCm.
   Close allocation uses the same rounded priority ranks and stable tie-breaks on CPU and GPU.
 
 - Update the Trailing Martingale starter universe and suite subsets. Add ETC and

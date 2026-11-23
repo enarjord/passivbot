@@ -155,7 +155,7 @@ def validate_gpu_backtest_config(
         validate_gpu_realized_close_policies(config, target_vendor=target_vendor)
 
 
-_CLOSE_SIZING_GPU_VENDORS = frozenset({"apple", "nvidia"})
+_CLOSE_SIZING_GPU_VENDORS = frozenset({"apple", "nvidia", "amd"})
 
 
 def require_gpu_close_sizing_support(

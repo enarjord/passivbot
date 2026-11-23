@@ -62,7 +62,7 @@ def test_multicoin_dispatch_checks_effective_close_sizing(
         [1440.0, 0.0, 0.0, 0.0],
         [1440.0, 0.0, unstuck, 0.0],
     ], dtype=np.float64)
-    if feature and vendor in {"amd", "none"}:
+    if feature and vendor == "none":
         with pytest.raises(ValueError, match=rf"{feature}.*CPU backend"):
             runner._run_factual_attempt(candidates)
     else:
