@@ -1982,14 +1982,14 @@ class Owner:
                 self._retired_ordinary_receipts.add(completed_receipts)
             self._running = was_running
             self._cycle_running = False
+            for wave in reports:
+                self.report(wave)
             if (
                 history_after_ordinary
                 and (completed_cycle or recoverable_io_failure)
                 and not self._shutdown_requested()
             ):
                 self._schedule_periodic_history(self._schedule_clock())
-            for wave in reports:
-                self.report(wave)
             if completed_cycle:
                 run_diagnostic_step(
                     "record ordinary cycle progress",

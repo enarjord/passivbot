@@ -1249,3 +1249,41 @@ def test_outstanding_fill_confirmation_stays_eager(owner_handoff, planner_requir
     ledger.begin_epoch(now_ms=NOW)
     ledger.stamp("fills", now_ms=NOW)
     assert owner._can_delay_periodic_history(now)
+
+
+@pytest.mark.asyncio
+async def test_late_history_failure_preserves_protective_report(owner_handoff):
+    from live import hsl_live
+
+    fixture = owner_handoff
+    owner, bot, ledger = fixture.owner, fixture.bot, fixture.ledger
+    bot.exchange = "hyperliquid"
+    ledger.begin_epoch(now_ms=NOW)
+    ledger.stamp("fills", now_ms=NOW)
+    owner._next_history_window = owner._schedule_clock() + 900.0
+    owner.schedule_history = hsl_live.Owner.schedule_history.__get__(owner)
+    loop = asyncio.get_running_loop()
+    owner._fill_task = fills = loop.create_future()
+    owner._ordinary = ordinary = loop.create_future()
+    refresh = bot.refresh_protective_authoritative_state
+    wave = object()
+    reports = []
+
+    async def refresh_account(**kwargs):
+        result = await refresh(**kwargs)
+        fills.set_exception(RuntimeError("unexpected fill failure"))
+        return result
+
+    async def protect(*, deferred_reports):
+        deferred_reports.append(wave)
+        return True
+
+    bot.refresh_protective_authoritative_state = refresh_account
+    owner.protect = protect
+    owner.report = reports.append
+    try:
+        with pytest.raises(RuntimeError, match="unexpected fill failure"):
+            await owner.cycle()
+        assert reports == [wave]
+    finally:
+        await stop_preparation(owner, ordinary, fills)
