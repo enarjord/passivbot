@@ -31,10 +31,18 @@ migration, validation, and rollback checklist.
 
 ### v8 rollback reference
 
-Keep the exact v8 revision used by the previous installation. For the master snapshot used
-to review the cutover, use [commit `89d2ea933`](https://github.com/enarjord/passivbot/tree/89d2ea933d0c02714d4a51225f114b35012d9d3c).
-For an installation on a published tag, keep that tag and its matching configuration and
-environment.
+The v8 `master` revision integrated into this candidate is
+[commit `15d6404f3`](https://github.com/enarjord/passivbot/tree/15d6404f33bd5623d46a46e04ea694188ea7acea).
+For an individual installation, retain the exact commit or tag that ran it together with its
+matching configuration, native extension, environment, and launch command.
+
+Immediately before the v9 cutover, fetch both branches and compare the current `origin/master`
+SHA with the linked rollback reference. If `master` advanced, integrate its changes into v9,
+update the reference, and qualify the resulting candidate. Verify that
+`git merge-base --is-ancestor origin/master origin/v9` succeeds. Check Python 3.12 and 3.14,
+Rust, the installed-wheel research smoke, the offline fake-live HSL restart, and the Docker
+image smoke on the candidate. The Docker workflow supports manual dispatch when its PR path
+filter skips the candidate. Follow the [release runbook](ai/runbooks/release.md) for sign-off.
 
 ## Choose an installation revision
 
