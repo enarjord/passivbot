@@ -210,7 +210,7 @@ logs, runtime windows, and immutable manifests.
 |----------|----------------------|------------------|
 | Binance | `fetch_my_trades` | income history |
 | Bybit | `fetch_my_trades` | closed-pnl (explicit time windows + cursor pagination) |
-| Bitget | `fetch_my_trades` | embedded in trade payload |
+| Bitget | Classic `fill-history` or UTA `trade/fills` | embedded in trade payload |
 | Hyperliquid | fill events | embedded |
 | OKX | `fetch_my_trades` | positions history |
 | KuCoin | trades + positions history | positions history |
@@ -305,6 +305,20 @@ merely because an auxiliary endpoint failed.
 Bitget classic and UTA, Bybit executions, Hyperliquid, and OKX propagate pagination cap exhaustion
 when another page would be required. A failed bounded traversal leaves the interval retryable
 and does not advance coverage or the refresh checkpoint.
+
+Bitget requires a successful envelope with an explicit fill list. Bounded Classic requests traverse
+contiguous seven-day windows using `endId`/`idLessThan`; UTA uses thirty-day windows and its
+opaque `cursor`. Saturated windows retain their bounds until the cursor is exhausted. A missing
+or stalled continuation leaves coverage unproven, including at the inclusive start millisecond.
+Previously cached Bitget executions remain available, while their old traversal claims and
+incremental checkpoints are cleared before a new lookback can be certified. A request without a
+start time can fetch recent events but its endpoint-default window cannot certify all history.
+Bitget UTA verifies requests within 90 days of the acquisition observation. A cold 90-day
+bootstrap uses that same clock for its start and end. An earlier prefix requires a previously
+certified contiguous interval reaching the retained window. Routine refreshes bridge from its
+last proven timestamp, including after restart. A longer unverified gap blocks coverage even
+when the venue returns an empty list. Bounded repairs do not advance this checkpoint.
+[Classic fill history](https://www.bitget.com/docs/catalog/classic-contract-trade/classic-contract-trade#get-historical-transaction-details) · [UTA fill history](https://www.bitget.com/docs/catalog/trading/order-management#get-fill-history)
 
 Position replay requires a resolved long or short side. The OKX fill reader requires the venue's
 explicit long, short, or net position mode and buy or sell execution side. Binance income-only

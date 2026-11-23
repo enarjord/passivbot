@@ -77,8 +77,8 @@ class BitgetFixtureAPI:
             self.rows.append(row)
 
     async def private_mix_get_v2_mix_order_fill_history(self, params):
-        rows = [r for r in reversed(self.rows) if int(r["cTime"]) <= params["endTime"]]
-        return {"data": {"fillList": deepcopy(rows)}}
+        rows = [r for r in reversed(self.rows) if params.get("startTime", 0) <= int(r["cTime"]) <= params["endTime"]]
+        return {"code": "00000", "data": {"fillList": deepcopy(rows)}}
 
     async def private_mix_get_v2_mix_order_detail(self, params):
         return {"data": {"clientOid": self.cids[params["orderId"]]}}
@@ -89,12 +89,12 @@ class BitgetFixtureAPI:
             for r in reversed(self.rows)
             if params.get("startTime", 0) <= int(r["createdTime"]) <= params["endTime"]
         ]
-        return {"data": {"list": deepcopy(rows)}}
+        return {"code": "00000", "data": {"list": deepcopy(rows)}}
 
 
 def make_manager(tmp_path, mode, pside, include_external=True):
     api = BitgetFixtureAPI(mode, pside, include_external)
-    fetcher = BitgetFetcher(api, symbol_resolver=lambda value: SYMBOL)
+    fetcher = BitgetFetcher(api, symbol_resolver=lambda value: SYMBOL, now_func=lambda: T0 + 300_000)
     manager = FillEventsManager(
         exchange="bitget",
         user="offline_fixture",

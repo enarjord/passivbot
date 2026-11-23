@@ -7,6 +7,7 @@ import re
 from copy import deepcopy
 from time import monotonic
 from typing import Dict, List, Tuple
+from bitget_fill_history import bitget_fill_pages
 from bitget_normalization import (
     bitget_payload_context as _bitget_payload_context,
     deduce_side_pside,
@@ -459,28 +460,8 @@ class BitgetBot(CCXTBot):
             timestamp = int(elm["cTime"])
             side, position_side = deduce_side_pside(elm)
             order_id = str(elm.get("orderId") or "")
-            fill_id = (
-                elm.get("tradeId")
-                or elm.get("fillId")
-                or elm.get("execId")
-                or elm.get("id")
-            )
-            if fill_id:
-                event_id = str(fill_id)
-            else:
-                event_id = json.dumps(
-                    [
-                        order_id,
-                        timestamp,
-                        side,
-                        position_side,
-                        elm.get("baseVolume"),
-                        elm.get("price"),
-                    ],
-                    separators=(",", ":"),
-                )
             return {
-                "id": event_id,
+                "id": elm["tradeId"],
                 "order_id": order_id,
                 "timestamp": timestamp,
                 "datetime": ts_to_date(timestamp),
@@ -500,39 +481,7 @@ class BitgetBot(CCXTBot):
 
         # max limit is 100
         limit = 100 if limit is None else min(limit, 100)
-        max_n_fetches = 200
-        buffer_step_ms = int(1000 * 60 * 60 * 24)
-        end_time = int(utc_ms() + 3600000 if end_time is None else end_time)
         events_map: Dict[str, dict] = {}
-        params = {
-            "productType": "USDT-FUTURES",
-            "endTime": end_time,
-            "limit": limit,
-        }
-        count = 0
-
-        async def _fetch_window() -> List[dict]:
-            nonlocal count
-            count += 1
-            if count >= max_n_fetches:
-                logging.warning(f"over {count} calls to fetch_fill_events. Breaking.")
-                return []
-            fetched = await self.cca.private_mix_get_v2_mix_order_fill_history(params)
-            fill_events = [
-                _extract_fill(x) for x in (fetched.get("data", {}).get("fillList", []) or [])
-            ]
-            fill_events.sort(key=lambda x: x["timestamp"])
-            if count > 1:
-                n_fe = len(fill_events)
-                if n_fe == 1:
-                    logging.info(f"fetched 1 fill at {fill_events[0]['datetime'][:19]}")
-                elif n_fe > 2:
-                    logging.info(
-                        f"fetched {n_fe} fills from {fill_events[0]['datetime'][:19]} to {fill_events[-1]['datetime'][:19]}"
-                    )
-            if not fill_events:
-                return []
-            return fill_events
 
         async def _enrich_events(fill_events: List[dict]) -> None:
             pending: List[Tuple[str, dict, asyncio.Task]] = []
@@ -569,40 +518,14 @@ class BitgetBot(CCXTBot):
                             event.get("pb_order_type"),
                         )
 
-        while True:
-            fill_events = await _fetch_window()
-            if not fill_events:
-                break
-            await _enrich_events(fill_events)
-            if len(fill_events) < limit:
-                if start_time is None or params["endTime"] - start_time < buffer_step_ms:
-                    logging.debug(
-                        f"broke loop private_mix_get_v2_mix_order_fill_history on n fill_events {len(fill_events)}"
-                    )
-                    break
-                else:
-                    new_end_time = int(
-                        fill_events[0]["timestamp"] + 1
-                        if fill_events
-                        else params["endTime"] - buffer_step_ms
-                    )
-                    if params["endTime"] == new_end_time:
-                        new_end_time -= buffer_step_ms
-                    params["endTime"] = new_end_time
-                    continue
-            if start_time is None or fill_events[0]["timestamp"] < start_time:
-                logging.debug(
-                    f"broke loop private_mix_get_v2_mix_order_fill_history on start time exceeded"
-                )
-                break
-            if params["endTime"] == fill_events[0]["timestamp"]:
-                logging.debug(
-                    f"broke loop private_mix_get_v2_mix_order_fill_history on two successive identical endTimes"
-                )
-                break
-            params["endTime"] = int(fill_events[0]["timestamp"])
-        final_result = sorted(events_map.values(), key=lambda x: x["timestamp"])
-        return final_result
+        observed_at_ms = int(self.get_exchange_time())
+        async for rows in bitget_fill_pages(
+            self.cca, uta=False, product_type="USDT-FUTURES", since_ms=start_time,
+            until_ms=observed_at_ms if end_time is None else int(end_time), observed_at_ms=observed_at_ms,
+            limit=limit, max_fetches=200,
+        ):
+            await _enrich_events([_extract_fill(row) for row in rows])
+        return sorted(events_map.values(), key=lambda event: event["timestamp"])
 
     async def _fetch_fill_events_uta(self, start_time=None, end_time=None, limit=None):
         """UTA/elite variant of fetch_fill_events using v3 trade fills.
@@ -616,73 +539,17 @@ class BitgetBot(CCXTBot):
             return event
 
         limit = 100 if limit is None else min(limit, 100)
-        max_n_fetches = 200
-        buffer_step_ms = int(1000 * 60 * 60 * 24)
-        max_window_ms = 30 * buffer_step_ms - 1
-        end_time = int(utc_ms() + 3600000 if end_time is None else end_time)
         events_map: Dict[str, dict] = {}
-        params = {"category": "USDT-FUTURES", "limit": str(limit)}
-        count = 0
-        cursor = None
-        while True:
-            count += 1
-            if count >= max_n_fetches:
-                logging.warning(f"over {count} calls to fetch_fill_events (uta). Breaking.")
-                break
-            request_params = dict(params)
-            request_params["endTime"] = end_time
-            window_start = None
-            if start_time is not None:
-                window_start = max(int(start_time), int(end_time) - max_window_ms)
-                request_params["startTime"] = window_start
-            if cursor:
-                request_params["cursor"] = cursor
-            fetched = await self.cca.private_uta_get_v3_trade_fills(request_params)
-            data = fetched.get("data") or {}
-            rows = data.get("list") or []
-            fill_events = [_extract(x) for x in rows]
-            fill_events.sort(key=lambda x: x["timestamp"])
-            if not fill_events:
-                if start_time is not None and window_start is not None and window_start > start_time:
-                    next_end = int(window_start) - 1
-                    if next_end <= start_time:
-                        break
-                    end_time = next_end
-                    cursor = None
-                    continue
-                break
-            added = False
-            for fe in fill_events:
-                key = fe["id"]
-                if key not in events_map:
-                    events_map[key] = fe
-                    added = True
-            if not added:
-                break
-            next_cursor = data.get("cursor")
-            if len(fill_events) >= limit and next_cursor:
-                cursor = str(next_cursor)
-                continue
-            cursor = None
-            if len(fill_events) < limit:
-                if start_time is None:
-                    break
-                if window_start is not None and window_start > start_time:
-                    next_end = int(window_start) - 1
-                    if next_end <= start_time:
-                        break
-                    end_time = next_end
-                    continue
-                if end_time - start_time < buffer_step_ms:
-                    break
-                end_time = int(fill_events[0]["timestamp"] + 1)
-                continue
-            if start_time is None or fill_events[0]["timestamp"] < start_time:
-                break
-            if end_time == fill_events[0]["timestamp"]:
-                break
-            end_time = int(fill_events[0]["timestamp"])
-        return sorted(events_map.values(), key=lambda x: x["timestamp"])
+        observed_at_ms = int(self.get_exchange_time())
+        async for rows in bitget_fill_pages(
+            self.cca, uta=True, product_type="USDT-FUTURES", since_ms=start_time,
+            until_ms=observed_at_ms if end_time is None else int(end_time), observed_at_ms=observed_at_ms,
+            limit=limit, max_fetches=200,
+        ):
+            for row in rows:
+                event = _extract(row)
+                events_map[event["id"]] = event
+        return sorted(events_map.values(), key=lambda event: event["timestamp"])
 
     async def fetch_closed_orders(self, start_time, end_time, limit=100):
         if getattr(self, "is_uta", False):
