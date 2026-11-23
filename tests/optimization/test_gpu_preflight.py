@@ -111,10 +111,10 @@ def test_gpu_preflight_checks_only_evaluated_scenario_risk_policy():
     _run_gpu_preparation_preflight(config, dict(enabled=True, scenarios=[
         dict(label="supported", overrides={"bot.long.risk.unstuck.enabled": False}),
     ]), target_vendor="amd")
-    with pytest.raises(ValueError, match="AMD ROCm.*unstuck exposure sizing.*CPU"):
+    with pytest.raises(ValueError, match="does not support v9 unstuck exposure sizing.*CPU"):
         _run_gpu_preparation_preflight(config, dict(enabled=True, scenarios=[
             dict(label="unsupported", overrides={}),
-        ]), target_vendor="amd")
+        ]), target_vendor="intel")
 
 
 def test_gpu_preflight_validates_active_policy_without_optional_device_imports(monkeypatch):

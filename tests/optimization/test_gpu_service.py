@@ -2307,7 +2307,8 @@ def test_suite_materialization_preserves_parameter_and_metric_defaults():
     "policy, feature",
     [("gate", "realized-loss close sizing"), ("coin_unstuck", "unstuck exposure sizing")],
 )
-def test_gpu_replay_rejects_active_close_sizing_on_rocm_before_payload(monkeypatch, policy, feature):
+def test_gpu_replay_qualifies_active_close_sizing_on_rocm(monkeypatch, policy, feature):
+    from config.gpu import validate_gpu_realized_close_policies
     from optimization.gpu import service
     from tools.gpu_parity import build_parser, fixture_inputs
 
@@ -2320,16 +2321,17 @@ def test_gpu_replay_rejects_active_close_sizing_on_rocm_before_payload(monkeypat
         config["coin_overrides"] = {
             "COIN00": {"bot": {"long": {"risk": {"unstuck": {"enabled": True}}}}}
         }
+    validate_gpu_realized_close_policies(config, target_vendor="amd")
     monkeypatch.setitem(sys.modules, "torch", ModuleType("torch"))
     monkeypatch.setattr(service, "gpu_device", lambda _: "cuda")
     monkeypatch.setattr(service, "gpu_vendor", lambda _: "amd")
-    with pytest.raises(ValueError, match=rf"AMD ROCm.*{feature}.*CPU"):
+    with pytest.raises(ValueError, match="three dimensions"):
         SharedAccountReplay(
             config=config, hlcvs=None, mss={}, btc=None, timestamps=None,
             exchange="binance", batch_size=1, needed_metrics=["cagr_fraction_strategy_equity"],
         )
-
-
+    with pytest.raises(ValueError, match=rf"does not support v9 {feature}.*CPU"):
+        validate_gpu_realized_close_policies(config, target_vendor="intel")
 @pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("device,factual,expected", [
     ("cuda", True, (True, 64, 128)),

@@ -635,10 +635,9 @@ EMA/TM runner constructors reject execution with a capability error directing ca
 to `NativeBacktestService`, including one-coin datasets. Compiler specialization and adaptive dispatch select execution
 policy within the native service.
 
-The Metal and NVIDIA CUDA evaluators support the portfolio realized-loss gate
+The Metal, NVIDIA CUDA and AMD ROCm evaluators support the portfolio realized-loss gate
 and exposure-targeted unstuck for EMA Anchor and Trailing Martingale. The optimizer
-checks the effective scenario and coin policies before replay. Active policies require
-CPU evaluation on AMD ROCm.
+checks the effective scenario and coin policies before replay.
 
 The transport requires explicit loss-gate enablement and a separate nullable cap.
 A disabled gate with a valid dormant cap has the same device behavior as a disabled

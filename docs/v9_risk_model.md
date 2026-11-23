@@ -155,9 +155,9 @@ attempts against the budget. Matched resting ideals are reserved once. When an o
 conflicts with its replacement, confirmation must account for cancels and fills before a new
 allocation can fund the replacement. Bitunix uses its standard create path with the gate enabled.
 
-CPU replay supports both policies. Metal and NVIDIA CUDA optimizer replays support them
-for EMA Anchor and Trailing Martingale. Use the CPU backend for active policies on AMD ROCm.
-Use fresh evaluation for the changed optimizer search space and order behavior.
+CPU replay supports both policies. Metal, NVIDIA CUDA and AMD ROCm optimizer replays support
+them for EMA Anchor and Trailing Martingale. Use fresh evaluation for the changed optimizer
+search space and order behavior.
 
 ## Bootstrap, correction and restart
 
