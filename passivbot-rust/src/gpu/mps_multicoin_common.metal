@@ -453,6 +453,12 @@ struct ReplayClosePriority {
     float signed_qty;
 };
 
+inline float replay_close_priority_touch(float raw_touch, int touch_down, int touch_up, float price_step) {
+    // Matching staged ticks prove alignment in the source price. Reconstruct
+    // that touch like the equally priced quote so packing cannot invent a gap.
+    return touch_down > 0 && touch_down == touch_up ? float(touch_down) * price_step : raw_touch;
+}
+
 inline ReplayClosePriority replay_close_priority(
     ReplayCloseProjection projection, float quote, float touch, int stable_coin_index,
     int order_type, float proposed_abs_qty

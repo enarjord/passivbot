@@ -165,3 +165,62 @@ def test_disabled_loss_gate_ignores_dormant_cap(strategy, close_sizing_device):
     assert_fill_summary(expected_fills, expected, sides)
     assert_fill_summary(dormant_fills, result, sides)
     compare(expected, result)
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("btc_touch,first_coin", [(100.30, "BTC"), (100.306, "ETH")])
+def test_unstuck_priority_preserves_aligned_and_off_tick_touches(
+    strategy, btc_touch, first_coin, close_sizing_device, monkeypatch,
+):
+    from collections import Counter
+
+    import numpy as np
+
+    from backtest import run_backtest
+    from optimization.gpu.service import SharedAccountReplay
+    from test_gpu_hsl_multicoin import raw
+    from test_gpu_unstuck_lookback import make_inputs
+
+    sides = ("long",)
+    inputs = make_inputs(sides, strategy=strategy, coins=2, loss_gate_cap=0.005)
+    candles, markets, config, exchange, btc, timestamps = inputs
+    prices = np.array([100.30, 100.40])
+    candles[:, :, :3] = prices[:, None]
+    if strategy == "ema_anchor":
+        anchor = config["bot"]["long"]["strategy"][strategy]
+        anchor["offset_fraction"] = 0.001
+        # Warm the anchor high enough to keep ordinary asks outside fill range
+        # while the two initial bids still land exactly at 100.30 and 100.40.
+        candles[:3, :, :3] = (prices / (1.0 - anchor["offset_fraction"]))[:, None]
+    # 100.306 rounds to the submitted 100.31 ask. It retains a genuine gap
+    # to that ask, so ETH at its touch must lead in the off-tick case.
+    candles[3:, 0, :3] = btc_touch
+    candles[:, :, 0] += 0.02
+    candles[:, :, 1] -= 0.02
+
+    fills, _, _ = run_backtest(*inputs)
+    first_unstuck = next(fill for fill in fills if str(fill[13]) == "close_unstuck_long")
+    first_bar = int(first_unstuck[0])
+    assert first_unstuck[2] == first_coin
+    bars = fills[:, 0].astype(int)
+    before = fills[bars < first_bar]
+    through = fills[bars <= first_bar]
+    assert len(before) == 2 and len(through) == 3
+
+    construct = SharedAccountReplay._construct_runner
+
+    def construct_counting_runner(self, key, runner_cls, kwargs):
+        return construct(self, key, runner_cls, {**kwargs, "collect_coin_fill_counts": True})
+
+    monkeypatch.setattr(SharedAccountReplay, "_construct_runner", construct_counting_runner)
+    replay = SharedAccountReplay(
+        config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
+        exchange=exchange, batch_size=2, needed_metrics={"cagr_fraction_strategy_equity"},
+    )
+    _, result = raw(replay, [{}, {}], end_steps=np.array([first_bar, first_bar + 1], dtype=np.int32))
+    expected_counts = []
+    for index, prefix in enumerate((before, through)):
+        counts = Counter(fill[2] for fill in prefix)
+        expected_counts.append([counts[coin] for coin in ("BTC", "ETH")])
+        assert_fill_summary(prefix, result, sides, index=index)
+    assert result["coin_fill_counts"].cpu().tolist() == expected_counts

@@ -1893,6 +1893,7 @@ inline EmaMulticoinReducerCandidate size_ema_multicoin_close(
     EmaMulticoinReducerCandidate candidate,
     thread const EmaMulticoinSideState& side,
     constant int* market_execution_ticks,
+    constant int* touch_ticks,
     constant float* coin_settings,
     int k, int coin_count, int coin, bool short_side, bool reducer,
     float touch, float balance, bool gate_enabled, float headroom
@@ -1913,8 +1914,17 @@ inline EmaMulticoinReducerCandidate size_ema_multicoin_close(
     // Rust OrderType IDs break otherwise equal economic priorities.
     int order_type = candidate.is_unstuck ? (short_side ? 20 : 9)
         : reducer ? (short_side ? 21 : 10) : (short_side ? 29 : 27);
+    float priority_touch = touch;
+    // Streamed tick buffers cover the current window. A clamped tail mark
+    // may lie outside it and has no staged touch proof for this decision.
+    if (k >= int(coin_settings[offset + 6]) && k <= int(coin_settings[offset + 7])) {
+        int touch_offset = (k * coin_count + coin) * 2;
+        priority_touch = replay_close_priority_touch(
+            touch, touch_ticks[touch_offset], touch_ticks[touch_offset + 1], price_step
+        );
+    }
     candidate.priority = replay_close_priority(
-        projection, quote, touch, coin, order_type, candidate.qty
+        projection, quote, priority_touch, coin, order_type, candidate.qty
     );
     float qty;
 #if PASSIVBOT_UNSTUCK_ENABLED
@@ -1942,6 +1952,7 @@ inline EmaMulticoinReducerCandidate size_ema_multicoin_close(
 inline EmaMulticoinReducerCandidate preview_ema_multicoin_reducer(
     thread EmaMulticoinSideState& side,
     constant int* market_execution_ticks,
+    constant int* touch_ticks,
     constant float* coin_settings,
     int k, int coin_count, int coin, bool short_side,
     float touch, float balance, bool gate_enabled, float headroom,
@@ -1958,7 +1969,7 @@ inline EmaMulticoinReducerCandidate preview_ema_multicoin_reducer(
     );
     if (!gate_enabled && !PASSIVBOT_UNSTUCK_ENABLED) return nominee;
     nominee = size_ema_multicoin_close(
-        nominee, side, market_execution_ticks, coin_settings, k, coin_count, coin,
+        nominee, side, market_execution_ticks, touch_ticks, coin_settings, k, coin_count, coin,
         short_side, true, touch, balance, gate_enabled, headroom
     );
 #if PASSIVBOT_UNSTUCK_ENABLED
@@ -1972,7 +1983,7 @@ inline EmaMulticoinReducerCandidate preview_ema_multicoin_reducer(
             unstuck.tick, short_side, touch, price_step, market_orders_allowed, near_touch_fraction
         );
         unstuck = size_ema_multicoin_close(
-            unstuck, side, market_execution_ticks, coin_settings, k, coin_count, coin,
+            unstuck, side, market_execution_ticks, touch_ticks, coin_settings, k, coin_count, coin,
             short_side, true, touch, balance, gate_enabled, headroom
         );
         if (unstuck.valid && (!nominee.valid || unstuck.qty > nominee.qty
@@ -1997,6 +2008,7 @@ inline void set_ema_multicoin_ordinary_close_qty(
 
 inline void finalize_ema_multicoin_closes(
     constant int* market_execution_ticks,
+    constant int* touch_ticks,
     thread EmaMulticoinSideState* long_side,
     thread EmaMulticoinSideState* short_side,
     thread JointPortfolioAccount& account,
@@ -2030,7 +2042,7 @@ inline void finalize_ema_multicoin_closes(
                     EmaMulticoinReducerCandidate candidate = empty_ema_multicoin_reducer_candidate();
                     if (reducer) {
                         candidate = preview_ema_multicoin_reducer(
-                            side, market_execution_ticks, coin_settings, k, coin_count, c, s != 0,
+                            side, market_execution_ticks, touch_ticks, coin_settings, k, coin_count, c, s != 0,
                             touch, account.balance, gate_enabled, headroom, picked_unstuck,
                             market_orders_allowed, near_touch_fraction
                         );
@@ -2048,7 +2060,7 @@ inline void finalize_ema_multicoin_closes(
                         candidate.valid = candidate.qty > 0.0f;
                         if (!candidate.valid) continue;
                         candidate = size_ema_multicoin_close(
-                            candidate, side, market_execution_ticks, coin_settings, k, coin_count,
+                            candidate, side, market_execution_ticks, touch_ticks, coin_settings, k, coin_count,
                             c, s != 0, false, touch, account.balance, true, headroom
                         );
                         if (!candidate.valid) set_ema_multicoin_ordinary_close_qty(side, c, 0.0f);
@@ -2080,6 +2092,7 @@ inline void finalize_ema_multicoin_closes(
 
 inline void finalize_ema_multicoin_reducers_one_side(
     constant int* market_execution_ticks,
+    constant int* touch_ticks,
     thread EmaMulticoinSideState& side,
     thread JointPortfolioAccount& account,
     constant float* bars,
@@ -2088,7 +2101,7 @@ inline void finalize_ema_multicoin_reducers_one_side(
     float near_touch_fraction, float loss_gate_max_drawdown_fraction, bool loss_gate_enabled
 ) {
     finalize_ema_multicoin_closes(
-        market_execution_ticks, short_side ? nullptr : &side, short_side ? &side : nullptr,
+        market_execution_ticks, touch_ticks, short_side ? nullptr : &side, short_side ? &side : nullptr,
         account, bars, coin_settings ORGANILLO_PASS, k, coin_count, market_orders_allowed,
         near_touch_fraction, loss_gate_max_drawdown_fraction, loss_gate_enabled
     );
@@ -2096,6 +2109,7 @@ inline void finalize_ema_multicoin_reducers_one_side(
 
 inline void finalize_ema_multicoin_reducers_fused(
     constant int* market_execution_ticks,
+    constant int* touch_ticks,
     thread EmaMulticoinSideState& long_side,
     thread EmaMulticoinSideState& short_side,
     thread JointPortfolioAccount& account,
@@ -2105,7 +2119,7 @@ inline void finalize_ema_multicoin_reducers_fused(
     float near_touch_fraction, float loss_gate_max_drawdown_fraction, bool loss_gate_enabled
 ) {
     finalize_ema_multicoin_closes(
-        market_execution_ticks, long_enabled ? &long_side : nullptr,
+        market_execution_ticks, touch_ticks, long_enabled ? &long_side : nullptr,
         short_enabled ? &short_side : nullptr, account, bars, coin_settings ORGANILLO_PASS,
         k, coin_count, market_orders_allowed, near_touch_fraction,
         loss_gate_max_drawdown_fraction, loss_gate_enabled
@@ -2951,7 +2965,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 return;
             }
             finalize_ema_multicoin_reducers_one_side(
-                market_execution_ticks,
+                market_execution_ticks, touch_ticks,
                 side, account, bars, coin_settings ORGANILLO_PASS, k, C, short_side,
                 market_orders_allowed, market_order_near_touch_fraction,
                 loss_gate_max_drawdown_fraction, loss_gate_enabled
@@ -3822,7 +3836,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         }
         if (long_can_generate || short_can_generate) {
             finalize_ema_multicoin_reducers_fused(
-                market_execution_ticks,
+                market_execution_ticks, touch_ticks,
                 long_side, short_side, account,
                 bars, coin_settings ORGANILLO_PASS, k, C,
                 long_can_generate, short_can_generate,

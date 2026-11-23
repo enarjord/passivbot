@@ -382,8 +382,9 @@ kernel void passivbot_ema_multicoin_fused_reducer_budget_probe(
     short_side.twel_close_tick[1] = 100;
 
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    // This probe uses zero slippage and an aligned touch in both directions.
     finalize_ema_multicoin_reducers_fused(
-        market_execution_ticks,
+        market_execution_ticks, market_execution_ticks,
         long_side, short_side, account,
         bars, coin_settings, 1, 2,
         true, true, true, 0.0f, cap, true

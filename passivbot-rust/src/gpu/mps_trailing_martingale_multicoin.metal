@@ -814,8 +814,12 @@ inline bool nominate_tm_losing_close(
     ReplayCloseProjection projection;
     if (!project_tm_close(source.context, item.order, coin_settings ORGANILLO_PASS,
             coin, market_execution_tick, projection)) return false;
+    thread const TmCloseGridContext& context = source.context;
+    float priority_touch = replay_close_priority_touch(
+        context.generation_market_price, context.touch_down, context.touch_up, context.price_step
+    );
     ReplayClosePriority priority = replay_close_priority(
-        projection, item.order.price, source.context.generation_market_price,
+        projection, item.order.price, priority_touch,
         coin, tm_ordinary_order_type(source), item.order.qty
     );
     if (!cursor.have_nominee || replay_close_preferred(priority, cursor.priority)) {
@@ -906,6 +910,9 @@ inline bool apply_tm_multicoin_close_admission(
                 if (!source.valid || side->close_is_hsl_panic[c] || source.selected_reducer != -2) continue;
                 thread const TmCloseGridContext& context = source.context;
                 int tick = market_execution_tick_at(market_execution_ticks, k, c, C, context.short_side);
+                float priority_touch = replay_close_priority_touch(
+                    context.generation_market_price, context.touch_down, context.touch_up, context.price_step
+                );
                 int nominee = -1;
                 float nominee_qty = 0.0f, nominee_pnl = 0.0f;
                 ReplayClosePriority nominee_priority;
@@ -928,7 +935,7 @@ inline bool apply_tm_multicoin_close_admission(
                             gate_enabled, remaining, true, qty);
                     if (!sized) continue;
                     ReplayClosePriority priority = replay_close_priority(
-                        projection, reducer.price, context.generation_market_price, c,
+                        projection, reducer.price, priority_touch, c,
                         tm_reducer_order_type(candidate, context.short_side), proposed
                     );
                     if (nominee < 0 || qty > nominee_qty

@@ -507,9 +507,9 @@ def _with_metal_tick_windows(source, *, strategy="trailing_martingale"):
     declaration surface so source drift fails before replay.
     """
     if strategy == "ema_anchor":
-        declarations = dict(fill_ticks=6, touch_ticks=7)
+        declarations = dict(fill_ticks=6, touch_ticks=11)
     else:
-        declarations = dict(fill_ticks=9, touch_ticks=8, touch_nearest_ticks=7,
+        declarations = dict(fill_ticks=9, touch_ticks=7, touch_nearest_ticks=7,
                             touch_min_qty_bits=7, touch_min_qty_relation=7)
     for name, expected in declarations.items():
         pattern = rf"\bconstant int\* {name}\b"

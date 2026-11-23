@@ -125,6 +125,12 @@ inline void close_risk_probe(device float* out, float initial_headroom, float sm
     size_replay_close(500.0f, 1000.0f, 1.0f, minimum, true,
         replay_loss_headroom(exhausted), false, qty);
     out[34] = qty;
+
+    float aligned_quote = float(10030) * 0.01f;
+    float aligned_touch = replay_close_priority_touch(100.3f, 10030, 10030, 0.01f);
+    float off_tick_touch = replay_close_priority_touch(100.304f, 10030, 10031, 0.01f);
+    out[35] = aligned_touch == aligned_quote;
+    out[36] = off_tick_touch == 100.304f && off_tick_touch != aligned_quote;
 }
 """
 
@@ -135,6 +141,7 @@ _EXPECTED = (
     1.0, 0.0, 1.0, 1.0, 1.0,
     100.0, 0.0, 2 ** -17, 1.0, 10.0,
     100.0, 2 ** -17 - 6e-6, 0.0, 0.0,
+    1.0, 1.0,
 )
 
 
