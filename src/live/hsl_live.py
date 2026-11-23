@@ -1057,8 +1057,8 @@ class Owner:
         import asyncio
 
         if self._refresh_lock.locked():
-            # The owner schedules its next fill task after this account read,
-            # before yielding to waiters. Select the task after that handoff.
+            # Join the account read before selecting the current fill task.
+            # Eager refreshes are scheduled before the owner yields to waiters.
             async with self._refresh_lock:
                 pass
         await self._wait_for_owned_fill_task(getattr(self, "_fill_task", None))
@@ -1099,6 +1099,28 @@ class Owner:
             kwargs["since_ms"] = runtime.history_start_ms(self.bot, end)
             self._next_history_window = now + 900.0
         self._fill_task = asyncio.create_task(self._refresh_history(kwargs))
+
+    def _schedule_periodic_history(self, now):
+        if now >= self._next_history:
+            self.schedule_history()
+            self._next_history = now + 5.0
+
+    def _can_delay_periodic_history(self, now):
+        bot = self.bot
+        task = getattr(self, "_fill_task", None)
+        if (
+            # Keep bootstrap and history-window repair eager.
+            getattr(bot, "_hsl_fill_observation", None) is None
+            or now >= getattr(self, "_next_history_window", 0.0)
+            or (task is not None and not task.done())
+        ):
+            return False
+        pending = getattr(bot, "_authoritative_pending_confirmations", {})
+        fill_epoch = bot._ensure_freshness_ledger().surfaces["fills"].epoch
+        if int(pending.get("fills", 0)) > fill_epoch:
+            return False
+        required_fills = self.required_fill_facts()
+        return required_fills is None or required_fills[1]
 
     async def _refresh_history(self, kwargs):
         import asyncio
@@ -1733,6 +1755,8 @@ class Owner:
 
         started_ms = int(utc_ms())
         completed_cycle = False
+        history_after_ordinary = False
+        recoverable_io_failure = False
         ordinary_executed = False
         retry_after_refresh = False
         timings = dict(authoritative=0, protection=0, ordinary_execute=0)
@@ -1831,9 +1855,17 @@ class Owner:
                 )
             self.remember_position()
             now = self._schedule_clock()
-            if now >= self._next_history:
-                self.schedule_history()
-                self._next_history = now + 5.0
+            # A routine Hyperliquid fill fetch shares the order limiter and can
+            # replace the consumed receipt while a ready plan waits to submit.
+            history_after_ordinary = (
+                now >= self._next_history
+                and late_calculation
+                and bot.exchange == "hyperliquid"
+                and (preparation is not None or self._ordinary is not None)
+                and self._can_delay_periodic_history(now)
+            )
+            if not history_after_ordinary:
+                self._schedule_periodic_history(now)
             self.schedule_sources()
             if (
                 late_calculation
@@ -1930,14 +1962,17 @@ class Owner:
                 if isinstance(exc, _EXCHANGE_BACKPRESSURE_ERRORS)
                 else "network"
             )
+            retry_after = getattr(exc, "retry_after_seconds", 0.0)
+            recoverable_io_failure = (
+                history_after_ordinary and category == "network" and (retry_after or 0.0) <= 0.0
+            )
             return dict(
                 updated=False,
                 current_io_unavailable=True,
-                transport_failure=(
-                    category, type(exc).__name__, getattr(exc, "retry_after_seconds", 0.0)
-                ),
+                transport_failure=(category, type(exc).__name__, retry_after),
             )
         except (AuthoritativeSurfaceUnavailable, MarketSnapshotUnavailable) as exc:
+            recoverable_io_failure = True
             logging.warning(
                 "[risk] hsl current I/O unavailable | error_type=%s", type(exc).__name__
             )
@@ -1949,6 +1984,12 @@ class Owner:
             self._cycle_running = False
             for wave in reports:
                 self.report(wave)
+            if (
+                history_after_ordinary
+                and (completed_cycle or recoverable_io_failure)
+                and not self._shutdown_requested()
+            ):
+                self._schedule_periodic_history(self._schedule_clock())
             if completed_cycle:
                 run_diagnostic_step(
                     "record ordinary cycle progress",

@@ -111,10 +111,15 @@ retired-order work, under the same input validation and write admission rules.
 Freeze each candle acquisition's requested symbol cohort when scheduling it. Later
 position or fill refreshes cannot remove a source from that in-flight request.
 With HSL enabled, one owned background task prepares the ordinary symbol universe,
-remote candle data, EMA inputs and quotes. It can join an account refresh already in
-flight before selecting the fill task that refresh scheduled. It gives the owned fill
-task up to two seconds. Both protective and fill work proceed independently. Early
-trailing work only preloads factual candles under one bounded remote budget.
+remote candle data, EMA inputs and quotes. It can join an account refresh already in flight
+before giving the current owned fill task up to two seconds. Early trailing work only preloads
+factual candles under one bounded remote budget. On Hyperliquid a new routine fill refresh can
+share the order limiter and replace an ordinary plan's consumed receipt while its write is queued.
+When ordinary preparation is available or in progress and fill inputs are ready, run protection
+and the ordinary attempt against the latest published history, then start a due routine refresh in
+the same pass. Schedule it after recoverable I/O failures too, except when exchange backpressure
+or an explicit retry delay requires waiting. Keep bootstrap, history-window repair, pending fill
+confirmation and in-flight reads on their existing schedule.
 
 If a preparation is ready at entry and the previous account cohort is still current,
 the owner can run protection before the scheduled read. The serialized owner then refreshes
