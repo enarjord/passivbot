@@ -1110,9 +1110,12 @@ async def test_late_handoff_sends_refreshed_raw_balance_to_native_and_executes(t
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("refresh_kind", ["routine", "in_flight", "window_repair"])
-async def test_hyperliquid_ordinary_create_and_fill_refresh(owner_handoff, refresh_kind):
+@pytest.mark.parametrize(
+    "scenario", ["routine", "in_flight", "window_repair", "confirmed", "network_error", "backpressure"]
+)
+async def test_hyperliquid_ordinary_create_and_fill_refresh(owner_handoff, scenario):
     from ccxt.async_support import hyperliquid
+    from ccxt.base.errors import NetworkError, RateLimitExceeded
     from live import executor, hsl_live
 
     fixture = owner_handoff
@@ -1135,6 +1138,7 @@ async def test_hyperliquid_ordinary_create_and_fill_refresh(owner_handoff, refre
 
     async def refresh_fills(**kwargs):
         await queued.wait()
+        await client.fetch2("info", "public", "POST", config={"cost": 2})
         fixture.clock[0] += 1_250
         receipt = observe_fills(bot, (fixture.clock[0] - 1, fixture.clock[0]))
         assert receipt is not first_receipt and receipt.tape == first_receipt.tape
@@ -1144,6 +1148,8 @@ async def test_hyperliquid_ordinary_create_and_fill_refresh(owner_handoff, refre
         return True
 
     async def throttle(cost):
+        if cost == 2:
+            return  # Let the queued fill read reach transport first when scheduled.
         fixture.events.append("queue")
         queued.set()
         task = getattr(owner, "_fill_task", None)
@@ -1154,8 +1160,15 @@ async def test_hyperliquid_ordinary_create_and_fill_refresh(owner_handoff, refre
         if fills_completed.is_set():
             assert owner._account_mismatch_reason(wave, fixture.clock[0]) == "hsl_fill_receipt_replaced"
 
-    async def fetch(*args):
+    async def fetch(url, *args):
+        if url.endswith("/info"):
+            fixture.events.append("fill_transport")
+            return []
         fixture.events.append("transport")
+        if scenario == "network_error":
+            raise NetworkError("offline write failed")
+        if scenario == "backpressure":
+            raise RateLimitExceeded("offline write rate limited")
         return {"id": "offline order"}
 
     async def reconcile_create(strategy, quotes, receipts):
@@ -1176,7 +1189,9 @@ async def test_hyperliquid_ordinary_create_and_fill_refresh(owner_handoff, refre
     bot.execute_order_plan_to_exchange = execute
     client.throttle = throttle
     client.fetch = fetch
-    client.sign = lambda *args: dict(url="https://offline.invalid", method="POST", headers={}, body=None)
+    client.sign = lambda path, *args: dict(
+        url=f"https://offline.invalid/{path}", method="POST", headers={}, body=None
+    )
 
     original = await start_preparation(fixture)
     try:
@@ -1185,23 +1200,52 @@ async def test_hyperliquid_ordinary_create_and_fill_refresh(owner_handoff, refre
         fixture.events.clear()
         owner.schedule_history = hsl_live.Owner.schedule_history.__get__(owner)
         owner._next_history = owner._schedule_clock()
-        if refresh_kind != "window_repair":
+        if scenario != "window_repair":
             owner._next_history_window = owner._next_history + 900.0
-        if refresh_kind == "in_flight":
+        if scenario == "in_flight":
             owner.schedule_history()
+        if scenario == "confirmed":
+            bot._authoritative_pending_confirmations = {"fills": fixture.ledger.surfaces["fills"].epoch}
 
         result = await owner.cycle()
-        await asyncio.wait_for(owner._fill_task, 1.0)
-        assert result["ordinary_completed"]
+        fill_task = getattr(owner, "_fill_task", None)
+        if scenario == "backpressure":
+            assert fill_task is None and owner._next_history <= owner._schedule_clock()
+        else:
+            await asyncio.wait_for(fill_task, 1.0)
         assert fixture.events[:4] == ["protection", "account", "protection", "calculate"]
-        if refresh_kind != "routine":
+        if scenario in {"in_flight", "window_repair"}:
+            assert result["ordinary_completed"]
             assert isinstance(results[0], executor.DeferredOrderCreation)
             assert confirmations == []
-            assert fixture.events[4:] == ["queue", "fills"]
+            assert fixture.events[4:] == ["queue", "fill_transport", "fills"]
         else:
-            assert results == [{"id": "offline order"}]
             assert confirmations == [{"balance", "positions", "open_orders"}]
-            assert fixture.events[4:] == ["queue", "transport", "fills"]
+            if scenario in {"network_error", "backpressure"}:
+                assert result["current_io_unavailable"] and not results
+            else:
+                assert result["ordinary_completed"] and results == [{"id": "offline order"}]
+            expected = ["queue", "transport"]
+            if scenario != "backpressure":
+                expected += ["fill_transport", "fills"]
+            assert fixture.events[4:] == expected
     finally:
         await stop_preparation(owner, original, getattr(owner, "_fill_task", None))
         await client.close()
+
+
+@pytest.mark.parametrize("planner_requires_fills", [False, True])
+def test_outstanding_fill_confirmation_stays_eager(owner_handoff, planner_requires_fills):
+    fixture = owner_handoff
+    owner, bot, ledger = fixture.owner, fixture.bot, fixture.ledger
+    bot._staged_planner_required_surfaces = lambda **kwargs: {"fills"} if planner_requires_fills else set()
+    now = owner._schedule_clock()
+    owner._next_history_window = now + 900.0
+    ledger.begin_epoch(now_ms=NOW)
+    ledger.stamp("fills", now_ms=NOW)
+    bot._authoritative_pending_confirmations = {"fills": ledger.epoch + 1}
+
+    assert not owner._can_delay_periodic_history(now)
+    ledger.begin_epoch(now_ms=NOW)
+    ledger.stamp("fills", now_ms=NOW)
+    assert owner._can_delay_periodic_history(now)
