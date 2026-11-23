@@ -2640,7 +2640,7 @@ async def test_bitget_fetcher_maps_hedge_bare_close_sides(monkeypatch):
                 "symbol": "BTCUSDT",
                 "tradeSide": "close",
                 "posMode": "hedge_mode",
-                "side": "buy",
+                "side": "sell",
                 "baseVolume": "0.1",
                 "price": "10",
                 "profit": "1",
@@ -2652,7 +2652,7 @@ async def test_bitget_fetcher_maps_hedge_bare_close_sides(monkeypatch):
                 "symbol": "BTCUSDT",
                 "tradeSide": "close",
                 "posMode": "hedge_mode",
-                "side": "sell",
+                "side": "buy",
                 "baseVolume": "0.1",
                 "price": "10",
                 "profit": "1",
@@ -4486,7 +4486,7 @@ async def test_manager_refresh_persists_and_queries(tmp_path: Path, sample_event
     cache_dir = tmp_path / "fills"
     fetcher = _StaticFetcher(sample_events)
     manager = FillEventsManager(
-        exchange="bitget",
+        exchange="example",
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
@@ -4513,7 +4513,7 @@ async def test_manager_refresh_persists_and_queries(tmp_path: Path, sample_event
     # Reload to ensure cache is used
     fetcher2 = _StaticFetcher([])
     manager2 = FillEventsManager(
-        exchange="bitget",
+        exchange="example",
         user="default",
         fetcher=fetcher2,
         cache_path=cache_dir,
@@ -5675,7 +5675,7 @@ async def test_manager_cache_load_does_not_advance_last_exchange_refresh(
     )
     fetcher = _StaticFetcher([])
     manager = FillEventsManager(
-        exchange="bitget",
+        exchange="example",
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
@@ -6502,7 +6502,7 @@ async def test_manager_refresh_range_does_not_infer_gaps_from_fill_spacing(tmp_p
 
     fetcher = _RecordingFetcher()
     manager = FillEventsManager(
-        exchange="bitget",
+        exchange="example",
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
@@ -9730,14 +9730,14 @@ def test_coverage_reports_corrupt_metadata_as_unavailable(tmp_path, field, value
 @pytest.mark.parametrize('value', ['invalid', {'invalid': 1}])
 async def test_cold_cache_normalization_classifies_invalid_metadata(tmp_path, sample_events, field, value):
     cache_path = tmp_path / 'normalization'
-    manager = FillEventsManager(exchange='bitget', user='default',
+    manager = FillEventsManager(exchange='example', user='default',
                                 fetcher=_StaticFetcher(sample_events), cache_path=cache_path,
                                 fallback_fee_fraction=0.0)
     await manager.refresh()
     metadata = manager.cache.load_metadata()
     metadata[field] = value
     manager.cache.save_metadata(metadata)
-    cold = FillEventsManager(exchange='bitget', user='default',
+    cold = FillEventsManager(exchange='example', user='default',
                              fetcher=_StaticFetcher([]), cache_path=cache_path,
                              fallback_fee_fraction=0.0)
     with pytest.raises(fem.FillEventCacheContractError, match=field):
