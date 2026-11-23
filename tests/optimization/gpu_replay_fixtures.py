@@ -60,7 +60,7 @@ def _base_parameter_values() -> dict[str, float]:
         "unstuck_ema_span_1_minutes": 211.75,
         "unstuck_enabled": 0.0,
         "unstuck_ema_gating_enabled": 1.0,
-        "reserved_unstuck_sizing_slot": 0.1,
+        "reserved_unstuck_sizing_slot": 0.0,
         "unstuck_ema_distance_fraction": 0.0,
         "unstuck_loss_allowance_fraction": 0.1,
         "unstuck_exposure_trigger_ratio": 0.5,
@@ -72,7 +72,7 @@ def _base_parameter_values() -> dict[str, float]:
         "hsl_memory_ema_span_minutes": 1440.0,
         "hsl_signal_mode": 0.0,
         "realized_loss_memory_ema_span_minutes": 1440.0,
-        "reserved_realized_memory_slot": 1440.0,
+        "loss_gate_max_drawdown_fraction": 0.0,
     }
 
 

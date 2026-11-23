@@ -554,7 +554,7 @@ mod tests {
         assert!(source.contains("if (!survivor[c] || !forced_normal) continue;"));
         assert_eq!(
             source.matches("if (!managed_candidate) continue;").count(),
-            3
+            1
         );
         assert!(!source.contains("any_valid"));
         assert!(source.contains("held_positions_have_missing_prices("));
@@ -577,13 +577,10 @@ mod tests {
         assert!(
             source.contains("hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C)")
         );
-        assert!(source.contains("select_ema_multicoin_unstuck_coin("));
-        assert!(source.contains("int forced_unstuck_coin"));
-        assert!(source.contains("calc_signed_entry_distance_fraction("));
-        assert!(
-            source.contains("long_entry_distance_fraction > short_entry_distance_fraction")
-        );
-        assert!(source.contains("long_unstuck_candidate <= short_unstuck_candidate"));
+        assert!(source.contains("upper_replay_unstuck_qty("));
+        assert!(source.contains("size_capped_replay_unstuck("));
+        assert!(source.contains("loss_gate_max_drawdown_fraction = params[po + 47]"));
+        assert!(!source.contains("forced_unstuck_coin"));
         assert!(source.contains(
             "const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po)"
         ));
@@ -690,8 +687,10 @@ mod tests {
         assert!(source.contains("secondary_close_qty"));
         assert!(source.contains("finalize_ema_multicoin_reducers_one_side("));
         assert!(source.contains("finalize_ema_multicoin_reducers_fused("));
-        assert!(source.contains("gate_ema_multicoin_close("));
-        assert!(source.contains("candidate.qty > best_candidate.qty"));
+        assert!(source.contains("finalize_ema_multicoin_closes("));
+        assert!(source.contains("unstuck.qty > nominee.qty"));
+        assert!(source.contains("replay_close_preferred(candidate.priority, winner.priority)"));
+        assert!(source.contains("spend_replay_loss_budget(budget, winner.net_pnl)"));
         assert!(source.contains("close_is_protective_reducer[MAX_COINS]"));
         assert!(!source.contains("realized_loss_proxy_allows_close"));
         assert!(source.contains("current_effective_n_positions"));
@@ -699,7 +698,6 @@ mod tests {
         assert!(source.contains("coin_hsl[c].slot_count = float(effective_n_positions)"));
         assert!(source.contains("distance == best_distance && c > best"));
         assert!(source.contains("= fma("));
-        assert!(source.contains("one global auto-unstuck intent"));
         assert!(source.contains("unstuck_loss_allowance_fraction"));
         assert!(!source.contains("hard_stop"));
         assert_eq!(
@@ -780,7 +778,7 @@ mod tests {
         assert!(source.contains("if (!survivor[c] || !forced_normal) continue;"));
         assert_eq!(
             source.matches("if (!managed_candidate) continue;").count(),
-            3
+            1
         );
         assert!(!source.contains("any_valid"));
         assert!(source.contains("held_positions_have_missing_prices("));
@@ -800,13 +798,11 @@ mod tests {
         assert!(
             source.contains("hsl_multicoin_failure_status(short_side.hsl, short_side.coin_hsl, C)")
         );
-        assert!(source.contains("select_tm_multicoin_unstuck_coin("));
-        assert!(source.contains("int forced_unstuck_coin"));
-        assert!(source.contains("calc_signed_entry_distance_fraction("));
-        assert!(
-            source.contains("long_entry_distance_fraction > short_entry_distance_fraction")
-        );
-        assert!(source.contains("long_unstuck_candidate <= short_unstuck_candidate"));
+        assert!(source.contains("tm_unstuck_policy_active("));
+        assert!(source.contains("propose_tm_unstuck_close("));
+        assert!(source.contains("upper_replay_unstuck_qty("));
+        assert!(source.contains("size_capped_replay_unstuck("));
+        assert!(source.contains("picked_unstuck"));
         assert!(source.contains("const TrailingMartingaleMulticoinSideConfig config ="));
         assert!(source.contains(
             "init_trailing_martingale_multicoin_side_state(\n        side, config, coin_settings, coin_overrides, C"
@@ -930,7 +926,15 @@ mod tests {
         assert!(!source.contains("realized_loss_proxy_allows_close"));
         assert!(source.contains("const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED"));
         assert!(source.contains("prepare_tm_close_admission"));
-        assert!(source.contains("tm_projected_close_pnl"));
+        assert!(source.contains("project_tm_close("));
+        assert!(source.contains("replay_close_preferred("));
+        assert!(source.contains("advance_tm_losing_close("));
+        assert_eq!(
+            source
+                .matches("loss_gate_max_drawdown_fraction = params[po + 64]")
+                .count(),
+            2
+        );
         assert!(source.contains("source.finalized_reducer_qty"));
         assert!(source.contains("source.admitted_groups[group / 32]"));
         assert_eq!(
@@ -951,10 +955,7 @@ mod tests {
         assert!(source.contains("finalized_reducer_qty_with_ordinary"));
         assert!(source.contains("finalized_wel_reducer_qty = finalized_reducer_qty"));
         assert!(source.contains("finalized_wel_reducer_qty"));
-        assert!(source.contains("finalized_unstuck_reducer_qty"));
-        assert!(source.contains("reducer_candidate_preferred"));
         assert!(source.contains("? raw_twel_reducer_qty : wel_reducer_qty"));
-        assert!(source.contains("? raw_unstuck_reducer_qty : exposure_reducer_qty"));
         assert!(source.contains("secondary_close_qty"));
         assert!(source.contains("recursive_grid_close_groups_after_reducer"));
         assert!(source.contains("for (int rung = 0; rung < max_rungs"));
@@ -963,7 +964,6 @@ mod tests {
         assert!(source.contains("close_gen_allowed_wel"));
         assert!(source.contains("current_effective_n_positions"));
         assert!(source.contains("close_grid_gen_psize"));
-        assert!(source.contains("(use_twel || use_unstuck) && wel_reducer_qty <= 0.0f"));
         assert!(source.contains("float reserved_grid_qty = strategy_wel_reducer_qty"));
         assert!(!source.contains("strategy_unstuck_reducer_qty"));
         assert!(source.contains("psize[c] - reserved_grid_qty"));
@@ -983,7 +983,7 @@ mod tests {
         assert!(source.contains("touch_nearest_ticks[k * C + c]"));
         assert!(source.contains("as_type<float>(touch_min_qty_bits[k * C + c])"));
         assert!(source.contains("minimum_close_relation > 0"));
-        assert!(source.contains("one-global-intent least-stuck selector"));
+        assert!(source.contains("ReplayLossBudget budget ="));
         assert!(source.contains("unstuck_loss_allowance_fraction"));
         assert!(!source.contains("hard_stop"));
     }

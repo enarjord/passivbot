@@ -443,8 +443,10 @@ def test_physical_attempt_checks_scratch_before_first_device_allocation(monkeypa
     # strategy/hourly admission has its own complete-layout regression tests.
     monkeypatch.setattr(kernel, "validate_hourly_bootstrap_inputs", lambda *_, **__: None)
     monkeypatch.setattr(kernel, "unstuck_required", lambda *_, **__: False)
+    monkeypatch.setattr("config.gpu.require_gpu_close_sizing_support", lambda **_: None)
     value._unstuck_ema_overrides = ()
-    value.parameter_keys = ("realized_loss_memory_ema_span_minutes", "reserved_realized_memory_slot")
+    value.parameter_keys = ("realized_loss_memory_ema_span_minutes", "loss_gate_max_drawdown_fraction")
+    value.loss_gate_enabled = True
     value.replay_sides = 1
     value.replay_kernel_name = "actual_fused_kernel"
     value._use_disabled_hsl_specialization = lambda _: False
@@ -480,14 +482,15 @@ def test_physical_attempt_checks_scratch_before_first_device_allocation(monkeypa
         raise AllocationReached
 
     monkeypatch.setattr(kernel.torch, "as_tensor", allocate)
+    candidates = np.tile([1440.0, 0.0], (117, 1))
     if policy == "cold_max":
         with pytest.raises(CudaReplayMemoryPressure, match="additional driver stack"):
-            value._run_factual_attempt(np.full((117, 2), 1440.0))
+            value._run_factual_attempt(candidates)
         assert called == [("actual_fused_kernel", 1)]
         assert all(ref() is not None for ref in refs)
     else:
         with pytest.raises(AllocationReached):
-            value._run_factual_attempt(np.full((117, 2), 1440.0))
+            value._run_factual_attempt(candidates)
         assert not called
 
 

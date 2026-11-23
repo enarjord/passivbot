@@ -245,10 +245,11 @@ def test_tm_account_admission_reserves_unfilled_intent_and_reducer_fallback():
 
     probe = r"""
 kernel void tm_account_admission_probe(
-    constant float* bars, constant int* ticks, constant float* settings,
+    constant float* bars, constant int* ticks, constant int* execution_ticks, constant float* settings,
     device float* output, uint b [[thread_position_in_grid]]
 ) {
-    if (b >= 7) return;
+    if (b >= 10) return;
+    settings += int(b) * 2 * COIN_COLS;
     TrailingMartingaleMulticoinSideState long_side, short_side;
     for (int rank = 0; rank < 2; ++rank) {
         thread TrailingMartingaleMulticoinSideState& side = rank == 0 ? long_side : short_side;
@@ -258,7 +259,8 @@ kernel void tm_account_admission_probe(
             side.close_qty[c] = 0.0f;
             if (c != rank) continue;
             thread TmCloseAdmission& source = side.close_admission[c];
-            source.trailing = false;
+            source.trailing = true;
+            source.unstuck_policy_enabled = false;
             source.context = {
                 rank == 1, 5.0f, 100.0f, 1000.0f, 1.0f,
                 10000, 10000, 10000, 0.1f, 0,
@@ -283,8 +285,8 @@ kernel void tm_account_admission_probe(
         short_side.close_admission[1].reducers[0] = {10100, 101.0f, 2.0f, false};
         budget = 2.5f;
         if (b == 3) {
-            // Reject the largest alternative, then rank its affordable fallback
-            // against the other position. Canonical coin zero wins the tie.
+            // Resize the larger alternative, then nominate the largest
+            // admissible quantity. Coin zero wins the cross-position tie.
             short_side.close_admission[1].reducers[0] = {11000, 110.0f, 2.0f, false};
             short_side.close_admission[1].reducers[1] = {10100, 101.0f, 1.0f, false};
             budget = 1.5f;
@@ -302,14 +304,40 @@ kernel void tm_account_admission_probe(
         budget = 2.0f;
     } else if (b == 6) {
         long_side.close_admission[0].ordinary.price = INFINITY;
+    } else if (b == 7 || b == 8) {
+        // Both positions can propose unstuck. One survives. A position
+        // nominating a larger WEL reducer leaves unstuck for another coin.
+        thread TmCloseAdmission& long_source = long_side.close_admission[0];
+        thread TmCloseAdmission& short_source = short_side.close_admission[1];
+        long_source.ordinary.qty = short_source.ordinary.qty = 0.0f;
+        long_source.reducers[2] = {9900, 99.0f, 5.0f, false};
+        short_source.reducers[2] = {10100, 101.0f, 5.0f, false};
+        long_source.unstuck_trigger = short_source.unstuck_trigger = 0.3f;
+        long_source.unstuck_allowance = 0.3f;
+        short_source.unstuck_allowance = 2.0f;
+        budget = 1.5f;
+        if (b == 8) long_source.reducers[0] = {9900, 99.0f, 1.0f, false};
+    } else if (b == 9) {
+        // The current long ladder is all passive and priced above the next
+        // candle's high. Reserve its closest group before the short.
+        thread TmCloseAdmission& long_source = long_side.close_admission[0];
+        long_source.trailing = false;
+        long_source.ordinary.qty = 0.0f;
+        long_source.context.close_qty_fraction = 0.1f;
+        long_source.context.close_threshold_base_fraction = 0.03f;
+        long_source.context.close_threshold_exposure_ratio_coefficient = -0.04f;
+        short_side.close_admission[1].ordinary = {10300, 103.0f, 1.0f, false};
+        budget = 0.6f;
     }
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
     bool success = apply_tm_multicoin_close_admission(
-        ticks, &long_side, &short_side, account, bars, ticks, settings,
-        0, 2, 2, budget / 1000.0f, b == 5 ? 0.01f : 0.0f
+        execution_ticks, &long_side, &short_side, account, bars, ticks, settings,
+        0, 2, 2, b != 7, budget / 1000.0f
     );
     output[b * 3] = success ? 1.0f : 0.0f;
-    output[b * 3 + 1] = long_side.close_qty[0];
+    thread const TmCloseAdmission& long_source = long_side.close_admission[0];
+    output[b * 3 + 1] = b == 9 && long_source.quantity_count > 0
+        ? long_source.quantity_override[0] : long_side.close_qty[0];
     output[b * 3 + 2] = short_side.close_qty[1];
 }
 """
@@ -317,10 +345,13 @@ kernel void tm_account_admission_probe(
     # nevertheless include the unfilled singleton orders emitted this candle.
     bars = np.full((2, 2, 4), 100.0, dtype=np.float32)
     ticks = np.full((2, 2, 2), 10000, dtype=np.int32)
-    settings = np.zeros((2, 13), dtype=np.float32)
-    settings[:, :5] = [0.1, 0.01, 0.1, 0.0, 1.0]
-    settings[:, 7] = 1
-    settings[:, 11] = 0.01
+    execution_ticks = ticks.copy()
+    execution_ticks[:, :, 0] = 9850
+    settings = np.zeros((10, 2, 15), dtype=np.float32)
+    settings[:, :, :5] = [0.1, 0.01, 0.1, 0.0, 1.0]
+    settings[:, :, 7] = 1
+    settings[:, :, 11] = 0.01
+    settings[9, 0, 5] = 0.04
     source = (
         "#define PASSIVBOT_HSL_CAPACITY 1\n"
         "#define PASSIVBOT_HSL_TREE_SIZE 1\n"
@@ -328,17 +359,24 @@ kernel void tm_account_admission_probe(
         + passivbot_rust.mps_trailing_martingale_multicoin_source_py() + probe
     )
     device = gpu_device()
-    output = torch.zeros((7, 3), device=device)
+    output = torch.zeros((10, 3), device=device)
     library = compile_shader(source, cuda_coin_capacity=2, mps_coin_capacity=2)
     library.tm_account_admission_probe(
         torch.tensor(bars, device=device), torch.tensor(ticks, device=device),
-        torch.tensor(settings, device=device), output, threads=(7, 1, 1),
+        torch.tensor(execution_ticks, device=device), torch.tensor(settings, device=device),
+        output, threads=(10, 1, 1),
     )
     synchronize()
-    np.testing.assert_array_equal(output[:6].cpu().numpy(),
-                                  [[1, 1, 0], [1, 1, 0], [1, 0, 2],
-                                   [1, 1, 0], [1, 5, 0], [1, 0, 0]])
+    np.testing.assert_allclose(
+        output[:6].cpu().numpy(),
+        [[1, 1, 0.5], [1, 1, 0.5], [1, 1, 1.5],
+         [1, 1, 0.5], [1, 5, 0.5], [1, 0.9, 0]],
+        atol=1.0e-6, rtol=0,
+    )
     assert output[6, 0].item() == 0.0
+    np.testing.assert_allclose(
+        output[7:].cpu().numpy(), [[1, 0.3, 0], [1, 1, 0.5], [1, 0.2, 0]], atol=1.0e-6, rtol=0,
+    )
 
 
 def test_tm_loss_admission_checks_final_dust_and_executable_minimums():
@@ -401,7 +439,7 @@ kernel void tm_finalized_loss_probe(
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
     bool success = apply_tm_multicoin_close_admission(
         ticks, short_side ? nullptr : &side, short_side ? &side : nullptr,
-        account, bars, ticks, settings, 0, 2, 1, budget / 1000.0f, 0.0f
+        account, bars, ticks, settings, 0, 2, 1, true, budget / 1000.0f
     );
     output[b * 3] = success ? 1.0f : 0.0f;
     output[b * 3 + 1] = side.close_qty[0];
@@ -410,7 +448,7 @@ kernel void tm_finalized_loss_probe(
 """
     bars = torch.full((2, 1, 4), 100.0, device=gpu_device())
     ticks = torch.full((2, 1, 2), 10000, dtype=torch.int32, device=gpu_device())
-    settings = torch.zeros((1, 13), device=gpu_device())
+    settings = torch.zeros((1, 15), device=gpu_device())
     settings[:, :5] = torch.tensor([1.0, 0.01, 10.0, 0.0, 1.0], device=gpu_device())
     settings[:, 7] = 1
     output = torch.zeros((12, 3), device=gpu_device())
@@ -423,8 +461,8 @@ kernel void tm_finalized_loss_probe(
     library = compile_shader(source, cuda_coin_capacity=1, mps_coin_capacity=1)
     library.tm_finalized_loss_probe(bars, ticks, settings, output, threads=(12, 1, 1))
     synchronize()
-    # The original Rust regression rejects 11 * 10 loss with allowance 105;
-    # an allowance of 115 admits the full executable reducer.
-    expected = [[1, 0, 0], [1, 11, 0], [1, 5, 0],
-                [1, 3, 2], [1, 0, 0], [1, 0, 0]]
+    # Positive headroom may consume its final lot. Preserve the sized
+    # reducer after allocation, even when the remainder is below minimum.
+    expected = [[1, 11, 0], [1, 11, 0], [1, 5, 0],
+                [1, 3, 2], [1, 2.5, 0], [1, 0, 0]]
     np.testing.assert_array_equal(output.cpu().numpy(), expected * 2)

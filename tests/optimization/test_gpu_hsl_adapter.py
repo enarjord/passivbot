@@ -128,7 +128,7 @@ kernel void v9_pending_entry_probe(
     float hsl_equity = initial_balance;
     bool filled = process_tm_multicoin_side_fills(market_execution_ticks, side, config, account, fills,
         bars, ticks, ticks, ticks, ticks, touch_min_qty_relation, settings, overrides, output,
-        0, 0, 2, false, true, false, false, 1.0f, false, 0.0f, 0.0f,
+        0, 0, 2, false, true, false, false, false, 0.0f, 0.0f,
         false, hsl_equity);
 #else
     EmaMulticoinFillState fills = init_ema_multicoin_fill_state();

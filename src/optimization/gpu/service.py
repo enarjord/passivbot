@@ -531,7 +531,7 @@ def _gpu_proxy_execution_checkpoint_contract(
         "taker_fee_fraction",
     )
     contract = {
-        "version": 12,
+        "version": 13,
         "core_metric_definition_version": CORE_METRIC_DEFINITION_VERSION,
         "forager_hysteresis_abi": FORAGER_HYSTERESIS_ABI,
         "age_admission_abi": 1,
@@ -950,6 +950,7 @@ def _candidate_parameter_matrix(
     *,
     static_overrides: dict | None = None,
     couple_unstuck_emas: bool = False,
+    loss_gate_enabled: bool = False,
 ) -> np.ndarray:
     """Pack columns directly, preserving base < candidate < fixed override precedence."""
     if not candidates:
@@ -970,7 +971,9 @@ def _candidate_parameter_matrix(
                 continue
             source_key = coupled_sources.get(key, key)
             target = side_index * len(param_keys) + column
-            if source_key in RESERVED_RISK_PARAM_KEYS:
+            if source_key in RESERVED_RISK_PARAM_KEYS or (
+                source_key == "loss_gate_max_drawdown_fraction" and not loss_gate_enabled
+            ):
                 matrix[:, target] = 0.0
             elif source_key in overrides:
                 matrix[:, target] = float(overrides[source_key])
@@ -1298,6 +1301,7 @@ class SharedAccountReplay:
             for side in ("long", "short")
         }
         self.couple_unstuck_emas = unstuck_ema_spans_coupled(config)
+        self.loss_gate_enabled = backtest_params["loss_gate_enabled"]
         base_parameters = prepare_candidate_parameters(config, mss, exchange)
         self.core_hsl_policy_enabled = {
             side: bool(base_parameters[f"_core_hsl_policy_enabled_{side}"])
@@ -1690,6 +1694,7 @@ class SharedAccountReplay:
             param_keys,
             {side: self.base_params[side]},
             couple_unstuck_emas=getattr(self, "couple_unstuck_emas", False),
+            loss_gate_enabled=getattr(self, "loss_gate_enabled", False),
         )
 
     def suite_batch_key(self):

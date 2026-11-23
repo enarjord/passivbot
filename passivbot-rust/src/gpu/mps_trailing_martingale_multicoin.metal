@@ -5,6 +5,8 @@ using namespace metal;
 #define PASSIVBOT_TM_LOSS_GATE_DISABLED 0
 #endif
 
+#define PASSIVBOT_TM_CLOSE_ADMISSION (!PASSIVBOT_TM_LOSS_GATE_DISABLED || PASSIVBOT_UNSTUCK_ENABLED)
+
 #ifndef PASSIVBOT_EXPOSURE_RMS_ENABLED
 #define PASSIVBOT_EXPOSURE_RMS_ENABLED 0
 #endif
@@ -168,20 +170,6 @@ inline float finalized_reducer_qty_with_ordinary(
     );
     return remainder > 0.0f && remainder < reducer_min
         ? psize : reducer_qty;
-}
-
-inline bool reducer_candidate_preferred(
-    float left_qty, int left_ticks, int left_order_type_id,
-    float right_qty, int right_ticks, int right_order_type_id,
-    bool is_long
-) {
-    if (!(left_qty > 0.0f)) return false;
-    if (!(right_qty > 0.0f)) return true;
-    if (left_qty != right_qty) return left_qty > right_qty;
-    if (left_ticks != right_ticks) {
-        return is_long ? left_ticks < right_ticks : left_ticks > right_ticks;
-    }
-    return left_order_type_id < right_order_type_id;
 }
 
 struct CloseGroup {
@@ -436,7 +424,7 @@ inline bool recursive_grid_close_would_expand(
     return false;
 }
 
-#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+#if PASSIVBOT_TM_CLOSE_ADMISSION
 // Persist only one immutable strategy snapshot and compact admitted intent.
 // Full finalized order vectors are temporary, shared across coins and alternatives.
 struct TmCloseAdmission {
@@ -444,13 +432,17 @@ struct TmCloseAdmission {
     CloseGroup ordinary;
     CloseGroup reducers[3]; // WEL, TWEL, auto-unstuck.
     float finalized_reducer_qty[3];
+    float unstuck_trigger;
+    float unstuck_allowance;
     uint admitted_groups[16];
-    int quantity_group[2];
-    float quantity_override[2];
+    // At most one aggregate trim, one dust adjustment and one loss resize.
+    int quantity_group[3];
+    float quantity_override[3];
+    int quantity_count;
     int selected_reducer;
-    uint rejected_reducers;
     bool valid;
     bool trailing;
+    bool unstuck_policy_enabled;
     bool expanded;
 };
 
@@ -500,9 +492,6 @@ struct TrailingMartingaleMulticoinSideState {
     float close_qty[MAX_COINS];
     float secondary_close_qty[MAX_COINS];
     float twel_close_qty[MAX_COINS];
-#if PASSIVBOT_UNSTUCK_ENABLED
-    float unstuck_close_qty[MAX_COINS];
-#endif
     float close_gen_balance[MAX_COINS];
     float close_gen_allowed_wel[MAX_COINS];
     float close_gen_market_price[MAX_COINS];
@@ -526,9 +515,6 @@ struct TrailingMartingaleMulticoinSideState {
     int close_tick[MAX_COINS];
     int secondary_close_tick[MAX_COINS];
     int twel_close_tick[MAX_COINS];
-#if PASSIVBOT_UNSTUCK_ENABLED
-    int unstuck_close_tick[MAX_COINS];
-#endif
     int close_grid_max_rungs[MAX_COINS];
     int close_grid_prefix_tick[MAX_COINS];
     bool selected[MAX_COINS];
@@ -554,12 +540,12 @@ struct TrailingMartingaleMulticoinSideState {
     float alpha_1h_coin[MAX_COINS];
     float alpha_1m_coin[MAX_COINS];
     float coin_realized_pnl[MAX_COINS];
-#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+#if PASSIVBOT_TM_CLOSE_ADMISSION
     TmCloseAdmission close_admission[MAX_COINS];
 #endif
 };
 
-#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+#if PASSIVBOT_TM_CLOSE_ADMISSION
 inline int tm_reducer_order_type(int candidate, bool short_side) {
     return candidate == 0 ? (short_side ? 25 : 24)
         : candidate == 1 ? (short_side ? 21 : 10) : (short_side ? 20 : 9);
@@ -598,7 +584,7 @@ inline void reverse_tm_ordinary_closes(thread TmFinalizedClose* orders, int coun
 // it can differ from the closest-first order used later by fills.
 inline int finalize_tm_admission_closes(
     thread const TmCloseAdmission& source, int reducer_candidate,
-    thread TmFinalizedClose* orders
+    thread TmFinalizedClose* orders, float reserved_reducer_qty = 0.0f
 ) {
     thread const TmCloseGridContext& context = source.context;
     float position_size = context.market_resize_psize;
@@ -619,6 +605,7 @@ inline int finalize_tm_admission_closes(
     }
     if (reducer_candidate >= 0) {
         CloseGroup reducer = source.reducers[reducer_candidate];
+        if (reserved_reducer_qty > 0.0f) reducer.qty = reserved_reducer_qty;
         if (reducer.qty > 0.0f) orders[count++] = {reducer, reducer.qty, -2};
     }
     if (count == 0 || !(position_size > 0.0f)) return 0;
@@ -628,7 +615,7 @@ inline int finalize_tm_admission_closes(
             && position_size * (1.0f + 1.0e-6f)
                 < tm_close_minimum(context, orders[i].order);
     }
-    if (all_below_minimum) {
+    if (all_below_minimum && reserved_reducer_qty <= 0.0f) {
         int keep = orders[count - 1].group_index == -2 ? count - 1 : 0;
         orders[0] = orders[keep];
         orders[0].order.qty = position_size;
@@ -637,7 +624,9 @@ inline int finalize_tm_admission_closes(
     int kept = 0;
     for (int i = 0; i < count; ++i) {
         if (orders[i].order.qty * (1.0f + 1.0e-6f)
-            >= tm_close_minimum(context, orders[i].order)) {
+            >= tm_close_minimum(context, orders[i].order)
+            || (all_below_minimum && orders[i].group_index == -2
+                && reserved_reducer_qty == position_size)) {
             orders[kept++] = orders[i];
         }
     }
@@ -676,7 +665,8 @@ inline int finalize_tm_admission_closes(
     for (int i = 0; i < count; ++i) {
         minimum = fmin(minimum, tm_close_minimum(context, orders[i].order));
     }
-    if (remainder > 0.0f && remainder < minimum) {
+    if (remainder > 0.0f && remainder < minimum
+        && !(reserved_reducer_qty > 0.0f && count == 1 && orders[0].group_index == -2)) {
         int ordinary_count = count - (orders[count - 1].group_index == -2 ? 1 : 0);
         if (far_first) reverse_tm_ordinary_closes(orders, ordinary_count);
         if (ordinary_count < count) {
@@ -696,11 +686,13 @@ inline int finalize_tm_admission_closes(
 inline void prepare_tm_close_admission(
     thread TmCloseAdmission& source,
     constant float* bars, constant int* fill_ticks, constant float* coin_settings ORGANILLO_ARGS,
-    int k, int T, int C, int coin
+    int k, int T, int C, int coin, bool gate_enabled
 ) {
     thread TmCloseGridContext& context = source.context;
-    source.expanded = false;
-    if (!source.trailing && k + 1 < T
+    // Risk policy needs the entire current intent, including orders that
+    // cannot fill next bar. Only inactive positions may use the fill hint.
+    source.expanded = !source.trailing && (gate_enabled || source.unstuck_policy_enabled);
+    if (!source.expanded && !source.trailing && k + 1 < T
         && k + 1 >= int(coin_settings[coin * COIN_COLS + 8])
         && k + 1 <= int(coin_settings[coin * COIN_COLS + 7])) {
         int offset = ((k + 1) * C + coin) * 4;
@@ -734,7 +726,7 @@ inline void prepare_tm_close_admission(
     if (source.trailing && source.reducers[0].qty > 0.0f) source.ordinary.qty = 0.0f;
     for (int candidate = 0; candidate < 3; ++candidate) {
         thread CloseGroup& order = source.reducers[candidate];
-        if (order.qty > 0.0f && order.market) {
+        if (candidate != 2 && order.qty > 0.0f && order.market) {
             order.qty = resize_market_close_qty(
                 order.qty, context.market_resize_psize, context.generation_market_price,
                 context.qty_step, context.min_qty, context.min_cost, context.c_mult
@@ -743,34 +735,119 @@ inline void prepare_tm_close_admission(
         source.finalized_reducer_qty[candidate] = 0.0f;
     }
     source.selected_reducer = -2;
-    source.rejected_reducers = 0u;
 }
 
-inline float tm_projected_close_pnl(
+inline bool project_tm_close(
     thread const TmCloseGridContext& context, thread const CloseGroup& order,
-    constant float* coin_settings ORGANILLO_ARGS, int coin, int market_execution_tick
+    constant float* coin_settings ORGANILLO_ARGS, int coin, int market_execution_tick,
+    thread ReplayCloseProjection& projection
 ) {
-    float price = order.market
-        ? ordinary_market_fill_price(market_execution_tick, context.price_step) : order.price;
-    float fee = coin_settings[coin * COIN_COLS + (order.market ? 11 : 5)];
-    return order.qty * context.c_mult
-        * (context.short_side ? context.pprice - price : price - context.pprice)
-        - order.qty * price * context.c_mult * fee;
+    int coin_offset = coin * COIN_COLS;
+    return project_replay_close(
+        !context.short_side, context.pprice, order.price, context.generation_market_price,
+        order.market, market_execution_tick, context.price_step, context.qty_step,
+        context.min_qty, context.min_cost, context.c_mult,
+        coin_settings[coin_offset + 5], coin_settings[coin_offset + 11], projection
+    );
 }
 
-inline int next_tm_admission_reducer(thread const TmCloseAdmission& source) {
-    int best = -1;
-    for (int candidate = 0; candidate < 3; ++candidate) {
-        if ((source.rejected_reducers & (1u << uint(candidate))) != 0u
-            || !(source.finalized_reducer_qty[candidate] > 0.0f)) continue;
-        if (best < 0 || reducer_candidate_preferred(
-                source.finalized_reducer_qty[candidate], source.reducers[candidate].ticks,
-                tm_reducer_order_type(candidate, source.context.short_side),
-                source.finalized_reducer_qty[best], source.reducers[best].ticks,
-                tm_reducer_order_type(best, source.context.short_side),
-                !source.context.short_side)) best = candidate;
+inline int tm_ordinary_order_type(thread const TmCloseAdmission& source) {
+    if (source.context.short_side) return source.trailing ? 19 : 18;
+    return source.trailing ? 8 : 7;
+}
+
+inline bool remember_tm_group_quantity(
+    thread TmCloseAdmission& source, int group, float qty, float original_qty
+) {
+    for (int i = 0; i < source.quantity_count; ++i) {
+        if (source.quantity_group[i] == group) {
+            source.quantity_override[i] = qty;
+            return true;
+        }
     }
-    return best;
+    if (qty == original_qty) return true;
+    if (source.quantity_count >= 3) return false;
+    int index = source.quantity_count++;
+    source.quantity_group[index] = group;
+    source.quantity_override[index] = qty;
+    return true;
+}
+
+inline bool store_tm_admitted_close(
+    thread TrailingMartingaleMulticoinSideState& side, int coin, TmFinalizedClose item
+) {
+    thread TmCloseAdmission& source = side.close_admission[coin];
+    bool reducer = item.group_index == -2;
+    if (item.group_index >= 0) {
+        int group = item.group_index;
+        source.admitted_groups[group / 32] |= 1u << uint(group % 32);
+        return remember_tm_group_quantity(source, group, item.order.qty, item.original_qty);
+    }
+    if (reducer || source.selected_reducer < 0) {
+        side.close_qty[coin] = item.order.qty;
+        side.close_tick[coin] = item.order.ticks;
+        side.close_market[coin] = item.order.market;
+        side.close_is_exposure_reducer[coin] = reducer;
+        side.close_is_unstuck_reducer[coin] = reducer && source.selected_reducer == 2;
+    } else {
+        side.secondary_close_qty[coin] = item.order.qty;
+        side.secondary_close_tick[coin] = item.order.ticks;
+        side.secondary_close_market[coin] = item.order.market;
+    }
+    return true;
+}
+
+// Winning reducers change quantities in the ordinary snapshot. Keep only the
+// compact losing subset and its next-ranked item for the joint allocation pass.
+struct TmOrdinaryRiskCursor {
+    uint pending_groups[16];
+    bool have_nominee;
+    TmFinalizedClose nominee;
+    ReplayClosePriority priority;
+};
+
+inline bool nominate_tm_losing_close(
+    thread TmOrdinaryRiskCursor& cursor, thread const TmCloseAdmission& source,
+    TmFinalizedClose item, int coin, int market_execution_tick,
+    constant float* coin_settings ORGANILLO_ARGS
+) {
+    ReplayCloseProjection projection;
+    if (!project_tm_close(source.context, item.order, coin_settings ORGANILLO_PASS,
+            coin, market_execution_tick, projection)) return false;
+    ReplayClosePriority priority = replay_close_priority(
+        projection, item.order.price, source.context.generation_market_price,
+        coin, tm_ordinary_order_type(source), item.order.qty
+    );
+    if (!cursor.have_nominee || replay_close_preferred(priority, cursor.priority)) {
+        cursor.have_nominee = true;
+        cursor.nominee = item;
+        cursor.priority = priority;
+    }
+    return true;
+}
+
+inline bool advance_tm_losing_close(
+    thread TmOrdinaryRiskCursor& cursor, thread const TmCloseAdmission& source,
+    int coin, int market_execution_tick, constant float* coin_settings ORGANILLO_ARGS
+) {
+    cursor.have_nominee = false;
+    if (!source.expanded) return true;
+    bool any_pending = false;
+    for (int word = 0; word < 16; ++word) any_pending = any_pending || cursor.pending_groups[word] != 0u;
+    if (!any_pending) return true;
+    TmCloseGridIterator iterator = tm_close_grid_iterator(source.context);
+    CloseGroup group;
+    while (next_tm_close_grid_group(source.context, iterator, group)) {
+        int index = iterator.group_index - 1;
+        if ((cursor.pending_groups[index / 32] & (1u << uint(index % 32))) == 0u) continue;
+        finalize_tm_close_grid_group(source.context, group);
+        const float original_qty = group.qty;
+        for (int i = 0; i < source.quantity_count; ++i)
+            if (source.quantity_group[i] == index) group.qty = source.quantity_override[i];
+        if (!nominate_tm_losing_close(cursor, source, {group, original_qty, index},
+                coin, market_execution_tick, coin_settings ORGANILLO_PASS)) return false;
+    }
+    return true;
 }
 
 inline bool apply_tm_multicoin_close_admission(
@@ -779,73 +856,130 @@ inline bool apply_tm_multicoin_close_admission(
     thread TrailingMartingaleMulticoinSideState* short_side,
     thread JointPortfolioAccount& account,
     constant float* bars, constant int* fill_ticks, constant float* coin_settings ORGANILLO_ARGS,
-    int k, int T, int C, float max_loss_pct, float slippage
+    int k, int T, int C, bool gate_enabled, float max_loss_pct
 ) {
     TmFinalizedClose orders[501];
-    float remaining;
-    if (!joint_realized_loss_allowance(account, max_loss_pct, remaining)) return false;
+    ReplayLossBudget budget = {0.0f, 0.0f};
+    if (gate_enabled && !joint_realized_loss_allowance(account, max_loss_pct, budget.remaining))
+        return false;
     for (int rank = 0; rank < 2; ++rank) {
         thread TrailingMartingaleMulticoinSideState* side = rank == 0 ? long_side : short_side;
         if (side == nullptr) continue;
         for (int c = 0; c < C; ++c) {
             thread TmCloseAdmission& source = side->close_admission[c];
             if (!source.valid || side->close_is_hsl_panic[c]) continue;
-            prepare_tm_close_admission(source, bars, fill_ticks, coin_settings ORGANILLO_PASS, k, T, C, c);
-            for (int candidate = 0; candidate < 3; ++candidate) {
+            prepare_tm_close_admission(source, bars, fill_ticks, coin_settings ORGANILLO_PASS, k, T, C, c, gate_enabled);
+            for (int candidate = 0; candidate < 2; ++candidate) {
                 if (!(source.reducers[candidate].qty > 0.0f)) continue;
                 int count = finalize_tm_admission_closes(source, candidate, orders);
-                for (int i = 0; i < count; ++i) {
-                    if (orders[i].group_index == -2) {
-                        source.finalized_reducer_qty[candidate] = orders[i].order.qty;
-                    }
-                }
+                for (int i = 0; i < count; ++i)
+                    if (orders[i].group_index == -2) source.finalized_reducer_qty[candidate] = orders[i].order.qty;
             }
+#if PASSIVBOT_UNSTUCK_ENABLED
+            thread const CloseGroup& unstuck = source.reducers[2];
+            if (unstuck.qty > 0.0f) {
+                thread const TmCloseGridContext& context = source.context;
+                int tick = market_execution_tick_at(market_execution_ticks, k, c, C, context.short_side);
+                ReplayCloseProjection projection;
+                if (!project_tm_close(context, unstuck, coin_settings ORGANILLO_PASS, c, tick, projection))
+                    return false;
+                upper_replay_unstuck_qty(
+                    context.market_resize_psize, context.qty_step, projection,
+                    context.generation_balance, context.allowed_wel, source.unstuck_trigger,
+                    source.finalized_reducer_qty[2]
+                );
+            }
+#endif
         }
     }
-    // Each position exposes its current largest finalized alternative. A
-    // rejection advances only that position, before the next global ranking.
-    for (int attempt = 0; attempt < C * 6; ++attempt) {
+    bool picked_unstuck = false;
+    for (int attempt = 0; attempt < C * 2; ++attempt) {
+        const float remaining = replay_loss_headroom(budget);
         int best_coin = -1, best_side = -1, best_candidate = -1;
-        float best_qty = 0.0f;
+        float best_qty = 0.0f, best_pnl = 0.0f;
+        ReplayClosePriority best_priority;
         for (int rank = 0; rank < 2; ++rank) {
             thread TrailingMartingaleMulticoinSideState* side = rank == 0 ? long_side : short_side;
             if (side == nullptr) continue;
             for (int c = 0; c < C; ++c) {
                 thread TmCloseAdmission& source = side->close_admission[c];
-                if (!source.valid || side->close_is_hsl_panic[c]
-                    || source.selected_reducer != -2) continue;
-                int candidate = next_tm_admission_reducer(source);
-                if (candidate < 0) { source.selected_reducer = -1; continue; }
-                float qty = source.finalized_reducer_qty[candidate];
-                if (best_coin < 0 || qty > best_qty
-                    || (qty == best_qty && (c < best_coin || (c == best_coin && rank < best_side)))) {
-                    best_coin = c; best_side = rank; best_candidate = candidate; best_qty = qty;
+                if (!source.valid || side->close_is_hsl_panic[c] || source.selected_reducer != -2) continue;
+                thread const TmCloseGridContext& context = source.context;
+                int tick = market_execution_tick_at(market_execution_ticks, k, c, C, context.short_side);
+                int nominee = -1;
+                float nominee_qty = 0.0f, nominee_pnl = 0.0f;
+                ReplayClosePriority nominee_priority;
+                for (int candidate = 0; candidate < 3; ++candidate) {
+                    float proposed = source.finalized_reducer_qty[candidate];
+                    if (!(proposed > 0.0f) || (candidate == 2 && picked_unstuck)) continue;
+                    thread const CloseGroup& reducer = source.reducers[candidate];
+                    ReplayCloseProjection projection;
+                    if (!project_tm_close(context, reducer, coin_settings ORGANILLO_PASS, c, tick, projection))
+                        return false;
+                    if (!isfinite(replay_close_net_pnl(projection, proposed))) return false;
+                    float qty;
+                    bool sized = candidate == 2
+                        ? size_capped_replay_unstuck(
+                            proposed, context.market_resize_psize, context.qty_step, projection,
+                            context.generation_balance, context.allowed_wel, source.unstuck_trigger,
+                            source.unstuck_allowance, gate_enabled, remaining, qty)
+                        : size_replay_close(
+                            proposed, context.market_resize_psize, context.qty_step, projection,
+                            gate_enabled, remaining, true, qty);
+                    if (!sized) continue;
+                    ReplayClosePriority priority = replay_close_priority(
+                        projection, reducer.price, context.generation_market_price, c,
+                        tm_reducer_order_type(candidate, context.short_side), proposed
+                    );
+                    if (nominee < 0 || qty > nominee_qty
+                        || (qty == nominee_qty && replay_close_preferred(priority, nominee_priority))) {
+                        nominee = candidate;
+                        nominee_qty = qty;
+                        nominee_pnl = replay_close_net_pnl(projection, qty);
+                        nominee_priority = priority;
+                    }
+                }
+                if (nominee < 0) {
+                    source.selected_reducer = -1;
+                } else if (best_coin < 0 || replay_close_preferred(nominee_priority, best_priority)) {
+                    best_coin = c;
+                    best_side = rank;
+                    best_candidate = nominee;
+                    best_qty = nominee_qty;
+                    best_pnl = nominee_pnl;
+                    best_priority = nominee_priority;
                 }
             }
         }
         if (best_coin < 0) break;
         thread TrailingMartingaleMulticoinSideState* side = best_side == 0 ? long_side : short_side;
         thread TmCloseAdmission& source = side->close_admission[best_coin];
-        CloseGroup reducer = source.reducers[best_candidate];
-        reducer.qty = best_qty;
-        float net_pnl = tm_projected_close_pnl(source.context, reducer, coin_settings ORGANILLO_PASS, best_coin, market_execution_tick_at(market_execution_ticks, k, best_coin, C, source.context.short_side));
-        if (!isfinite(net_pnl)) return false;
-        if (realized_loss_gate_allows(net_pnl, remaining, true)) {
-            source.selected_reducer = best_candidate;
-            if (net_pnl < 0.0f) remaining = float32_floor_nonnegative(fmax(remaining + net_pnl, 0.0f));
-        } else source.rejected_reducers |= 1u << uint(best_candidate);
+        source.selected_reducer = best_candidate;
+        source.finalized_reducer_qty[best_candidate] = best_qty;
+        picked_unstuck = picked_unstuck || best_candidate == 2;
+        if (gate_enabled) spend_replay_loss_budget(budget, best_pnl);
     }
+
+    const bool have_loss_headroom = replay_loss_headroom(budget) > 0.0f;
+    TmOrdinaryRiskCursor cursors[2][MAX_COINS];
     for (int rank = 0; rank < 2; ++rank) {
         thread TrailingMartingaleMulticoinSideState* side = rank == 0 ? long_side : short_side;
         if (side == nullptr) continue;
         for (int c = 0; c < C; ++c) {
+            thread TmOrdinaryRiskCursor& cursor = cursors[rank][c];
+            cursor.have_nominee = false;
             thread TmCloseAdmission& source = side->close_admission[c];
             if (!source.valid || side->close_is_hsl_panic[c]) continue;
             if (source.selected_reducer == -2) source.selected_reducer = -1;
-            int count = finalize_tm_admission_closes(source, source.selected_reducer, orders);
-            for (int word = 0; word < 16; ++word) source.admitted_groups[word] = 0u;
-            source.quantity_group[0] = source.quantity_group[1] = -1;
-            int quantities = 0;
+            float reserved = source.selected_reducer < 0
+                ? 0.0f : source.finalized_reducer_qty[source.selected_reducer];
+            int count = finalize_tm_admission_closes(source, source.selected_reducer, orders, reserved);
+            bool kept_reservation = reserved <= 0.0f;
+            for (int word = 0; word < 16; ++word) {
+                source.admitted_groups[word] = 0u;
+                cursor.pending_groups[word] = 0u;
+            }
+            source.quantity_count = 0;
             side->close_qty[c] = side->secondary_close_qty[c] = 0.0f;
             side->close_market[c] = side->secondary_close_market[c] = false;
             side->close_is_exposure_reducer[c] = side->close_is_unstuck_reducer[c] = false;
@@ -858,36 +992,86 @@ inline bool apply_tm_multicoin_close_admission(
             side->close_grid_prefix_qty[c] = source.context.prefix_merge_qty;
             side->close_grid_prefix_tick[c] = source.context.prefix_merge_tick;
             side->close_grid_max_rungs[c] = source.context.max_rungs;
+
+            thread const TmCloseGridContext& context = source.context;
+            int tick = market_execution_tick_at(market_execution_ticks, k, c, C, context.short_side);
             for (int i = 0; i < count; ++i) {
-                thread TmFinalizedClose& item = orders[i];
-                bool reducer = item.group_index == -2;
-                if (!reducer) {
-                    float net_pnl = tm_projected_close_pnl(source.context, item.order, coin_settings ORGANILLO_PASS, c, market_execution_tick_at(market_execution_ticks, k, c, C, source.context.short_side));
-                    if (!isfinite(net_pnl)) return false;
-                    if (!realized_loss_gate_allows(net_pnl, remaining, true)) continue;
-                    if (net_pnl < 0.0f) remaining = float32_floor_nonnegative(fmax(remaining + net_pnl, 0.0f));
+                TmFinalizedClose item = orders[i];
+                if (item.group_index == -2) {
+                    kept_reservation = item.order.qty == reserved;
+                    if (!store_tm_admitted_close(*side, c, item)) return false;
+                    continue;
                 }
-                if (item.group_index >= 0) {
-                    int group = item.group_index;
-                    source.admitted_groups[group / 32] |= 1u << uint(group % 32);
-                    if (item.order.qty != item.original_qty) {
-                        if (quantities >= 2) return false;
-                        source.quantity_group[quantities] = group;
-                        source.quantity_override[quantities++] = item.order.qty;
+                if (gate_enabled) {
+                    ReplayCloseProjection projection;
+                    if (!project_tm_close(context, item.order, coin_settings ORGANILLO_PASS,
+                            c, tick, projection)) return false;
+                    if (!isfinite(replay_close_net_pnl(projection, item.order.qty))) return false;
+                    float legal_qty;
+                    if (!size_replay_close(
+                            item.order.qty, context.market_resize_psize, context.qty_step,
+                            projection, false, 0.0f, true, legal_qty)) continue;
+                    if (replay_close_net_pnl(projection, legal_qty) < 0.0f) {
+                        if (!have_loss_headroom) continue;
+                        int group = item.group_index;
+                        if (group >= 0) {
+                            cursor.pending_groups[group / 32] |= 1u << uint(group % 32);
+                            if (!remember_tm_group_quantity(source, group, item.order.qty, item.original_qty))
+                                return false;
+                        }
+                        if (!nominate_tm_losing_close(cursor, source, item, c, tick,
+                                coin_settings ORGANILLO_PASS)) return false;
+                        continue;
                     }
-                } else if (reducer || source.selected_reducer < 0) {
-                    side->close_qty[c] = item.order.qty;
-                    side->close_tick[c] = item.order.ticks;
-                    side->close_market[c] = item.order.market;
-                    side->close_is_exposure_reducer[c] = reducer;
-                    side->close_is_unstuck_reducer[c] = reducer && source.selected_reducer == 2;
-                } else {
-                    side->secondary_close_qty[c] = item.order.qty;
-                    side->secondary_close_tick[c] = item.order.ticks;
-                    side->secondary_close_market[c] = item.order.market;
+                    item.order.qty = legal_qty;
+                }
+                if (!store_tm_admitted_close(*side, c, item)) return false;
+            }
+            if (!kept_reservation) return false;
+        }
+    }
+
+    // Non-losing ordinary orders do not affect headroom. Advance only the
+    // position whose next losing order was selected, until the shared gate
+    // has spent its final legal lot.
+    while (gate_enabled) {
+        const float remaining = replay_loss_headroom(budget);
+        if (!(remaining > 0.0f)) break;
+        int best_coin = -1, best_side = -1;
+        for (int rank = 0; rank < 2; ++rank) {
+            if ((rank == 0 ? long_side : short_side) == nullptr) continue;
+            for (int c = 0; c < C; ++c) {
+                thread const TmOrdinaryRiskCursor& cursor = cursors[rank][c];
+                if (!cursor.have_nominee) continue;
+                if (best_coin < 0 || replay_close_preferred(
+                        cursor.priority, cursors[best_side][best_coin].priority)) {
+                    best_coin = c;
+                    best_side = rank;
                 }
             }
         }
+        if (best_coin < 0) break;
+        thread TrailingMartingaleMulticoinSideState* side = best_side == 0 ? long_side : short_side;
+        thread TmCloseAdmission& source = side->close_admission[best_coin];
+        thread TmOrdinaryRiskCursor& cursor = cursors[best_side][best_coin];
+        TmFinalizedClose item = cursor.nominee;
+        thread const TmCloseGridContext& context = source.context;
+        int tick = market_execution_tick_at(market_execution_ticks, k, best_coin, C, context.short_side);
+        ReplayCloseProjection projection;
+        if (!project_tm_close(context, item.order, coin_settings ORGANILLO_PASS,
+                best_coin, tick, projection)) return false;
+        float qty;
+        if (size_replay_close(item.order.qty, context.market_resize_psize, context.qty_step,
+                projection, true, remaining, true, qty)) {
+            item.order.qty = qty;
+            spend_replay_loss_budget(budget, replay_close_net_pnl(projection, qty));
+            if (!store_tm_admitted_close(*side, best_coin, item)) return false;
+        }
+        int group = item.group_index;
+        if (group >= 0) cursor.pending_groups[group / 32] &= ~(1u << uint(group % 32));
+        if (replay_loss_headroom(budget) > 0.0f
+            && !advance_tm_losing_close(cursor, source, best_coin, tick,
+                coin_settings ORGANILLO_PASS)) return false;
     }
     return true;
 }
@@ -946,7 +1130,6 @@ struct TrailingMartingaleMulticoinSideConfig {
     bool twel_enforcer_reduce_portfolio;
     bool unstuck_enabled;
     bool unstuck_ema_gating_enabled;
-    float unstuck_close_fraction;
     float unstuck_ema_distance_fraction;
     float unstuck_loss_allowance_fraction;
     float unstuck_exposure_trigger_ratio;
@@ -1766,9 +1949,6 @@ inline void clear_tm_multicoin_coin_orders(
     side.close_qty[coin] = 0.0f;
     side.secondary_close_qty[coin] = 0.0f;
     side.twel_close_qty[coin] = 0.0f;
-#if PASSIVBOT_UNSTUCK_ENABLED
-    side.unstuck_close_qty[coin] = 0.0f;
-#endif
     side.close_gen_balance[coin] = 0.0f;
     side.close_gen_allowed_wel[coin] = 0.0f;
     side.close_gen_market_price[coin] = 0.0f;
@@ -1777,9 +1957,6 @@ inline void clear_tm_multicoin_coin_orders(
     side.close_tick[coin] = 0;
     side.secondary_close_tick[coin] = 0;
     side.twel_close_tick[coin] = 0;
-#if PASSIVBOT_UNSTUCK_ENABLED
-    side.unstuck_close_tick[coin] = 0;
-#endif
     side.close_grid_max_rungs[coin] = 500;
     side.close_grid_prefix_tick[coin] = 0;
     side.close_reconstruct_after_reducer[coin] = false;
@@ -1966,8 +2143,7 @@ inline bool process_tm_multicoin_side_fills(
     bool short_side,
     bool alive,
     bool collect_coin_fill_counts,
-    bool loss_gate_enabled,
-    float loss_gate_max_drawdown_fraction,
+    bool close_admission_enabled,
     bool market_orders_allowed,
     float market_order_slippage_fraction,
     float market_order_near_touch_fraction,
@@ -2069,11 +2245,13 @@ inline bool process_tm_multicoin_side_fills(
             && (secondary_close_market[c] || (short_side
                 ? secondary_close_tick[c] > fill_ticks[tick_offset + 1]
                 : secondary_close_tick[c] <= fill_ticks[tick_offset + 0]));
-#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
-        bool recursive_expand = loss_gate_enabled
-            ? side.close_admission[c].valid && side.close_admission[c].expanded
+#if PASSIVBOT_TM_CLOSE_ADMISSION
+        const bool have_admission = close_admission_enabled && side.close_admission[c].valid;
+        bool recursive_expand = have_admission
+            ? side.close_admission[c].expanded
             : psize[c] > 0.0f
 #else
+        const bool have_admission = false;
         bool recursive_expand = psize[c] > 0.0f
 #endif
             && close_recursive_mode[c]
@@ -2161,8 +2339,8 @@ inline bool process_tm_multicoin_side_fills(
                     coin_overrides, c, 19, close_threshold_log_range_1m_coefficient
                 );
                 grid_context =
-#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
-                    loss_gate_enabled ? side.close_admission[c].context :
+#if PASSIVBOT_TM_CLOSE_ADMISSION
+                    have_admission ? side.close_admission[c].context :
 #endif
                     TmCloseGridContext{
                     short_side,
@@ -2221,7 +2399,7 @@ inline bool process_tm_multicoin_side_fills(
                 && group_count > 0;
             int collapse_ordinary_rank = -1;
             float dust_remainder = 0.0f;
-            if (!loss_gate_enabled) {
+            if (!have_admission) {
                 for (int trim_rank = 0; trim_rank < group_count; ++trim_rank) {
                     int wanted = reverse
                         ? group_count - trim_rank - 1 : trim_rank;
@@ -2287,14 +2465,14 @@ inline bool process_tm_multicoin_side_fills(
                     qty_step, min_qty, min_cost, c_mult
                 );
                 float trimmed_group_qty = 0.0f;
-#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
-                if (loss_gate_enabled) {
+#if PASSIVBOT_TM_CLOSE_ADMISSION
+                if (have_admission) {
                     thread const TmCloseAdmission& source = side.close_admission[c];
                     bool admitted = (source.admitted_groups[wanted / 32]
                         & (1u << uint(wanted % 32))) != 0u;
                     if (admitted) {
                         trimmed_group_qty = group.qty;
-                        for (int adjustment = 0; adjustment < 2; ++adjustment) {
+                        for (int adjustment = 0; adjustment < source.quantity_count; ++adjustment) {
                             if (source.quantity_group[adjustment] == wanted) {
                                 trimmed_group_qty = source.quantity_override[adjustment];
                             }
@@ -2753,7 +2931,6 @@ load_trailing_martingale_multicoin_side_config(
     config.twel_enforcer_reduce_portfolio = params[po + 40] > 0.5f;
     config.unstuck_enabled = params[po + 41] > 0.5f;
     config.unstuck_ema_gating_enabled = params[po + 42] > 0.5f;
-    config.unstuck_close_fraction = params[po + 43];
     config.unstuck_ema_distance_fraction = params[po + 44];
     config.unstuck_loss_allowance_fraction = params[po + 45];
     config.unstuck_exposure_trigger_ratio = params[po + 46];
@@ -2824,16 +3001,13 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.entry_gen_psize[c] = 0.0f;
         side.entry_gen_pprice[c] = 0.0f;
         side.entry_gate_suffix_partial_qty[c] = 0.0f;
-#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+#if PASSIVBOT_TM_CLOSE_ADMISSION
         side.close_admission[c].valid = false;
         side.close_admission[c].expanded = false;
 #endif
         side.close_qty[c] = 0.0f;
         side.secondary_close_qty[c] = 0.0f;
         side.twel_close_qty[c] = 0.0f;
-#if PASSIVBOT_UNSTUCK_ENABLED
-        side.unstuck_close_qty[c] = 0.0f;
-#endif
         side.close_gen_balance[c] = 0.0f;
         side.close_gen_allowed_wel[c] = 0.0f;
         side.close_gen_market_price[c] = 0.0f;
@@ -2857,9 +3031,6 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.close_tick[c] = 0;
         side.secondary_close_tick[c] = 0;
         side.twel_close_tick[c] = 0;
-#if PASSIVBOT_UNSTUCK_ENABLED
-        side.unstuck_close_tick[c] = 0;
-#endif
         side.close_grid_max_rungs[c] = 500;
         side.close_grid_prefix_tick[c] = 0;
         side.selected[c] = false;
@@ -3593,128 +3764,65 @@ inline void update_tm_multicoin_side_selection(
     }
 }
 
-// Preselect one side's best eligible candidate without creating an order.
-// The fused caller compares both sides before allowing either generator to
-// consume the shared realized-loss allowance.
-inline int select_tm_multicoin_unstuck_coin(
-    thread TrailingMartingaleMulticoinSideState& side,
+inline bool tm_unstuck_policy_active(
     thread const TrailingMartingaleMulticoinSideConfig& config,
-    thread JointPortfolioAccount& account,
-    constant float* bars,
-    constant int* touch_ticks,
-    constant float* coin_settings ORGANILLO_ARGS,
     constant float* coin_overrides,
-    int k,
-    int coin_count,
-    bool short_side,
-    int effective_n_positions,
-    thread float& selected_entry_distance_fraction
+    int coin_count
 ) {
-    selected_entry_distance_fraction = -INFINITY;
 #if PASSIVBOT_UNSTUCK_ENABLED
-    if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
-    const float effective_wel = config.twel
-        / fmax(float(effective_n_positions), 1.0f);
-    const float balance_peak = account.balance + account.realized_memory.drawdown;
-    if (!(balance_peak > 0.0f)) return -1;
-
-    int selected_coin = -1;
     for (int c = 0; c < coin_count; ++c) {
-        const int coin_offset = c * COIN_COLS;
-        const int bar_offset = (k * coin_count + c) * 4;
-        const int tick_offset = (k * coin_count + c) * 2;
-        const float price_now = bars[bar_offset + 2];
-        const bool managed_candidate =
-            k >= int(coin_settings[coin_offset + 6])
-            && k <= int(coin_settings[coin_offset + 7])
-            && finite_positive(price_now);
-        if (!managed_candidate) continue;
-        const float c_mult = coin_settings[coin_offset + 4];
-        const float price_step = coin_settings[coin_offset + 1];
-        const bool coin_unstuck_enabled = coin_override_or(
-            coin_overrides, c, 28,
-            config.unstuck_enabled ? 1.0f : 0.0f
-        ) > 0.5f;
-        const bool coin_ema_gate = coin_override_or(
-            coin_overrides, c, 29,
-            config.unstuck_ema_gating_enabled ? 1.0f : 0.0f
-        ) > 0.5f;
-        const float coin_close_pct = coin_override_or(
-            coin_overrides, c, 30, config.unstuck_close_fraction
-        );
-        const float coin_ema_dist = coin_override_or(
-            coin_overrides, c, 31, config.unstuck_ema_distance_fraction
-        );
-        const float coin_loss_allowance_pct = coin_override_or(
-            coin_overrides, c, 32, config.unstuck_loss_allowance_fraction
-        );
-        const float coin_threshold = coin_override_or(
-            coin_overrides, c, 33, config.unstuck_exposure_trigger_ratio
-        );
-        const float fixed_coin_wel = coin_override_or(
-            coin_overrides, c, 24, -1.0f
-        );
-        const float coin_wel = fixed_coin_wel >= 0.0f
-            ? fixed_coin_wel : effective_wel;
-        const float coin_allowance_fraction = coin_override_or(
-            coin_overrides, c, 25, config.allowance_fraction
-        );
-        const float allowed_coin_wel = allowed_wallet_exposure_limit_ratio(
-            coin_wel, config.twel, coin_allowance_fraction);
-        if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
-            && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
-            && side.psize[c] > 0.0f && side.pprice[c] > 0.0f
-            && allowed_coin_wel > 0.0f && price_now > 0.0f)) {
-            continue;
-        }
-        float allowance;
-        if (!hsl_decay_auto_allowance(
-            account.balance, account.realized_memory.drawdown,
-            coin_loss_allowance_pct, config.twel, allowance)) {
-            account.realized_decay_valid = false;
-            return -1;
-        }
-        allowance = float32_floor_nonnegative(allowance);
-        const float wallet_exposure = side.psize[c] * side.pprice[c]
-            * c_mult / account.balance;
-        if (!(allowance > 0.0f
-            && wallet_exposure / allowed_coin_wel > coin_threshold)) {
-            continue;
-        }
-#if PASSIVBOT_UNSTUCK_EMA_ENABLED
-        if (coin_ema_gate) {
-            const float lower = unstuck_ema_lower(side.unstuck_ema[c]);
-            const float upper = unstuck_ema_upper(side.unstuck_ema[c]);
-            const int trigger_tick = short_side
-                ? int(floor(
-                    lower * (1.0f - coin_ema_dist) / price_step
-                        + 1.0e-6f
-                ))
-                : int(ceil(
-                    upper * (1.0f + coin_ema_dist) / price_step
-                        - 1.0e-6f
-                ));
-            const bool triggered = short_side
-                ? touch_ticks[tick_offset + 1] <= trigger_tick
-                : touch_ticks[tick_offset + 0] >= trigger_tick;
-            if (!triggered) continue;
-        }
-#endif
-        const float signed_entry_distance_fraction = calc_signed_entry_distance_fraction(
-            short_side, side.pprice[c], price_now
-        );
-        if (!isfinite(signed_entry_distance_fraction)) continue;
-        if (selected_coin < 0 || signed_entry_distance_fraction > selected_entry_distance_fraction
-            || (signed_entry_distance_fraction == selected_entry_distance_fraction && c < selected_coin)) {
-            selected_coin = c;
-            selected_entry_distance_fraction = signed_entry_distance_fraction;
-        }
+        if (coin_override_or(coin_overrides, c, 28, config.unstuck_enabled ? 1.0f : 0.0f) > 0.5f)
+            return true;
     }
-    return selected_coin;
-#else
-    return -1;
 #endif
+    return false;
 }
+
+#if PASSIVBOT_UNSTUCK_ENABLED
+inline bool propose_tm_unstuck_close(
+    thread TmCloseAdmission& source,
+    thread const TrailingMartingaleMulticoinSideState& side,
+    thread const TrailingMartingaleMulticoinSideConfig& config,
+    thread const JointPortfolioAccount& account,
+    constant float* coin_overrides, int coin
+) {
+    thread const TmCloseGridContext& context = source.context;
+    float allowance_fraction = coin_override_or(
+        coin_overrides, coin, 32, config.unstuck_loss_allowance_fraction);
+    float trigger = coin_override_or(coin_overrides, coin, 33, config.unstuck_exposure_trigger_ratio);
+    if (!(allowance_fraction > 0.0f && trigger > 0.0f && account.balance > 0.0f
+            && context.market_resize_psize * context.pprice * context.c_mult
+                / (account.balance * context.allowed_wel) > trigger)) return true;
+
+#if PASSIVBOT_UNSTUCK_EMA_ENABLED
+    if (coin_override_or(coin_overrides, coin, 29, config.unstuck_ema_gating_enabled ? 1.0f : 0.0f)
+            > 0.5f) {
+        float ema_distance = coin_override_or(coin_overrides, coin, 31, config.unstuck_ema_distance_fraction);
+        float band = context.short_side
+            ? unstuck_ema_lower(side.unstuck_ema[coin]) : unstuck_ema_upper(side.unstuck_ema[coin]);
+        if (!finite_positive(band)) return true;
+        int trigger_tick = context.short_side
+            ? int(floor(band * (1.0f - ema_distance) / context.price_step + 1.0e-6f))
+            : int(ceil(band * (1.0f + ema_distance) / context.price_step - 1.0e-6f));
+        if (context.short_side ? context.touch_up > trigger_tick : context.touch_down < trigger_tick)
+            return true;
+    }
+#endif
+    float allowance;
+    if (!hsl_decay_auto_allowance(account.balance, account.realized_memory.drawdown,
+            allowance_fraction, config.twel, allowance)) return false;
+    if (!(allowance > 0.0f)) return true;
+    int ticks = max(context.short_side ? context.touch_down : context.touch_up, 1);
+    bool market = should_use_ordinary_market_execution(
+        ticks, context.short_side, context.generation_market_price, context.price_step,
+        context.market_orders_allowed, context.market_order_near_touch_fraction
+    );
+    source.unstuck_trigger = trigger;
+    source.unstuck_allowance = allowance;
+    source.reducers[2] = {ticks, float(ticks) * context.price_step, context.market_resize_psize, market};
+    return true;
+}
+#endif
 
 // Match exact Rust's per-symbol one-way eligibility before Forager selection
 // and side-wide entry-cap allocation. Opposite-held coins are excluded from
@@ -3889,12 +3997,9 @@ inline void generate_tm_multicoin_side_orders(
     int tradable_count,
     int effective_n_positions,
     int current_hsl_mode,
-    bool loss_gate_enabled,
-    float loss_gate_max_drawdown_fraction,
+    bool close_admission_enabled,
     bool market_orders_allowed,
     float market_order_near_touch_fraction,
-    float market_order_slippage_fraction,
-    int forced_unstuck_coin,
     ulong one_way_initial_blocked_mask
 ) {
     const int C = coin_count;
@@ -3930,14 +4035,6 @@ inline void generate_tm_multicoin_side_orders(
     const bool twel_enforcer_enabled = config.twel_enforcer_enabled;
     const bool twel_enforcer_reduce_portfolio =
         config.twel_enforcer_reduce_portfolio;
-    const bool unstuck_enabled = config.unstuck_enabled;
-    const bool unstuck_ema_gating_enabled =
-        config.unstuck_ema_gating_enabled;
-    const float unstuck_close_fraction = config.unstuck_close_fraction;
-    const float unstuck_ema_distance_fraction = config.unstuck_ema_distance_fraction;
-    const float unstuck_loss_allowance_fraction =
-        config.unstuck_loss_allowance_fraction;
-    const float unstuck_exposure_trigger_ratio = config.unstuck_exposure_trigger_ratio;
     const bool coin_hsl_mode = config.coin_hsl_mode;
     thread HslState* coin_hsl = side.coin_hsl;
     thread float* ema0 = side.ema0;
@@ -3958,9 +4055,6 @@ inline void generate_tm_multicoin_side_orders(
     thread float* close_qty = side.close_qty;
     thread float* secondary_close_qty = side.secondary_close_qty;
     thread float* twel_close_qty = side.twel_close_qty;
-#if PASSIVBOT_UNSTUCK_ENABLED
-    thread float* unstuck_close_qty = side.unstuck_close_qty;
-#endif
     thread float* close_gen_balance = side.close_gen_balance;
     thread float* close_gen_allowed_wel = side.close_gen_allowed_wel;
     thread float* close_gen_market_price = side.close_gen_market_price;
@@ -3981,9 +4075,6 @@ inline void generate_tm_multicoin_side_orders(
     thread int* close_tick = side.close_tick;
     thread int* secondary_close_tick = side.secondary_close_tick;
     thread int* twel_close_tick = side.twel_close_tick;
-#if PASSIVBOT_UNSTUCK_ENABLED
-    thread int* unstuck_close_tick = side.unstuck_close_tick;
-#endif
     thread int* close_grid_max_rungs = side.close_grid_max_rungs;
     thread int* close_grid_prefix_tick = side.close_grid_prefix_tick;
     thread bool* selected = side.selected;
@@ -4134,157 +4225,6 @@ inline void generate_tm_multicoin_side_orders(
         }
     }
 
-    // One directional thread owns every coin on this side, allowing
-    // the exact one-global-intent least-stuck selector across coins.
-    for (int c = 0; c < C; ++c) {
-#if PASSIVBOT_UNSTUCK_ENABLED
-        unstuck_close_qty[c] = 0.0f;
-#endif
-#if PASSIVBOT_UNSTUCK_ENABLED
-        unstuck_close_tick[c] = 0;
-#endif
-        close_is_unstuck_reducer[c] = false;
-    }
-#if PASSIVBOT_UNSTUCK_ENABLED
-    float balance_peak = balance + account.realized_memory.drawdown;
-    int unstuck_coin = -1;
-    float best_entry_distance_fraction = -INFINITY;
-    float selected_unstuck_qty = 0.0f;
-    int selected_unstuck_tick = 0;
-    for (int c = 0; c < C; ++c) {
-        if (forced_unstuck_coin == -1
-            || (forced_unstuck_coin >= 0 && c != forced_unstuck_coin)) {
-            continue;
-        }
-        int coin_offset = c * COIN_COLS;
-        int bar_offset = (k * C + c) * 4;
-        int tick_offset = (k * C + c) * 2;
-        float price_now = bars[bar_offset + 2];
-        bool managed_candidate =
-            k >= int(coin_settings[coin_offset + 6])
-            && k <= int(coin_settings[coin_offset + 7])
-            && finite_positive(price_now);
-        if (!managed_candidate) continue;
-        float c_mult = coin_settings[coin_offset + 4];
-        float qty_step = coin_settings[coin_offset + 0];
-        float price_step = coin_settings[coin_offset + 1];
-        float min_qty = coin_settings[coin_offset + 2];
-        float min_cost = coin_settings[coin_offset + 3];
-        bool coin_unstuck_enabled = coin_override_or(
-            coin_overrides, c, 28, unstuck_enabled ? 1.0f : 0.0f
-        ) > 0.5f;
-        bool coin_ema_gate = coin_override_or(
-            coin_overrides, c, 29,
-            unstuck_ema_gating_enabled ? 1.0f : 0.0f
-        ) > 0.5f;
-        float coin_close_pct = coin_override_or(
-            coin_overrides, c, 30, unstuck_close_fraction
-        );
-        float coin_ema_dist = coin_override_or(
-            coin_overrides, c, 31, unstuck_ema_distance_fraction
-        );
-        float coin_loss_allowance_pct = coin_override_or(
-            coin_overrides, c, 32, unstuck_loss_allowance_fraction
-        );
-        float coin_threshold = coin_override_or(
-            coin_overrides, c, 33, unstuck_exposure_trigger_ratio
-        );
-        float fixed_coin_wel = coin_override_or(
-            coin_overrides, c, 24, -1.0f
-        );
-        float coin_wel = fixed_coin_wel >= 0.0f
-            ? fixed_coin_wel : effective_wel;
-        float coin_allowance_fraction = coin_override_or(
-            coin_overrides, c, 25, allowance_fraction
-        );
-        float allowed_coin_wel = allowed_wallet_exposure_limit_ratio(
-            coin_wel, twel, coin_allowance_fraction);
-        if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
-            && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
-            && balance > 0.0f && balance_peak > 0.0f
-            && psize[c] > 0.0f && pprice[c] > 0.0f
-            && allowed_coin_wel > 0.0f && price_now > 0.0f)) {
-            continue;
-        }
-        float allowance;
-        if (!hsl_decay_auto_allowance(
-            balance, account.realized_memory.drawdown, coin_loss_allowance_pct, twel,
-            allowance)) {
-            account.realized_decay_valid = false;
-            return;
-        }
-        allowance = float32_floor_nonnegative(allowance);
-        float wallet_exposure = psize[c] * pprice[c] * c_mult / balance;
-        if (!(allowance > 0.0f
-            && wallet_exposure / allowed_coin_wel > coin_threshold)) {
-            continue;
-        }
-#if PASSIVBOT_UNSTUCK_EMA_ENABLED
-        if (coin_ema_gate) {
-            float lower = unstuck_ema_lower(side.unstuck_ema[c]);
-            float upper = unstuck_ema_upper(side.unstuck_ema[c]);
-            int trigger_tick = short_side
-                ? int(floor(
-                    lower * (1.0f - coin_ema_dist) / price_step
-                        + 1.0e-6f
-                ))
-                : int(ceil(
-                    upper * (1.0f + coin_ema_dist) / price_step
-                        - 1.0e-6f
-                ));
-            bool triggered = short_side
-                ? touch_ticks[tick_offset + 1] <= trigger_tick
-                : touch_ticks[tick_offset + 0] >= trigger_tick;
-            if (!triggered) continue;
-        }
-#endif
-        int reducer_tick = max(
-            short_side
-                ? touch_ticks[tick_offset + 0]
-                : touch_ticks[tick_offset + 1],
-            1
-        );
-        float reducer_price = float(reducer_tick) * price_step;
-        float reducer_min = min_entry_qty(
-            reducer_price, qty_step, min_qty, min_cost, c_mult
-        );
-        float target_qty = floor_step(
-            balance * allowed_coin_wel * coin_close_pct
-                / fmax(reducer_price * c_mult, 1.0e-12f),
-            qty_step
-        );
-        float reducer_qty = fmin(
-            psize[c], fmax(reducer_min, target_qty)
-        );
-        float gross_pnl = reducer_qty * c_mult * (short_side
-            ? pprice[c] - reducer_price
-            : reducer_price - pprice[c]);
-        if (gross_pnl < 0.0f && -gross_pnl > allowance) {
-            float scaled_qty = fmin(
-                psize[c], reducer_qty * allowance / -gross_pnl
-            );
-            reducer_qty = fmin(
-                psize[c], fmax(
-                    reducer_min, floor_step(scaled_qty, qty_step)
-                )
-            );
-        }
-        float signed_entry_distance_fraction = calc_signed_entry_distance_fraction(
-            short_side, pprice[c], price_now
-        );
-        if (unstuck_coin < 0 || signed_entry_distance_fraction > best_entry_distance_fraction
-            || (signed_entry_distance_fraction == best_entry_distance_fraction && c < unstuck_coin)) {
-            unstuck_coin = c;
-            best_entry_distance_fraction = signed_entry_distance_fraction;
-            selected_unstuck_qty = reducer_qty;
-            selected_unstuck_tick = reducer_tick;
-        }
-    }
-    if (unstuck_coin >= 0) {
-        unstuck_close_qty[unstuck_coin] = selected_unstuck_qty;
-        unstuck_close_tick[unstuck_coin] = selected_unstuck_tick;
-    }
-#endif
     for (int c = 0; c < C; ++c) {
         entry_qty[c] = 0.0f;
         entry_strategy_qty[c] = 0.0f;
@@ -4300,7 +4240,7 @@ inline void generate_tm_multicoin_side_orders(
         side.entry_gate_suffix_keep_count[c] = 0;
         side.entry_gate_suffix_partial_rank[c] = -1;
         side.entry_gate_suffix_partial_qty[c] = 0.0f;
-#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
+#if PASSIVBOT_TM_CLOSE_ADMISSION
         side.close_admission[c].valid = false;
         side.close_admission[c].expanded = false;
 #endif
@@ -4310,6 +4250,7 @@ inline void generate_tm_multicoin_side_orders(
         close_market[c] = false;
         secondary_close_market[c] = false;
         close_is_exposure_reducer[c] = false;
+        close_is_unstuck_reducer[c] = false;
         secondary_close_tick[c] = 0;
         close_reconstruct_after_reducer[c] = false;
         close_recursive_mode[c] = false;
@@ -4686,29 +4627,6 @@ inline void generate_tm_multicoin_side_orders(
                 market_orders_allowed, market_order_near_touch_fraction
             );
         float wel_reducer_exec_price = float(wel_reducer_tick) * price_step;
-#if PASSIVBOT_UNSTUCK_ENABLED
-        float raw_unstuck_reducer_qty = unstuck_close_qty[c];
-        int raw_unstuck_reducer_tick = unstuck_close_tick[c];
-#else
-        float raw_unstuck_reducer_qty = 0.0f;
-        int raw_unstuck_reducer_tick = 0;
-#endif
-        float unstuck_reducer_price =
-            float(raw_unstuck_reducer_tick) * price_step;
-        bool unstuck_reducer_market = raw_unstuck_reducer_qty > 0.0f
-            && should_use_ordinary_market_execution(
-                raw_unstuck_reducer_tick, short_side, price_now, price_step,
-                market_orders_allowed, market_order_near_touch_fraction
-            );
-        if (unstuck_reducer_market) {
-            raw_unstuck_reducer_qty = resize_market_close_qty(
-                raw_unstuck_reducer_qty, psize[c], price_now,
-                qty_step, min_qty, min_cost, c_mult
-            );
-        }
-        float unstuck_reducer_exec_price = unstuck_reducer_market
-            ? price_now : unstuck_reducer_price;
-
         float close_threshold = coin_close_threshold_base
             + wer * coin_close_threshold_we
             + volatility_1h[c] * coin_close_threshold_v1h
@@ -4816,8 +4734,8 @@ inline void generate_tm_multicoin_side_orders(
             );
             minimum_close_relation = 0;
         }
-#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
-        if (loss_gate_enabled) {
+#if PASSIVBOT_TM_CLOSE_ADMISSION
+        if (close_admission_enabled) {
             thread TmCloseAdmission& source = side.close_admission[c];
             source.valid = psize[c] > 0.0f;
             source.trailing = trailing_close;
@@ -4843,9 +4761,19 @@ inline void generate_tm_multicoin_side_orders(
                 strategy_wel_reducer_qty, wel_reducer_market};
             source.reducers[1] = {twel_reducer_tick, twel_reducer_price,
                 raw_twel_reducer_qty, twel_reducer_market};
-            source.reducers[2] = {raw_unstuck_reducer_tick, unstuck_reducer_price,
-                raw_unstuck_reducer_qty, unstuck_reducer_market};
-            // The account-wide stage owns all enabled-gate selection and sizing.
+            source.reducers[2] = {0, 0.0f, 0.0f, false};
+            source.unstuck_policy_enabled = false;
+#if PASSIVBOT_UNSTUCK_ENABLED
+            source.unstuck_policy_enabled = coin_override_or(
+                coin_overrides, c, 28, config.unstuck_enabled ? 1.0f : 0.0f) > 0.5f;
+            if (source.valid && source.unstuck_policy_enabled && twel > 0.0f && allowed_coin_wel > 0.0f) {
+                if (!propose_tm_unstuck_close(source, side, config, account, coin_overrides, c)) {
+                    account.realized_decay_valid = false;
+                    return;
+                }
+            }
+#endif
+            // The account-wide stage owns priority, selection and sizing.
             continue;
         }
 #endif
@@ -4948,41 +4876,15 @@ inline void generate_tm_multicoin_side_orders(
                 psize[c], raw_twel_reducer_qty, twel_reducer_exec_price,
                 qty_step, min_qty, min_cost, c_mult
             );
-        float finalized_unstuck_reducer_qty = ordinary_can_accompany_reducer
-            ? finalized_reducer_qty_with_ordinary(
-                psize[c], raw_unstuck_reducer_qty,
-                unstuck_reducer_exec_price, close_qty[c], minimum_close,
-                minimum_close_relation, qty_step, min_qty, min_cost,
-                c_mult
-            )
-            : finalized_reducer_qty(
-                psize[c], raw_unstuck_reducer_qty,
-                unstuck_reducer_exec_price, qty_step, min_qty, min_cost,
-                c_mult
-            );
         bool use_twel = finalized_twel_reducer_qty
             > finalized_wel_reducer_qty;
         float exposure_reducer_qty = use_twel
             ? raw_twel_reducer_qty : wel_reducer_qty;
         int exposure_reducer_tick = use_twel
             ? twel_reducer_tick : wel_reducer_tick;
-        float finalized_exposure_reducer_qty = use_twel
-            ? finalized_twel_reducer_qty : finalized_wel_reducer_qty;
-        int exposure_order_type_id = use_twel
-            ? (short_side ? 21 : 10) : (short_side ? 25 : 24);
-        bool use_unstuck = reducer_candidate_preferred(
-            finalized_unstuck_reducer_qty, raw_unstuck_reducer_tick,
-            short_side ? 20 : 9,
-            finalized_exposure_reducer_qty, exposure_reducer_tick,
-            exposure_order_type_id, !short_side
-        );
-        float reducer_qty = use_unstuck
-            ? raw_unstuck_reducer_qty : exposure_reducer_qty;
-        int reducer_tick = use_unstuck
-            ? raw_unstuck_reducer_tick : exposure_reducer_tick;
-        bool reducer_market = use_unstuck
-            ? unstuck_reducer_market
-            : (use_twel ? twel_reducer_market : wel_reducer_market);
+        float reducer_qty = exposure_reducer_qty;
+        int reducer_tick = exposure_reducer_tick;
+        bool reducer_market = use_twel ? twel_reducer_market : wel_reducer_market;
         if (reducer_qty > 0.0f && reducer_tick > 0) {
             float reducer_price = float(reducer_tick) * price_step;
             float reducer_exec_price = reducer_market
@@ -4990,7 +4892,7 @@ inline void generate_tm_multicoin_side_orders(
             float reducer_min = min_entry_qty(
                 reducer_exec_price, qty_step, min_qty, min_cost, c_mult
             );
-            if ((use_twel || use_unstuck) && wel_reducer_qty <= 0.0f
+            if (use_twel && wel_reducer_qty <= 0.0f
                 && trailing_close && close_qty[c] > 0.0f) {
                 float ordinary_qty = close_qty[c];
                 if (ordinary_qty + reducer_qty > psize[c]) {
@@ -5028,10 +4930,8 @@ inline void generate_tm_multicoin_side_orders(
                     secondary_close_market[c] = close_market[c];
                 }
             } else if (!trailing_close) {
-                // Auto-unstuck is external to strategy generation. Preserve
-                // the immutable ordinary ladder and reserve only its optional
-                // strategy WEL prefix; aggregate allocation below trims that
-                // ladder around whichever external reducer wins.
+                // Preserve the immutable ordinary ladder around the selected
+                // external reducer, reserving only its strategy WEL prefix.
                 float reserved_grid_qty = strategy_wel_reducer_qty;
                 close_reconstruct_after_reducer[c] = true;
                 close_gen_balance[c] = balance;
@@ -5069,7 +4969,6 @@ inline void generate_tm_multicoin_side_orders(
             // fill/reconstruction path; unstuck has its own orthogonal flag
             // for realized-loss allowance semantics.
             close_is_exposure_reducer[c] = true;
-            close_is_unstuck_reducer[c] = use_unstuck;
         }
     }
     side.entry_deferred_twel_gate = false;
@@ -5350,7 +5249,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     const float short_score_hysteresis = fmax(run_settings[20], 0.0f);
     const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
         && run_settings[16] > 0.5f;
-    const float loss_gate_max_drawdown_fraction = run_settings[5];
+    const float loss_gate_max_drawdown_fraction = params[po + 64];
     const float market_order_slippage_fraction = fmax(run_settings[7], 0.0f);
     const bool long_hsl_panic_market = run_settings[8] > 0.5f;
     const bool short_hsl_panic_market = run_settings[9] > 0.5f;
@@ -5360,6 +5259,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         fmax(run_settings[12], 0.0f);
     const bool filter_by_min_effective_cost_long = run_settings[13] > 0.5f;
     const bool filter_by_min_effective_cost_short = run_settings[17] > 0.5f;
+    const bool close_admission_enabled = loss_gate_enabled
+        || tm_unstuck_policy_active(long_config, long_coin_overrides, C)
+        || tm_unstuck_policy_active(short_config, short_coin_overrides, C);
     const bool long_activation = run_settings[18] > 0.5f;
     const bool short_activation = run_settings[19] > 0.5f;
 
@@ -5485,8 +5387,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             coin_settings ORGANILLO_PASS, long_coin_overrides,
             coin_fill_counts,
             int(b), k, C, false, alive,
-            collect_coin_fill_counts, loss_gate_enabled,
-            loss_gate_max_drawdown_fraction, market_orders_allowed,
+            collect_coin_fill_counts, close_admission_enabled, market_orders_allowed,
             market_order_slippage_fraction,
             market_order_near_touch_fraction,
             long_hsl_panic_market, long_hsl_equity_before_fills,
@@ -5511,8 +5412,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             coin_settings ORGANILLO_PASS, short_coin_overrides,
             coin_fill_counts,
             int(b), k, C, true, alive,
-            collect_coin_fill_counts, loss_gate_enabled,
-            loss_gate_max_drawdown_fraction, market_orders_allowed,
+            collect_coin_fill_counts, close_admission_enabled, market_orders_allowed,
             market_order_slippage_fraction,
             market_order_near_touch_fraction,
             short_hsl_panic_market, short_hsl_equity_before_fills,
@@ -5676,41 +5576,6 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
             return;
         }
-        float long_entry_distance_fraction = -INFINITY;
-        float short_entry_distance_fraction = -INFINITY;
-        const int long_unstuck_candidate = long_can_generate
-            ? select_tm_multicoin_unstuck_coin(
-                long_side, long_config, account,
-                bars, touch_ticks, coin_settings ORGANILLO_PASS, long_coin_overrides,
-                k, C, false, long_effective_n_positions,
-                long_entry_distance_fraction
-            )
-            : -1;
-        const int short_unstuck_candidate = short_can_generate
-            ? select_tm_multicoin_unstuck_coin(
-                short_side, short_config, account,
-                bars, touch_ticks, coin_settings ORGANILLO_PASS, short_coin_overrides,
-                k, C, true, short_effective_n_positions,
-                short_entry_distance_fraction
-            )
-            : -1;
-        if (!account.realized_decay_valid) {
-            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
-            return;
-        }
-        // Rust prefers the highest signed entry distance, then the lowest symbol
-        // index. Its stable long-first input order breaks an equal-symbol tie.
-        const bool long_unstuck_wins = long_unstuck_candidate >= 0
-            && (
-                short_unstuck_candidate < 0
-                || long_entry_distance_fraction > short_entry_distance_fraction
-                || (long_entry_distance_fraction == short_entry_distance_fraction
-                    && long_unstuck_candidate <= short_unstuck_candidate)
-            );
-        const int long_unstuck_coin = long_unstuck_wins
-            ? long_unstuck_candidate : -1;
-        const int short_unstuck_coin = !long_unstuck_wins
-            ? short_unstuck_candidate : -1;
         if (long_can_generate) {
             if (long_entries_enabled) {
             update_tm_multicoin_side_selection(
@@ -5729,11 +5594,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 coin_settings ORGANILLO_PASS, long_coin_overrides,
                 k, C, false, long_entries_enabled, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
-                loss_gate_enabled, loss_gate_max_drawdown_fraction,
-                market_orders_allowed,
-                market_order_near_touch_fraction,
-                market_order_slippage_fraction,
-                long_unstuck_coin, long_one_way_order_blocked_mask
+                close_admission_enabled, market_orders_allowed,
+                market_order_near_touch_fraction, long_one_way_order_blocked_mask
             );
         }
         if (short_can_generate) {
@@ -5754,11 +5616,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 coin_settings ORGANILLO_PASS, short_coin_overrides,
                 k, C, true, short_entries_enabled, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
-                loss_gate_enabled, loss_gate_max_drawdown_fraction,
-                market_orders_allowed,
-                market_order_near_touch_fraction,
-                market_order_slippage_fraction,
-                short_unstuck_coin, short_one_way_order_blocked_mask
+                close_admission_enabled, market_orders_allowed,
+                market_order_near_touch_fraction, short_one_way_order_blocked_mask
             );
         }
 
@@ -5766,14 +5625,14 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = -8.0f;
             return;
         }
-#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
-        if (loss_gate_enabled && (long_can_generate || short_can_generate)
+#if PASSIVBOT_TM_CLOSE_ADMISSION
+        if (close_admission_enabled && (long_can_generate || short_can_generate)
             && !apply_tm_multicoin_close_admission(
                 market_execution_ticks,
                 long_can_generate ? &long_side : nullptr,
                 short_can_generate ? &short_side : nullptr,
                 account, bars, fill_ticks, coin_settings ORGANILLO_PASS,
-                k, T, C, loss_gate_max_drawdown_fraction, market_order_slippage_fraction)) {
+                k, T, C, loss_gate_enabled, loss_gate_max_drawdown_fraction)) {
             scalars[int(b) * FUSED_SCALAR_COLS + 9] = account.realized_decay_valid ? -5.0f : -8.0f;
             return;
         }
@@ -6206,13 +6065,15 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float score_hysteresis = fmax(run_settings[4], 0.0f);
     const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
         && run_settings[14] > 0.5f;
-    const float loss_gate_max_drawdown_fraction = run_settings[5];
+    const float loss_gate_max_drawdown_fraction = params[po + 64];
     const float market_order_slippage_fraction = fmax(run_settings[7], 0.0f);
     const bool hsl_panic_market = run_settings[8] > 0.5f;
     const bool market_orders_allowed = run_settings[9] > 0.5f;
     const float market_order_near_touch_fraction =
         fmax(run_settings[10], 0.0f);
     const bool filter_by_min_effective_cost = run_settings[11] > 0.5f;
+    const bool close_admission_enabled = loss_gate_enabled
+        || tm_unstuck_policy_active(config, coin_overrides, C);
     const bool side_activation = run_settings[15] > 0.5f;
 
     thread float* psize = side.psize;
@@ -6324,8 +6185,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             touch_min_qty_bits, touch_min_qty_relation,
             coin_settings ORGANILLO_PASS, coin_overrides, coin_fill_counts,
             int(b), k, C, short_side, alive,
-            collect_coin_fill_counts, loss_gate_enabled,
-            loss_gate_max_drawdown_fraction, market_orders_allowed,
+            collect_coin_fill_counts, close_admission_enabled, market_orders_allowed,
             market_order_slippage_fraction,
             market_order_near_touch_fraction,
             hsl_panic_market, hsl_equity_before_fills
@@ -6476,11 +6336,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 coin_settings ORGANILLO_PASS, coin_overrides,
                 k, C, short_side, entries_enabled, tradable_count,
                 effective_n_positions, current_hsl_mode,
-                loss_gate_enabled, loss_gate_max_drawdown_fraction,
-                market_orders_allowed,
-                market_order_near_touch_fraction,
-                market_order_slippage_fraction,
-                -2, 0ul
+                close_admission_enabled, market_orders_allowed,
+                market_order_near_touch_fraction, 0ul
             );
         }
 
@@ -6488,12 +6345,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             scalars[int(b) * SCALAR_COLS + 9] = -8.0f;
             return;
         }
-#if !PASSIVBOT_TM_LOSS_GATE_DISABLED
-        if (loss_gate_enabled && can_generate && !apply_tm_multicoin_close_admission(
+#if PASSIVBOT_TM_CLOSE_ADMISSION
+        if (close_admission_enabled && can_generate && !apply_tm_multicoin_close_admission(
                 market_execution_ticks,
                 short_side ? nullptr : &side, short_side ? &side : nullptr,
                 account, bars, fill_ticks, coin_settings ORGANILLO_PASS,
-                k, T, C, loss_gate_max_drawdown_fraction, market_order_slippage_fraction)) {
+                k, T, C, loss_gate_enabled, loss_gate_max_drawdown_fraction)) {
             scalars[int(b) * SCALAR_COLS + 9] = account.realized_decay_valid ? -5.0f : -8.0f;
             return;
         }

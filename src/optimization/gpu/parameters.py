@@ -90,12 +90,15 @@ def multicoin_parameters_from_payload(payload, config, *, sides=("long", "short"
     Static coin patches belong to the registered dataset's override arrays. Callers
     preparing global candidate values must supply a payload without those patches.
     """
-    from config.gpu import validate_gpu_loss_gate_policy
+    from config.gpu import gpu_loss_gate_transport_cap
 
-    validate_gpu_loss_gate_policy(
-        payload.backtest_params["loss_gate_enabled"],
-        payload.backtest_params["loss_gate_max_drawdown_fraction"],
-    )
+    loss_policy = payload.backtest_params
+    global_risk = {
+        "realized_loss_memory_ema_span_minutes": float(loss_policy["realized_loss_memory_ema_span_minutes"]),
+        "loss_gate_max_drawdown_fraction": gpu_loss_gate_transport_cap(
+            loss_policy["loss_gate_enabled"], loss_policy["loss_gate_max_drawdown_fraction"],
+        ),
+    }
     kind = config['bot']["portfolio"]['strategy_kind']
     keys = {"ema_anchor": EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
             "trailing_martingale": TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS}[kind]
@@ -131,7 +134,7 @@ def multicoin_parameters_from_payload(payload, config, *, sides=("long", "short"
         strategy.update(_unstuck_params(flat_bot))
         strategy.update(_hsl_params(project_bot(payload, 0, side, config, base=True), signal_mode=mode))
         strategy.update(adaptive_params(flat_bot))
-        strategy.update({key: float(payload.backtest_params[key]) for key in GLOBAL_RISK_PARAM_KEYS})
+        strategy.update(global_risk)
         strategy.update(dict.fromkeys(RESERVED_RISK_PARAM_KEYS, 0.0))
         missing = set(keys) - strategy.keys()
         if missing:
@@ -170,7 +173,7 @@ def prepare_candidate_parameters(config, markets, exchange):
     params = multicoin_parameters_from_payload(payload, effective)
     result = {f"{side}_{key}": value for side, values in params.items()
               for key, value in values.items() if key not in GLOBAL_RISK_PARAM_KEYS}
-    result.update({key: float(backtest[key]) for key in GLOBAL_RISK_PARAM_KEYS})
+    result.update({key: params["long"][key] for key in GLOBAL_RISK_PARAM_KEYS})
     # Reporting observes configured policies even when trading has zero slots.
     # Keep this transport separate from the deliberately capacity-gated shader bit.
     hsl = backtest["equity_hard_stop_loss"]

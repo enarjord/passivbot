@@ -220,6 +220,309 @@ inline bool finite_positive(float value) {
     return isfinite(value) && value > 0.0f;
 }
 
+// Causal close allocation for candle replay. A quoted limit remains maker
+// liquidity in both replay engines. A market close uses the staged execution
+// tick for PnL and the observed, unslipped touch for its venue minimum.
+#pragma STDC FP_CONTRACT OFF
+struct ReplayCloseProjection {
+    float execution_price;
+    float minimum_qty;
+    float minimum_lots;
+    float position_price;
+    float c_mult;
+    float fee_fraction;
+    bool is_long;
+    bool immediately_executable;
+};
+
+inline float replay_lot_count(float qty, float step, bool upward) {
+    float ratio = qty / step;
+    if (!isfinite(ratio)) return NAN;
+    float nearest = rint(ratio);
+    if (nearest * step == qty) return nearest;
+
+    float count = upward ? ceil(ratio) : floor(ratio);
+    float rounded = count * step;
+    if (upward && rounded < qty) {
+        count = ceil(nextafter(count, INFINITY));
+    } else if (!upward && rounded > qty) {
+        count = floor(nextafter(count, 0.0f));
+    }
+    return count;
+}
+
+inline bool project_replay_close(
+    bool is_long, float position_price, float quote, float touch, bool use_market,
+    int market_tick, float price_step, float qty_step, float min_qty, float min_cost,
+    float c_mult, float maker_fee, float taker_fee, thread ReplayCloseProjection& projection
+) {
+    if (!(finite_positive(position_price) && finite_positive(quote)
+          && finite_positive(touch) && finite_positive(price_step)
+          && finite_positive(qty_step) && finite_positive(c_mult)
+          && isfinite(min_qty) && min_qty >= 0.0f && isfinite(min_cost) && min_cost >= 0.0f
+          && isfinite(maker_fee) && isfinite(taker_fee))
+        || (use_market && market_tick <= 0)) return false;
+
+    float price = use_market ? ordinary_market_fill_price(market_tick, price_step) : quote;
+    float minimum_price = use_market ? touch : quote;
+    float raw_minimum = fmax(min_qty, (min_cost / minimum_price) / c_mult);
+    float lots = replay_lot_count(raw_minimum, qty_step, true);
+    float minimum = lots * qty_step;
+    if (!(finite_positive(price) && isfinite(lots) && isfinite(minimum))) return false;
+
+    projection.execution_price = price;
+    projection.minimum_qty = minimum;
+    projection.minimum_lots = lots;
+    projection.position_price = position_price;
+    projection.c_mult = c_mult;
+    projection.fee_fraction = use_market ? taker_fee : maker_fee;
+    projection.is_long = is_long;
+    projection.immediately_executable = use_market;
+    return true;
+}
+
+inline float replay_close_net_pnl(ReplayCloseProjection projection, float qty) {
+    float price_diff = projection.is_long
+        ? projection.execution_price - projection.position_price
+        : projection.position_price - projection.execution_price;
+    // One net price increment makes the projection monotone in quantity.
+    // Separately rounding gross and fee totals can reverse nearby lots when
+    // the two almost cancel, breaking both integer searches.
+    float net_price_move = fma(-projection.fee_fraction, projection.execution_price, price_diff);
+    return (fabs(qty) * projection.c_mult) * net_price_move;
+}
+
+// Exact integer lot indexes where binary32 resolves every count. At very
+// large sizes, search the ordered positive encodings of representable lot
+// counts, as the device position state cannot distinguish adjacent raw lots.
+inline uint replay_lot_index(float count, bool direct) {
+    return direct ? uint(count) : as_type<uint>(count);
+}
+
+inline float replay_lots_at(uint index, bool direct) {
+    return direct ? float(index) : floor(as_type<float>(index));
+}
+
+inline bool size_replay_close(
+    float proposed_abs_qty, float position_abs_qty, float qty_step,
+    ReplayCloseProjection projection, bool budget_enabled, float headroom,
+    bool allow_below_minimum_full_close, thread float& qty
+) {
+    qty = 0.0f;
+    if (!(finite_positive(proposed_abs_qty) && finite_positive(position_abs_qty)
+          && finite_positive(qty_step))
+        || (budget_enabled && !(isfinite(headroom) && headroom >= 0.0f))) return false;
+
+    float upper = fmin(proposed_abs_qty, position_abs_qty);
+    bool full_close_exception = allow_below_minimum_full_close
+        && upper == position_abs_qty && upper < projection.minimum_qty;
+    float lots = full_close_exception ? 0.0f : replay_lot_count(upper, qty_step, false);
+    float upper_qty = full_close_exception ? upper : lots * qty_step;
+    float least_lots = fmax(projection.minimum_lots, 1.0f);
+    if (!(finite_positive(upper_qty) && upper_qty <= upper)
+        || (!full_close_exception && lots < least_lots)) return false;
+
+    float pnl = replay_close_net_pnl(projection, upper_qty);
+    if (!isfinite(pnl)) return false;
+    if (!budget_enabled || pnl >= -headroom) {
+        qty = upper_qty;
+        return true;
+    }
+    if (!(headroom > 0.0f)) return false;
+    if (full_close_exception) {
+        qty = upper_qty;
+        return true;
+    }
+
+    // Compare the projected losses of integer lots directly. An exact hit
+    // requires zero extra lots, even when division would round upward.
+    bool direct = lots <= 0x1p24f;
+    uint lo = replay_lot_index(least_lots, direct);
+    uint hi = replay_lot_index(lots, direct);
+    while (lo < hi) {
+        uint mid = lo + (hi - lo) / 2u;
+        float lot_qty = replay_lots_at(mid, direct) * qty_step;
+        if (-replay_close_net_pnl(projection, lot_qty) >= headroom) hi = mid;
+        else lo = mid + 1u;
+    }
+    qty = replay_lots_at(lo, direct) * qty_step;
+    return true;
+}
+
+inline bool replay_unstuck_exposure_after(
+    float position_abs_qty, float qty, ReplayCloseProjection projection,
+    float balance, float effective_wel, thread float& ratio
+) {
+    float after = balance + replay_close_net_pnl(projection, qty);
+    if (!(finite_positive(after) && qty >= 0.0f && qty < position_abs_qty)) return false;
+    float budget = after * effective_wel;
+    float entry_cost = projection.position_price * projection.c_mult;
+    ratio = ((position_abs_qty - qty) * entry_cost) / budget;
+    return finite_positive(budget) && isfinite(ratio);
+}
+
+inline bool upper_replay_unstuck_qty(
+    float position_abs_qty, float qty_step, ReplayCloseProjection projection,
+    float balance, float effective_wel, float trigger, thread float& qty
+) {
+    qty = 0.0f;
+    float before;
+    if (!(finite_positive(qty_step) && finite_positive(effective_wel) && trigger > 0.0f)
+        || !replay_unstuck_exposure_after(
+            position_abs_qty, 0.0f, projection, balance, effective_wel, before)
+        || !(trigger < before)) return false;
+
+    // The finite positive-balance branch is strictly decreasing only when
+    // Q * pnl_per_unit + B > 0. Solve on integer lots against the actual
+    // projected balance of each candidate rather than dividing by a near-zero
+    // slope or allowing a full flatten.
+    float direction = fma(position_abs_qty, replay_close_net_pnl(projection, 1.0f), balance);
+    if (!finite_positive(direction)) return false;
+    float lots = replay_lot_count(position_abs_qty, qty_step, false);
+    if (!(lots >= 1.0f && isfinite(lots))) return false;
+    bool direct = lots <= 0x1p24f;
+    uint lo = 0u;
+    uint hi = replay_lot_index(lots, direct);
+    while (lo < hi) {
+        uint mid = lo + (hi - lo + 1u) / 2u;
+        float after;
+        float lot_qty = replay_lots_at(mid, direct) * qty_step;
+        if (replay_unstuck_exposure_after(
+                position_abs_qty, lot_qty, projection, balance, effective_wel, after)
+            && after >= trigger) lo = mid;
+        else hi = mid - 1u;
+    }
+
+    float floor_qty = replay_lots_at(lo, direct) * qty_step;
+    float projected_ratio;
+    if (!(floor_qty > 0.0f)
+        || !replay_unstuck_exposure_after(
+            position_abs_qty, floor_qty, projection, balance, effective_wel, projected_ratio)
+        || !(projected_ratio >= trigger && projected_ratio < before)) return false;
+    qty = floor_qty;
+    return true;
+}
+
+inline bool size_capped_replay_unstuck(
+    float exposure_cap, float position_abs_qty, float qty_step, ReplayCloseProjection projection,
+    float balance, float effective_wel, float trigger, float unstuck_headroom,
+    bool gate_enabled, float gate_headroom, thread float& qty
+) {
+    qty = 0.0f;
+    if (!finite_positive(unstuck_headroom)
+        || (gate_enabled && !(isfinite(gate_headroom) && gate_headroom >= 0.0f))) return false;
+    float headroom = gate_enabled ? fmin(unstuck_headroom, gate_headroom) : unstuck_headroom;
+    float sized;
+    float projected_ratio;
+    float before;
+    if (!size_replay_close(
+            exposure_cap, position_abs_qty, qty_step, projection, true, headroom, false, sized)
+        || !replay_unstuck_exposure_after(
+            position_abs_qty, 0.0f, projection, balance, effective_wel, before)
+        || !(trigger > 0.0f && trigger < before)
+        || !replay_unstuck_exposure_after(
+            position_abs_qty, sized, projection, balance, effective_wel, projected_ratio)
+        || !(projected_ratio >= trigger && projected_ratio < before)) return false;
+    qty = sized;
+    return true;
+}
+
+inline bool size_replay_unstuck(
+    float position_abs_qty, float qty_step, ReplayCloseProjection projection,
+    float balance, float effective_wel, float trigger, float unstuck_headroom,
+    bool gate_enabled, float gate_headroom, thread float& qty
+) {
+    qty = 0.0f;
+    float exposure_cap;
+    return upper_replay_unstuck_qty(
+        position_abs_qty, qty_step, projection, balance, effective_wel, trigger, exposure_cap
+    ) && size_capped_replay_unstuck(
+        exposure_cap, position_abs_qty, qty_step, projection, balance, effective_wel,
+        trigger, unstuck_headroom, gate_enabled, gate_headroom, qty
+    );
+}
+
+struct ReplayClosePriority {
+    bool immediately_executable;
+    float resting_gap_fraction;
+    float signed_entry_distance_fraction;
+    int stable_coin_index;
+    int position_side;
+    int order_type;
+    float price;
+    float signed_qty;
+};
+
+inline ReplayClosePriority replay_close_priority(
+    ReplayCloseProjection projection, float quote, float touch, int stable_coin_index,
+    int order_type, float proposed_abs_qty
+) {
+    float reference_price = projection.immediately_executable ? touch : quote;
+    float relative = reference_price / projection.position_price;
+    ReplayClosePriority result;
+    result.immediately_executable = projection.immediately_executable;
+    result.resting_gap_fraction = projection.immediately_executable
+        ? 0.0f : fabs(quote / touch - 1.0f);
+    result.signed_entry_distance_fraction = projection.is_long ? relative - 1.0f : 1.0f - relative;
+    result.stable_coin_index = stable_coin_index;
+    result.position_side = projection.is_long ? 0 : 1;
+    result.order_type = order_type;
+    result.price = quote;
+    result.signed_qty = projection.is_long ? -proposed_abs_qty : proposed_abs_qty;
+    return result;
+}
+
+inline bool replay_close_preferred(ReplayClosePriority candidate, ReplayClosePriority incumbent) {
+    if (candidate.immediately_executable != incumbent.immediately_executable)
+        return candidate.immediately_executable;
+    if (candidate.resting_gap_fraction != incumbent.resting_gap_fraction)
+        return candidate.resting_gap_fraction < incumbent.resting_gap_fraction;
+    if (candidate.signed_entry_distance_fraction != incumbent.signed_entry_distance_fraction)
+        return candidate.signed_entry_distance_fraction > incumbent.signed_entry_distance_fraction;
+    if (candidate.stable_coin_index != incumbent.stable_coin_index)
+        return candidate.stable_coin_index < incumbent.stable_coin_index;
+    if (candidate.position_side != incumbent.position_side)
+        return candidate.position_side < incumbent.position_side;
+    if (candidate.order_type != incumbent.order_type)
+        return candidate.order_type < incumbent.order_type;
+    if (candidate.price != incumbent.price)
+        return candidate.price < incumbent.price;
+    return candidate.signed_qty < incumbent.signed_qty;
+}
+
+struct ReplayLossBudget {
+    float remaining;
+    float error;
+};
+
+inline float replay_loss_headroom(ReplayLossBudget budget) {
+    // Projected losses are representable float32 values. Round the quota up
+    // for the first-lot comparison while retaining its residual for spending.
+    return budget.error > 0.0f ? nextafter(budget.remaining, INFINITY) : budget.remaining;
+}
+
+inline float replay_budget_sum_error(float left, float right, float sum) {
+    float right_high = sum - left;
+    return (left - (sum - right_high)) + (right - right_high);
+}
+
+inline void spend_replay_loss_budget(thread ReplayLossBudget& budget, float net_pnl) {
+    if (!(budget.remaining > 0.0f && net_pnl < 0.0f)) return;
+    // Recover each subtraction's rounding error and renormalize the two
+    // limbs. Repeated sub-ULP losses must deplete the same account quota.
+    float difference = budget.remaining + net_pnl;
+    float residual = budget.error + replay_budget_sum_error(budget.remaining, net_pnl, difference);
+    float remaining = difference + residual;
+    if (remaining > 0.0f) {
+        budget.remaining = remaining;
+        budget.error = replay_budget_sum_error(difference, residual, remaining);
+    } else {
+        budget.remaining = 0.0f;
+        budget.error = 0.0f;
+    }
+}
+#pragma STDC FP_CONTRACT ON
+
 inline int multicoin_interval_minutes(float interval_ms) {
     return max(1, int(interval_ms / 60000.0f + 0.5f));
 }

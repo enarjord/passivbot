@@ -112,8 +112,12 @@ def validate_gpu_loss_gate_policy(enabled: bool, cap: float | None) -> None:
         raise ValueError("GPU loss_gate_max_drawdown_fraction must be in [0, 1) or null")
     if enabled and cap is None:
         raise ValueError("GPU loss_gate_max_drawdown_fraction is required when the gate is enabled")
-    if enabled:
-        raise ValueError("GPU replay does not support v9 realized-loss close sizing; use a CPU backend")
+
+
+def gpu_loss_gate_transport_cap(enabled: bool, cap: float | None) -> float:
+    """Encode a dormant gate as zero while preserving active zero via its flag."""
+    validate_gpu_loss_gate_policy(enabled, cap)
+    return float(cap) if enabled else 0.0
 
 
 def validate_gpu_backtest_config(
@@ -151,6 +155,14 @@ def validate_gpu_backtest_config(
         validate_gpu_realized_close_policies(config)
 
 
+def require_gpu_close_sizing_support(*, loss_gate_enabled: bool, unstuck_enabled: bool) -> None:
+    """Guard production replay while realized close sizing awaits device qualification."""
+    if loss_gate_enabled:
+        raise ValueError("GPU replay does not support v9 realized-loss close sizing; use a CPU backend")
+    if unstuck_enabled:
+        raise ValueError("GPU replay does not support v9 unstuck exposure sizing; use a CPU backend")
+
+
 def validate_gpu_realized_close_policies(config: dict) -> None:
     from config.bot_inheritance import get_bot_policy, get_side_field_catalog, resolve_bot_policy
     from config.risk_memory import require_loss_realization_policy
@@ -160,9 +172,11 @@ def validate_gpu_realized_close_policies(config: dict) -> None:
     bot = config["bot"]
     if get_bot_policy(config) is None:
         bot = resolve_bot_policy(bot, get_side_field_catalog()).effective_view()
-    for side in ("long", "short"):
-        if bot[side]["risk"]["unstuck"]["enabled"] or any(
+    unstuck_enabled = any(
+        bot[side]["risk"]["unstuck"]["enabled"] or any(
             patch.get("bot", {}).get(side, {}).get("risk", {}).get("unstuck", {}).get("enabled")
             for patch in config.get("coin_overrides", {}).values()
-        ):
-            raise ValueError("GPU replay does not support v9 unstuck exposure sizing; use a CPU backend")
+        )
+        for side in ("long", "short")
+    )
+    require_gpu_close_sizing_support(loss_gate_enabled=gate_enabled, unstuck_enabled=unstuck_enabled)

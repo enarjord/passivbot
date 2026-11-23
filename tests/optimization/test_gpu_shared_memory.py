@@ -16,7 +16,7 @@ from optimization.gpu.model import (
 @pytest.mark.parametrize("keys", [EMA_ANCHOR_MULTICOIN_PARAM_KEYS, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS])
 def test_shared_memory_span_is_candidate_owned_and_side_coherent(keys):
     pytest.importorskip("torch")
-    from optimization.gpu.mps_kernel import _validate_global_memory_params
+    from optimization.gpu.mps_kernel import _validate_global_risk_params
     from optimization.gpu.service import _candidate_parameter_matrix
 
     base = {key: 1.0 for key in keys}
@@ -27,11 +27,11 @@ def test_shared_memory_span_is_candidate_owned_and_side_coherent(keys):
     )
     width = len(keys)
     assert matrix[:, keys.index("realized_loss_memory_ema_span_minutes")].tolist() == [3.0, 15.0]
-    assert np.all(matrix[:, keys.index("reserved_realized_memory_slot")] == 0.0)
-    _validate_global_memory_params(matrix, keys, sides=2)
+    assert np.all(matrix[:, keys.index("loss_gate_max_drawdown_fraction")] == 0.0)
+    _validate_global_risk_params(matrix, keys, sides=2, loss_gate_enabled=False)
     matrix[0, width + keys.index("realized_loss_memory_ema_span_minutes")] = 8.0
     with pytest.raises(ValueError, match="account-global"):
-        _validate_global_memory_params(matrix, keys, sides=2)
+        _validate_global_risk_params(matrix, keys, sides=2, loss_gate_enabled=False)
 
 
 def test_side_hsl_memory_rates_are_independent_but_portfolio_policy_is_coherent():
@@ -128,3 +128,52 @@ def test_shared_realized_memory_debits_canonical_net_fills_once(
         balance, net_total = add(balance, f32(net)), add(net_total, f32(net))
         expected.append([drawdown, balance, net_total, allowance(balance, .1, drawdown), 1.0])
     assert output.cpu().tolist() == expected
+
+
+@pytest.mark.parametrize("keys", [EMA_ANCHOR_MULTICOIN_PARAM_KEYS, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS])
+def test_gate_cap_is_candidate_owned_and_side_coherent(keys):
+    from optimization.gpu.mps_kernel import _validate_global_risk_params
+    from optimization.gpu.service import _candidate_parameter_matrix
+
+    cap_key = "loss_gate_max_drawdown_fraction"
+    base = dict.fromkeys(keys, 1.0)
+    base[cap_key] = 0.03
+    candidates = [{}, {cap_key: 0.0}, {cap_key: 0.99999999}]
+    sides = {"long": base, "short": base}
+    columns = [keys.index(cap_key), len(keys) + keys.index(cap_key)]
+
+    active = _candidate_parameter_matrix(candidates, keys, sides, loss_gate_enabled=True)
+    np.testing.assert_array_equal(active[:, columns], [[0.03, 0.03], [0.0, 0.0], [0.99999999, 0.99999999]])
+    _validate_global_risk_params(active, keys, sides=2, loss_gate_enabled=True)
+
+    disabled = _candidate_parameter_matrix(candidates, keys, sides, loss_gate_enabled=False)
+    assert np.all(disabled[:, columns] == 0.0)
+    _validate_global_risk_params(disabled, keys, sides=2, loss_gate_enabled=False)
+
+    with pytest.raises(ValueError, match="when the gate is disabled"):
+        _validate_global_risk_params(active, keys, sides=2, loss_gate_enabled=False)
+
+    active[0, columns[1]] = 0.01
+    with pytest.raises(ValueError, match="account-global"):
+        _validate_global_risk_params(active, keys, sides=2, loss_gate_enabled=True)
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.0, float("nan"), float("inf")])
+def test_gate_cap_rejects_invalid_candidate_value(value):
+    from optimization.gpu.mps_kernel import _validate_global_risk_params
+
+    keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    rows = np.ones((1, len(keys)))
+    rows[0, keys.index("loss_gate_max_drawdown_fraction")] = value
+    with pytest.raises(ValueError, match=r"loss_gate_max_drawdown_fraction must be finite"):
+        _validate_global_risk_params(rows, keys, sides=1, loss_gate_enabled=True)
+
+
+def test_gate_settings_encode_dormant_and_preserve_active_zero():
+    from optimization.gpu.mps_kernel import _encode_loss_gate_policy
+
+    assert _encode_loss_gate_policy(False, None) == _encode_loss_gate_policy(False, 0.03) == 0.0
+    assert _encode_loss_gate_policy(True, 0.0) == 0.0
+    assert _encode_loss_gate_policy(True, 0.03) == 0.03
+    with pytest.raises(ValueError, match="required"):
+        _encode_loss_gate_policy(True, None)
