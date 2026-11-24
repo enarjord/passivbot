@@ -5973,3 +5973,23 @@ def test_result_recorder_preserves_unquantized_saved_param_values():
         for part in path[:-1]:
             saved_target = saved_target[part]
         assert saved_target[path[-1]] == pytest.approx(original + 0.000321)
+
+
+def test_resume_config_mismatches_allow_auto_population_size_over_stored_value():
+    entry = _resume_validation_entry()
+    entry.setdefault("optimize", {})["population_size"] = 128
+    config = deepcopy(entry)
+    config["optimize"]["population_size"] = None
+
+    assert optimize._resume_config_mismatches(entry, config) == []
+
+
+def test_resume_config_mismatches_still_reject_pinned_population_size_change():
+    entry = _resume_validation_entry()
+    entry.setdefault("optimize", {})["population_size"] = 128
+    config = deepcopy(entry)
+    config["optimize"]["population_size"] = 64
+
+    mismatches = optimize._resume_config_mismatches(entry, config)
+
+    assert any("optimize.population_size" in mismatch for mismatch in mismatches)
