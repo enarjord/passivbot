@@ -5,6 +5,8 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Add a single-coin HBAR long example with market HSL panic closes and a finite re-entry cooldown.
+
 - On Hyperliquid with HSL enabled, schedule routine fill refreshes after prepared
   ordinary order attempts when fill inputs are ready. This prevents the bot's own
   refresh from repeatedly invalidating entry creates queued for submission.

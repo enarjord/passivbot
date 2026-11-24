@@ -1,0 +1,361 @@
+{
+    "backtest": {
+        "acquisition_mode": "auto",
+        "balance_sample_divider": 60,
+        "base_dir": "backtests",
+        "btc_collateral_target_ratio": 0.0,
+        "max_usd_debt_to_wallet_value_ratio": null,
+        "candle_interval_minutes": 1,
+        "coin_sources": {},
+        "compress_cache": true,
+        "dynamic_wel_by_tradability": true,
+        "end_date": "2026-09-10",
+        "equity_floor_fraction": 0.05,
+        "ew_half_life_days": 360.0,
+        "exchanges": ["binance", "bybit"],
+        "filter_by_min_effective_cost": null,
+        "gap_tolerance_ohlcvs_minutes": 120,
+        "hlcvs_data_dir": null,
+        "hlcvs_data_override_mode": "intersection",
+        "hsl_detailed_report": false,
+        "limit_order_fill_buffer_fraction": 0.0005,
+        "maker_fee_override_fraction": 0.0004,
+        "market_order_slippage_fraction": 0.0005,
+        "market_settings": {"overrides": {}, "overrides_by_exchange": {}},
+        "market_settings_sources": {},
+        "offline": false,
+        "ohlcv_source_dir": null,
+        "organillo_csv": null,
+        "organillo_sha256": null,
+        "reducer": {"default": "mean"},
+        "scenarios": [],
+        "start_date": "2021-04-01",
+        "starting_balance": 100000,
+        "suite_enabled": false,
+        "taker_fee_override_fraction": 0.00055,
+        "volume_normalization": true
+    },
+    "bot": {
+        "global": {
+            "entry_cooldown": {
+                "base_duration_minutes": 4.2367604,
+                "max_duration_minutes": 360,
+                "min_duration_minutes": 1,
+                "weights_minutes": {
+                    "adverse_directionality": 10.345851,
+                    "exposure_ratio": 14.078595
+                }
+            },
+            "forager": {
+                "always_include": [],
+                "score_hysteresis_margin": 0.02,
+                "score_weights": {
+                    "ema_readiness": 0.22812909201597234,
+                    "rms_directionality": 0.34923144063945005,
+                    "log_range": 0.3887780283123959,
+                    "volume": 0.033861439032181764
+                },
+                "rms_directionality_ema_span_minutes": 2179.8856,
+                "log_range_ema_span_minutes": 1856.2118,
+                "volume_ema_span_minutes": 479.49336
+            },
+            "risk": {
+                "max_positions": 1,
+                "position_exposure_enforcer": {"enabled": false, "threshold_ratio": 1.0},
+                "total_exposure_enforcer": {
+                    "enabled": false,
+                    "policy": "reduce_overweight",
+                    "threshold_ratio": 1.0
+                },
+                "total_wallet_exposure_limit_ratio": 1,
+                "we_excess_allowance_fraction": 0,
+                "hsl": {
+                    "cooldown_after_red_minutes": 720.0,
+                    "drawdown_fraction_ema_span_minutes": 390.0,
+                    "drawdown_threshold_fraction": 0.14,
+                    "enabled": true,
+                    "memory_ema_span_minutes": 18000.0,
+                    "panic_close_order_type": "market",
+                    "scale_budget_with_excess_allowance": false
+                },
+                "unstuck": {
+                    "ema_distance_fraction": -0.047491595,
+                    "ema_gating_enabled": true,
+                    "ema_span_0_minutes": 431.30526,
+                    "ema_span_1_minutes": 2460.1193,
+                    "enabled": false,
+                    "exposure_trigger_ratio": 0.55261617,
+                    "loss_allowance_fraction": 0.0037045229
+                }
+            },
+            "strategy": {
+                "trailing_martingale": {
+                    "close": {
+                        "qty_fraction": 0.96744324,
+                        "retracement_base_fraction": 0.0057398883,
+                        "retracement_log_range_1h_coefficient": 21.225923,
+                        "retracement_log_range_1m_coefficient": 56.269795,
+                        "threshold_base_fraction": -0.0023059504,
+                        "threshold_log_range_1h_coefficient": 0.48374635,
+                        "threshold_log_range_1m_coefficient": 4.8845369,
+                        "threshold_exposure_ratio_coefficient": -0.00059250011
+                    },
+                    "entry": {
+                        "reentry_qty_multiplier": 3.0,
+                        "ema_gate_mode": "all",
+                        "ema_span_0_minutes": 844.90759,
+                        "ema_span_1_minutes": 1151.7853,
+                        "initial_ema_distance_fraction": 0.0026543044,
+                        "initial_qty_fraction": 0.005,
+                        "retracement_base_fraction": 0.00087551751,
+                        "retracement_log_range_1h_coefficient": 23.252683,
+                        "retracement_log_range_1m_coefficient": 33.653735,
+                        "retracement_exposure_ratio_coefficient": 14.1,
+                        "threshold_base_fraction": 0.037889696,
+                        "threshold_log_range_1h_coefficient": 5.2149163,
+                        "threshold_log_range_1m_coefficient": 18.159537,
+                        "threshold_exposure_ratio_coefficient": 1.0
+                    },
+                    "log_range_ema_span_1h_candles": 954.84237,
+                    "log_range_ema_span_minutes": 543.84367
+                }
+            },
+            "universe": {
+                "approved_coins": ["HBAR"],
+                "filter_by_min_effective_cost": true,
+                "ignored_coins": [],
+                "minimum_coin_age_days": 0
+            }
+        },
+        "portfolio": {
+            "execution": {
+                "market_order_near_touch_fraction": 0.001,
+                "market_orders_allowed": false
+            },
+            "hedge_mode": false,
+            "strategy_kind": "trailing_martingale",
+            "warmup": {"max_minutes": null, "activation_span_fraction": 0.3},
+            "risk": {
+                "loss_realization": {
+                    "memory_ema_span_minutes": 85511.137,
+                    "loss_gate": {"enabled": false}
+                },
+                "hsl": {"scope": "coin"}
+            }
+        },
+        "long": {"enabled": true},
+        "short": {"enabled": false}
+    },
+    "coin_overrides": {},
+    "config_version": "v9.0.0",
+    "live": {
+        "account": {
+            "user": "passivbot_default",
+            "balance_override": null,
+            "balance_hysteresis_snap_fraction": 0.01,
+            "leverage": 10,
+            "margin_mode_preference": "cross"
+        },
+        "api": {
+            "custom_endpoints_path": null,
+            "recv_window_milliseconds": 5000,
+            "max_concurrent_api_requests": null,
+            "market_snapshot_ticker_strategy": "auto"
+        },
+        "candles": {
+            "candle_lock_timeout_seconds": 10,
+            "enable_archive_candle_fetch": false,
+            "enable_forager_ws_candles": true,
+            "forager_ws_candle_rest_audit_minutes": 30,
+            "inactive_coin_candle_ttl_minutes": 10,
+            "max_active_candle_tail_gap_minutes": 10,
+            "max_disk_candles_per_symbol_per_tf": 2000000,
+            "max_forager_candle_refresh_seconds": 45,
+            "max_forager_candle_staleness_minutes": null,
+            "max_memory_candles_per_symbol": 200000,
+            "max_ohlcv_fetches_per_minute": 30
+        },
+        "startup": {
+            "defer_broad_candle_warmup": true,
+            "force_cold_startup": false,
+            "risk_bootstrap_max_lookback_minutes": 129600.0,
+            "startup_phase_budgets": {},
+            "warmup_concurrency": "auto",
+            "warmup_jitter_seconds": 30
+        },
+        "fills": {
+            "fee_conversion_max_age_milliseconds": 86400000,
+            "fallback_fee_fraction": 0.0002,
+            "max_abs_fee_fraction": 0.001,
+            "fills_confirmation_overlap_minutes": 60,
+            "fills_recent_overlap_minutes": 10
+        },
+        "execution": {
+            "execution_delay_seconds": 2,
+            "limit_order_create_max_market_distance_fraction": 0.8,
+            "max_n_cancellations_per_batch": 5,
+            "max_n_creations_per_batch": 3,
+            "order_match_tolerance_fraction": 0.0002,
+            "order_replacement_churn_gate_activation_count": 10,
+            "order_replacement_churn_gate_market_distance_fraction": 0.005,
+            "order_replacement_churn_gate_stability_minutes": 2.0,
+            "order_replacement_churn_gate_window_minutes": 10.0,
+            "time_in_force": "good_till_cancelled"
+        },
+        "recovery": {
+            "exchange_symbol_unavailable_cooldown_hours": 6.0,
+            "max_n_restarts_per_day": 10
+        },
+        "modes": {
+            "long": null,
+            "short": null,
+            "disapproved_position": "graceful_stop"
+        }
+    },
+    "logging": {
+        "backup_count": 5,
+        "dir": "logs",
+        "level": 1,
+        "live_event_debug_profiles": [],
+        "max_bytes_mib": 10.0,
+        "memory_snapshot_interval_minutes": 30,
+        "persist_to_file": true,
+        "rotation": true,
+        "volume_refresh_info_threshold_seconds": 30
+    },
+    "monitor": {
+        "checkpoint_interval_minutes": 10.0,
+        "compress_rotated_segments": true,
+        "emit_completed_candles": true,
+        "enabled": true,
+        "event_rotation_mib": 128.0,
+        "event_rotation_minutes": 60.0,
+        "include_raw_fill_payloads": false,
+        "max_total_bytes": 1073741824,
+        "price_tick_min_interval_milliseconds": 500,
+        "retain_candles": true,
+        "retain_days": 7.0,
+        "retain_fills": true,
+        "retain_price_ticks": true,
+        "root_dir": "monitor",
+        "snapshot_interval_seconds": 1.0
+    },
+    "optimize": {
+        "backend": "pymoo",
+        "bounds": {
+            "global": {
+                "risk": {
+                    "hsl": {
+                        "drawdown_threshold_fraction": [0.03, 0.18, 0.01],
+                        "drawdown_fraction_ema_span_minutes": [30, 720, 30],
+                        "cooldown_after_red_minutes": [180, 2880, 180],
+                        "memory_ema_span_minutes": [1440, 43200, 720]
+                    }
+                },
+                "strategy": {
+                    "trailing_martingale": {
+                        "entry": {
+                            "initial_qty_fraction": [0.002, 0.04, 0.001],
+                            "threshold_exposure_ratio_coefficient": [0.5, 18, 0.1],
+                            "reentry_qty_multiplier": [0.5, 3, 0.1],
+                            "retracement_exposure_ratio_coefficient": [0, 18, 0.1]
+                        }
+                    }
+                }
+            }
+        },
+        "compress_results_file": true,
+        "enable_overrides": [],
+        "fixed_params": [],
+        "fixed_runtime_overrides": {},
+        "gpu": {
+            "batch_size": null,
+            "checkpoint_interval_seconds": 5.0,
+            "max_dispatch_candidate_bars": null,
+            "screening": {
+                "min_survivors": 64,
+                "scenarios": [],
+                "survival_fraction": 0.1
+            },
+            "search_cohort_size": null,
+            "tuning_mode": "conservative"
+        },
+        "iters": 2048,
+        "limits": [
+            {
+                "enabled": true,
+                "metric": "backtest_completion_fraction",
+                "penalize_if": "less_than",
+                "reducer": "min",
+                "value": 1.0
+            },
+            {
+                "enabled": false,
+                "metric": "drawdown_max_fraction_strategy_equity",
+                "penalize_if": "greater_than",
+                "reducer": "max",
+                "value": 0.5
+            },
+            {
+                "enabled": false,
+                "metric": "peak_recovery_max_days_strategy_equity",
+                "penalize_if": "greater_than",
+                "reducer": "max",
+                "value": 240
+            }
+        ],
+        "n_cpus": 4,
+        "objective_scenario": null,
+        "pareto_max_size": 1000,
+        "population_size": 128,
+        "prefilter": {
+            "adverse_directionality_score": 0.0,
+            "checks": [],
+            "exposure_probe_fractions": [0.25, 0.5, 0.8, 0.95],
+            "grid_max_entries": 1024,
+            "penalty_weight": 1000000.0,
+            "log_range_ema_1h": 0.0,
+            "log_range_ema_1m": 0.0
+        },
+        "pymoo": {
+            "algorithm": "auto",
+            "algorithms": {
+                "nsga2": {},
+                "nsga3": {
+                    "ref_dirs": {"method": "das_dennis", "n_partitions": "auto"}
+                }
+            },
+            "shared": {
+                "crossover_distribution_index": 20.0,
+                "crossover_probability_per_variable": 0.5,
+                "eliminate_duplicates": true,
+                "mutation_distribution_index": 20.0,
+                "mutation_probability": "auto",
+                "mutation_probability_per_variable": "auto"
+            }
+        },
+        "round_to_n_significant_digits": 8,
+        "scoring": [
+            {
+                "goal": "max",
+                "metric": "cagr_fraction_strategy_equity_ew",
+                "reducer": "mean",
+                "scenario": null
+            },
+            {
+                "goal": "min",
+                "metric": "ulcer_index_fraction_strategy_equity",
+                "reducer": "max",
+                "scenario": null
+            },
+            {
+                "goal": "min",
+                "metric": "peak_recovery_max_days_strategy_equity",
+                "reducer": "max",
+                "scenario": null
+            }
+        ],
+        "seed": null,
+        "write_all_results": true
+    }
+}

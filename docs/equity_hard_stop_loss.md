@@ -6,6 +6,18 @@ supported GPU execution and live fact reconstruction. See the exact
 [numerical and bootstrap reference](v9_risk_model.md) and the
 [v8 migration guide](v8_to_v9_migration.md) before using older configurations.
 
+The [single-coin Trailing Martingale example](../configs/examples/hbar_trailing_martingale_long_hsl.json)
+enables coin-scoped HSL for one HBAR long position. A RED signal requests a market panic
+close. After a qualifying flatten, the controller waits for its configured cooldown before
+allowing new entries. RED requires both the raw and smoothed drawdown ratios to exceed the configured threshold.
+Realized episode losses and maximum account drawdown can exceed it.
+
+The backtest report shows trigger and execution counts.
+
+```bash
+passivbot backtest configs/examples/hbar_trailing_martingale_long_hsl.json --plots none
+```
+
 ## Scopes and budgets
 
 | `bot.portfolio.risk.hsl.scope` | Scope and RED closes | Current base budget | Policy |
