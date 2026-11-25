@@ -137,7 +137,22 @@ def test_adaptive_output_validator_checks_current_duration():
 
     inp = adaptive_input()
     raw = pbr.compute_ideal_orders_json(json.dumps(inp))
-    reconciler.parse_and_validate_rust_orchestrator_output(raw, {0: "BTC/USDT:USDT"}, inp)
+    actual_cooldowns = set()
+    reconciler.parse_and_validate_rust_orchestrator_output(
+        raw, {0: "BTC/USDT:USDT"}, inp, active_entry_cooldowns=actual_cooldowns
+    )
+    assert actual_cooldowns == {(0, "long")}
+
+    unavailable = copy.deepcopy(inp)
+    unavailable["symbols"][0]["emas"]["m1"]["signed_rms_directionality"] = []
+    unavailable["symbols"][0]["allow_missing_strategy_inputs"] = True
+    raw_unavailable = pbr.compute_ideal_orders_json(json.dumps(unavailable))
+    actual_cooldowns.clear()
+    reconciler.parse_and_validate_rust_orchestrator_output(
+        raw_unavailable, {0: "BTC/USDT:USDT"}, unavailable,
+        active_entry_cooldowns=actual_cooldowns,
+    )
+    assert actual_cooldowns == set()
     # An otherwise valid early entry is invalid under the submitted adverse score.
     relaxed = copy.deepcopy(inp)
     relaxed["symbols"][0]["emas"]["m1"]["signed_rms_directionality"] = [[60.0, 0.75]]
@@ -169,6 +184,19 @@ def test_rms_forager_prefers_lower_penalty_and_ignores_direction_sign():
     selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == "long")
     assert selection["selected_symbol_indices"] == [1]
     reconciler.validate_rust_orchestrator_output(result, {i: str(i) for i in range(3)}, inp)
+
+
+def _rms_source_fixture(get_candles):
+    from candlestick_manager import CandlestickManager
+
+    manager = CandlestickManager.__new__(CandlestickManager)
+    manager._ema_cache = {}
+    manager._ema_inputs = {}
+    manager._now_ms = lambda: 0
+    manager._get_known_gaps_enhanced = lambda symbol: []
+    manager._ensure_symbol_index = lambda symbol: {}
+    manager.get_candles = get_candles
+    return manager
 
 
 @pytest.mark.asyncio
@@ -470,7 +498,7 @@ def test_invalid_submitted_adaptive_inputs_are_fatal():
 
 
 @pytest.mark.parametrize("pending_span,score,raises", [(60.0, None, False), (30.0, None, True), (60.0, 1.5, True)])
-def test_cpu_rms_warmup_defer_is_span_specific_and_never_masks_invalid_scores(pending_span, score, raises):
+def test_cpu_rms_warmup_exclusion_is_span_specific_and_never_masks_invalid_scores(pending_span, score, raises):
     import passivbot_rust as pbr
 
     bp = {"n_positions": 1, "forager_score_weights": {
@@ -490,8 +518,10 @@ def test_cpu_rms_warmup_defer_is_span_specific_and_never_masks_invalid_scores(pe
         selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == "long")
         assert selection["ranking_required"]
         assert selection["selected_symbol_indices"] == []
+        assert selection["eligible_count"] == 0
+        assert [item["reason"] for item in selection["excluded_candidates"]] == ["rms_warmup"] * 2
         assert result["diagnostics"]["warnings"]
-        # Once only one eligible candidate remains, no score is consumed.
+        # Once only one candidate is considered, no score is consumed.
         inp["symbols"].pop()
         result = compute(pbr, inp)
         selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == "long")
@@ -904,7 +934,7 @@ def test_cpu_unused_forager_rms_preserves_aggregated_candle_results(side, interv
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("missing_idx", [0, 1])
 @pytest.mark.parametrize("marker", ["warmup", "live"])
-def test_mixed_rms_readiness_defers_entire_ranking(side, missing_idx, marker):
+def test_mixed_rms_readiness_excludes_only_the_incomplete_candidate(side, missing_idx, marker):
     import passivbot_rust as pbr
 
     bp = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0, "forager_score_weights": {
@@ -923,7 +953,15 @@ def test_mixed_rms_readiness_defers_entire_ranking(side, missing_idx, marker):
     result = compute(pbr, inp)
     selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == side)
     assert selection["ranking_required"]
-    assert selection["selected_symbol_indices"] == []
+    assert selection["candidate_count"] == 2
+    assert selection["eligible_count"] == 1
+    assert selection["selected_symbol_indices"] == [1 - missing_idx]
+    assert selection["top_scores"] == []
+    assert selection["excluded_candidates"] == [{
+        "symbol_idx": missing_idx,
+        "feature": "rms_directionality",
+        "reason": "rms_warmup" if marker == "warmup" else "missing_rms",
+    }]
     missing["emas"]["m1"]["signed_rms_directionality"] = [[60.0, 0.0]]
     result = compute(pbr, inp)
     selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == side)
@@ -936,7 +974,7 @@ def test_mixed_rms_readiness_defers_entire_ranking(side, missing_idx, marker):
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_cpu_staggered_listing_waits_for_every_compared_rms_window(side):
+def test_cpu_staggered_listing_ranks_mature_candidates_during_rms_warmup(side):
     from backtest import build_backtest_payload, execute_backtest
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
@@ -953,8 +991,12 @@ def test_cpu_staggered_listing_waits_for_every_compared_rms_window(side):
     # history and while the later listing is still building its RMS window.
     payload.backtest_params["trade_start_indices"] = [20, 20]
     fills, _, _ = execute_backtest(payload, cfg)
-    times = [int(row[0]) for row in fills if str(row[13]).startswith("entry_") and side in str(row[13])]
-    assert times and min(times) == 31
+    entries = [
+        (int(row[0]), row[2])
+        for row in fills
+        if str(row[13]).startswith("entry_") and side in str(row[13])
+    ]
+    assert entries and min(entries) == (21, "LONGCOIN")
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -1119,7 +1161,7 @@ def test_rms_history_never_erases_stamped_or_untyped_activation(source, expected
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("marker", ["live", "warmup", "unmarked"])
 @pytest.mark.parametrize("missing_idx", [1, 2])
-def test_low_volume_candidates_still_require_complete_rms_scoring(side, marker, missing_idx):
+def test_low_volume_candidates_are_also_checked_for_rms_eligibility(side, marker, missing_idx):
     import passivbot_rust as pbr
 
     bp = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0,
@@ -1144,9 +1186,11 @@ def test_low_volume_candidates_still_require_complete_rms_scoring(side, marker, 
         return
     out = compute(pbr, inp)
     selection = next(s for s in out["diagnostics"]["forager_selections"] if s["pside"] == side)
-    assert selection["selected_symbol_indices"] == []
-    # Low volume does not remove a candidate. Restoring its score completes the
-    # ranking, and malformed observations still fail before selecting a winner.
+    assert selection["selected_symbol_indices"] == [3 - missing_idx]
+    assert selection["eligible_count"] == 2
+    assert [item["symbol_idx"] for item in selection["excluded_candidates"]] == [missing_idx]
+    # Low volume does not remove a candidate. A restored score is immediately
+    # rankable, and malformed observations still fail before selecting a winner.
     symbols[missing_idx]["emas"]["m1"]["signed_rms_directionality"] = [[60.0, 0.0]]
     ready = compute(pbr, inp)
     assert next(s for s in ready["diagnostics"]["forager_selections"] if s["pside"] == side)["selected_symbol_indices"] == [missing_idx]

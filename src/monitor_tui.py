@@ -859,6 +859,10 @@ def _render_forager_panel(snapshot: dict[str, Any]) -> list[str]:
             f"uni={universe}",
         ]
         lines.append(f"      {' | '.join(next_parts)}")
+        entry_stall = entry.get("entry_stall")
+        if isinstance(entry_stall, dict) and entry_stall.get("duration_ms"):
+            minutes = entry_stall["duration_ms"] / 60_000
+            lines.append(f"      Warning: free slots with no working entry for {minutes:.1f}m")
         ranking_parts: list[str] = []
         if top_total:
             ranking_parts.append(

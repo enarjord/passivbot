@@ -77,7 +77,7 @@ ADAPTIVE_OVERRIDE_KEYS = ADAPTIVE_PARAM_KEYS[:4]
 
 def adaptive_params(bot: dict) -> dict:
     """Encode canonical Rust payload leaves; -1 represents an absent ceiling."""
-    from math import ceil
+    from passivbot_rust import RMS_WARMUP_SPAN_MULTIPLIER
 
     weights = bot.get("entry_cooldown_weights_minutes", {})
     span = float(bot.get("rms_directionality_ema_span_minutes", 60.0))
@@ -92,7 +92,7 @@ def adaptive_params(bot: dict) -> dict:
                 float(weights.get("adverse_directionality", 0.0)),
                 span,
                 float(bot.get("forager_score_weights", {}).get("rms_directionality", 0.0)),
-                float(ceil(20.0 * span)),
+                float(math.ceil(RMS_WARMUP_SPAN_MULTIPLIER * span)),
             ),
         )
     )

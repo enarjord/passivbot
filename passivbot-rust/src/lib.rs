@@ -147,6 +147,14 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_class::<HlcvsBundlePy>()?;
+    m.add(
+        "RMS_WARMUP_SPAN_MULTIPLIER",
+        rms_directionality::RMS_WARMUP_SPAN_MULTIPLIER,
+    )?;
+    m.add_function(wrap_pyfunction!(
+        rms_directionality::rms_directionality_warmup_returns,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(
         rms_directionality::calc_signed_rms_directionality,
         m

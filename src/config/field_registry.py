@@ -164,7 +164,10 @@ _FIELDS_BY_TYPE = {
             order_replacement_churn_gate_window_minutes risk_bootstrap_max_lookback_minutes
             warmup_jitter_seconds
         """,
-        "logging": "max_bytes_mib memory_snapshot_interval_minutes volume_refresh_info_threshold_seconds",
+        "logging": """
+            forager_no_entries_warning_minutes max_bytes_mib memory_snapshot_interval_minutes
+            volume_refresh_info_threshold_seconds
+        """,
         "monitor": """
             checkpoint_interval_minutes event_rotation_mib event_rotation_minutes
             retain_days snapshot_interval_seconds

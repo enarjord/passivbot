@@ -3196,6 +3196,32 @@ def test_rust_forager_selection_event_skips_console_and_text_only():
     assert pipeline.close(timeout=2.0) is True
 
 
+def test_rust_forager_entry_stall_warning_is_operator_visible():
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(console_sink=console, text_sink=text)
+    event = LiveEvent(
+        EventTypes.FORAGER_SELECTION,
+        level="warning",
+        pside="long",
+        reason_code="no_entries_with_free_slots",
+        data={
+            "source": "rust_orchestrator",
+            "eligible_count": 2,
+            "slots_to_fill": 1,
+            "entry_stall_ms": 900_000,
+        },
+    )
+
+    pipeline.emit(event)
+
+    assert pipeline.flush(timeout=2.0)
+    assert console.events == [event]
+    assert text.events == [event]
+    assert "no_entry_for=15.0m" in format_console_event(event)
+    assert pipeline.close(timeout=2.0)
+
+
 def test_python_forager_selection_event_remains_operator_visible():
     structured = ListEventSink()
     monitor = ListEventSink()

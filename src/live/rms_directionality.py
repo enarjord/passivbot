@@ -20,9 +20,7 @@ RMS_CACHE_KIND = "signed_rms_directionality"
 
 
 def history_candle_count(span):
-    if not math.isfinite(span) or not 1 <= span <= 100_000:
-        raise ValueError("RMS directionality EMA span must be between 1 and 100000")
-    return math.ceil(span * 20.0) + 1
+    return passivbot_rust.rms_directionality_warmup_returns(span) + 1
 
 
 def scoring_enabled(bot, side, symbols):

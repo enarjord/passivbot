@@ -140,6 +140,10 @@ Example per-metric aggregation:
 - **backup_count**: Number of rotated backup files to keep when rotation is enabled. Default `5`.
 - **memory_snapshot_interval_minutes**: Interval between `_log_memory_snapshot` telemetry entries (RSS, cache footprint, asyncio task counts). Default `30`; lower values surface leaks sooner, higher values reduce noise.
 - **volume_refresh_info_threshold_seconds**: Minimum duration a bulk volume-EMA refresh must take before it is promoted to an INFO log. Runs that finish faster emit only DEBUG output (when debug logging is enabled). Set `0` to log every refresh at INFO.
+- **logging.forager_no_entries_warning_minutes**: Time in minutes before warning about a side
+  with free slots and candidates but no working initial entry or newly opened position.
+  If all selected candidates are in cooldown, the timer resets. Defaults to `15`. Set it to `0`
+  to disable the warning.
 
 ## Monitor
 

@@ -15,6 +15,8 @@ from optimization.gpu.replay_progress import replay_scope
 
 import numpy as np
 
+from passivbot_rust import RMS_WARMUP_SPAN_MULTIPLIER
+
 from config.shared_bot import flatten_shared_bot_side
 from optimization.gpu.parameters import (
     _single_coin_exposure_params, _position_exposure_enforcer_params,
@@ -531,7 +533,7 @@ def _gpu_proxy_execution_checkpoint_contract(
         "taker_fee_fraction",
     )
     contract = {
-        "version": 13,
+        "version": 14,
         "core_metric_definition_version": CORE_METRIC_DEFINITION_VERSION,
         "forager_hysteresis_abi": FORAGER_HYSTERESIS_ABI,
         "age_admission_abi": 1,
@@ -833,18 +835,28 @@ def _require_supported_multicoin_valid_tails(
     chunk_rows = max(1, PREPARATION_CHUNK_BYTES // row_bytes)
     starts_array = np.asarray(starts, dtype=np.int64)[None, :]
     tails_array = np.asarray(tails, dtype=np.int64)[None, :]
+    normal_close_floor = np.finfo(np.float32).tiny
     for start in range(0, candle_count, chunk_rows):
         stop = min(candle_count, start + chunk_rows)
         with np.errstate(over="ignore", under="ignore", invalid="ignore"):
             packed_hlc = np.asarray(values[start:stop, :, :3], dtype=np.float32)
         invalid = np.all(np.isfinite(packed_hlc) & (packed_hlc > 0.0), axis=2)
         np.logical_not(invalid, out=invalid)
+        # Metal can flush a positive subnormal close to zero while taking its
+        # logarithm. Reject it before dispatch so RMS sees positive prices.
+        invalid |= packed_hlc[:, :, 2] < normal_close_floor
         candle_indices = np.arange(start, stop, dtype=np.int64)[:, None]
         invalid &= candle_indices >= starts_array
         invalid &= candle_indices <= tails_array
         if invalid.any():
             relative_candle, coin = divmod(int(invalid.argmax()), coin_count)
             candle_index = start + relative_candle
+            packed_close = packed_hlc[relative_candle, coin, 2]
+            if 0.0 < packed_close < normal_close_floor:
+                raise ValueError(
+                    "GPU multicoin proxy received a subnormal packed float32 close; "
+                    f"coin index {coin}, candle_index={candle_index}"
+                )
             raise ValueError(
                 "GPU multicoin proxy requires contiguous finite positive float32 H/L/C "
                 "inside every declared coin window; non-finite, finite but non-positive "
@@ -990,7 +1002,7 @@ def _candidate_parameter_matrix(
         if "rms_directionality_window" in param_keys:
             offset = side_index * len(param_keys)
             matrix[:, offset + param_keys.index("rms_directionality_window")] = np.ceil(
-                20.0
+                RMS_WARMUP_SPAN_MULTIPLIER
                 * matrix[:, offset + param_keys.index("rms_directionality_ema_span_minutes")]
             )
     return matrix

@@ -15,6 +15,11 @@ its own version heading. See [release status](docs/releases.md).
   close (in both CPU Rust and GPU replay), so merged WEL reductions retain
   protective reducer semantics.
 
+- Let live and replay foragers exclude individual candidates with unavailable RMS
+  history, so healthy candidates can fill open slots. Live ranking waits for the
+  initial candidate refresh pass and reports feature exclusions and sustained
+  free slots without entries.
+
 - Refresh `configs/examples/ema_anchor_long.json` with updated EMA Anchor,
   forager, entry-cooldown, risk (`max_positions: 3`, tighter
   `we_excess_allowance_fraction: 0.185`), and portfolio loss-gate parameters

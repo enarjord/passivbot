@@ -210,7 +210,11 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
         adverse = 0.0
     if adverse <= 0.0 and (for_trade_activation or not ranking_possible or scoring <= 0.0):
         return 0
-    n_returns = math.ceil(_to_float(span, context=f"{pside}.rms_directionality_ema_span_minutes") * 20.0)
+    from passivbot_rust import rms_directionality_warmup_returns
+
+    n_returns = rms_directionality_warmup_returns(
+        _to_float(span, context=f"{pside}.rms_directionality_ema_span_minutes")
+    )
     # N returns need N+1 closes, available at offset N from the first valid close.
     return n_returns if for_trade_activation else n_returns + 1
 

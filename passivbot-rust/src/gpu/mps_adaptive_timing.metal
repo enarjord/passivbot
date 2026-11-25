@@ -73,8 +73,12 @@ inline void update_adaptive_rms(
             a.square = fma(decay, a.square, alpha * r * r);
         }
     }
-    a.score = n < a.window ? NAN : (a.square == 0.0f
-        ? 0.0f : clamp(a.mean / sqrt(a.square), -1.0f, 1.0f));
+    // Preserve malformed mature results for consumer validation. Some GPU
+    // min/max implementations would turn a NaN into a finite clamp bound.
+    a.score = NAN;
+    if (n < a.window || !isfinite(a.mean) || !isfinite(a.square) || a.square < 0.0f) return;
+    float score = a.square == 0.0f ? 0.0f : a.mean / sqrt(a.square);
+    if (isfinite(score)) a.score = clamp(score, -1.0f, 1.0f);
 }
 
 inline float adaptive_duration(

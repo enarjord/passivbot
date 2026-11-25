@@ -6169,6 +6169,13 @@
               "type": "string",
               "default": "logs"
             },
+            "forager_no_entries_warning_minutes": {
+              "type": "number",
+              "default": 15.0,
+              "description": "Warn when free forager slots have candidates but no working initial entry. Zero disables the warning.",
+              "minimum": 0.0,
+              "x-passivbot-unit": "minutes"
+            },
             "level": {
               "type": "integer",
               "default": 1
@@ -19225,6 +19232,9 @@
         "logging.dir": {
           "$ref": "#/$defs/config/properties/logging/properties/dir"
         },
+        "logging.forager_no_entries_warning_minutes": {
+          "$ref": "#/$defs/config/properties/logging/properties/forager_no_entries_warning_minutes"
+        },
         "logging.level": {
           "$ref": "#/$defs/config/properties/logging/properties/level"
         },
@@ -24925,6 +24935,9 @@
         },
         "dir": {
           "$ref": "#/$defs/config/properties/logging/properties/dir"
+        },
+        "forager_no_entries_warning_minutes": {
+          "$ref": "#/$defs/config/properties/logging/properties/forager_no_entries_warning_minutes"
         },
         "level": {
           "$ref": "#/$defs/config/properties/logging/properties/level"

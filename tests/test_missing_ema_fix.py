@@ -3651,12 +3651,11 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
         return
     assert await selection() == [2]
     assert set(calls) == set(names)
-    # Every bundle must replay fresh scores, and missing data must not reuse a
-    # prior score or silently rank only the available competitor.
+    # The healthy peer remains eligible when its competitor loses the required feature.
     calm = names[1]
     assert await selection() == [1]
     missing = names[1]
-    assert await selection() == []
+    assert await selection() == [2]
     assert bot._orchestrator_forager_signed_rms_directionality[names[1]] == {}
     assert bot._orchestrator_rms_directionality_unavailable[names[1]]["forager"] == [1.0]
     missing = None

@@ -1108,6 +1108,7 @@ impl<'a, const ORGANILLO: bool> BacktestEngine<'a, ORGANILLO> {
             symbols,
             peek_hints,
             forager_hysteresis,
+            forager_ranking_ready: Default::default(),
         }
     }
 
