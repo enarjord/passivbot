@@ -55,8 +55,18 @@ def observe_ordinary_defer(bot, details):
     )
 
 
+def _ordinary_pending_age_ms(bot, now_ms):
+    owner = getattr(bot, "_hsl_live", None)
+    task = getattr(owner, "_ordinary", None)
+    started = getattr(owner, "_ordinary_started_ms", None)
+    if task is not None and not task.done() and started is not None:
+        return max(0, now_ms - started)
+    return None
+
+
 def observe_ordinary_acceptance(bot, now_ms):
     """An accepted ordinary plan returned from reconciliation, possibly as a no-op."""
+    bot._console_ordinary_slow_reported = False
     bot._console_ordinary_accepted_ms = now_ms
     bot._console_ordinary_wait_started_ms = None
     bot._console_ordinary_last_defer = None
@@ -83,8 +93,17 @@ def observe_ordinary_outer_cycle(bot, now_ms, *, accepted):
         return
     if now_ms - started < _ORDINARY_STALL_MS:
         return
-    bot._console_ordinary_stalled = True
     defer = getattr(bot, "_console_ordinary_last_defer", None) or {}
+    pending_age = _ordinary_pending_age_ms(bot, now_ms)
+    if pending_age is not None and not defer:
+        if not getattr(bot, "_console_ordinary_slow_reported", False):
+            logging.warning(
+                "[health] ordinary preparation still running | pending_age=%.1fs",
+                pending_age / 1000.0,
+            )
+            bot._console_ordinary_slow_reported = True
+        return
+    bot._console_ordinary_stalled = True
     logging.warning(
         "[health] ordinary planning stalled | no_accepted_plan=%.1fs "
         "last_defer_phase=%s reason=%s missing=%s",
@@ -177,16 +196,11 @@ def readiness_payload(bot, now_ms):
     if not isinstance(latest_write, (int, float)) or not 0 < latest_write <= now_ms:
         latest_write = None
     completed = getattr(bot, '_console_last_cycle_completed_ms', None)
-    owner = getattr(bot, '_hsl_live', None)
-    ordinary = getattr(owner, '_ordinary', None)
-    ordinary_started = getattr(owner, '_ordinary_started_ms', None)
-    ordinary_pending_age = (max(0, now_ms - ordinary_started)
-        if ordinary is not None and not ordinary.done() and ordinary_started is not None else None)
     return dict(trailing_wait_count=len({symbol for symbol, _ in active} | {symbol for symbol, _ in blocked}),
                 trailing_wait_overflow_count=len({symbol for symbol, _ in blocked} - set(waits)),
                 trailing_wait_samples=details,
                 trailing_wait_max_ms=max((row['age_ms'] for row in details), default=None),
-                ordinary_pending_age_ms=ordinary_pending_age,
+                ordinary_pending_age_ms=_ordinary_pending_age_ms(bot, now_ms),
                 account_surface_ages_ms=surface_ages,
                 fills_pending=bool(pending.get('fills', 0) > getattr(ledger.get('fills'), 'epoch', 0)),
                 last_cycle_completed_age_ms=(now_ms - completed if completed is not None

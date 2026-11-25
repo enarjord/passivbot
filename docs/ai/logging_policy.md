@@ -245,10 +245,16 @@ activity remain in the durable health event and dedicated action/position record
 summaries split into bounded, individually timestamped records. Diagnostic projection failure must
 leave the base heartbeat visible with readiness unavailable.
 
-The heartbeat reports the age of the last ordinary plan accepted by the executor. Five minutes
-of continuing outer cycles without acceptance produces one warning with the latest known defer
-reason. The next accepted plan, including an empty reconciliation, produces one recovery line.
-Exchange writes have their own outcomes.
+In cycle events, `execution_owner="hsl"` identifies the shared live execution loop, including
+when HSL is disabled. `ordinary_executed=true` records that an admitted ordinary plan returned
+from the executor. Empty plans, pre-create skips and connector deferrals can all produce this
+outcome without an exchange write. Use order submission and acknowledgement events to trace writes.
+
+The heartbeat reports the age of the last accepted ordinary plan. After five minutes of
+continuing cycles without acceptance, a pending preparation with no observed deferral produces
+one warning with its age. An observed stall reports the most recent deferral when available and
+logs recovery on the next acceptance. Every ordinary-plan discard emits a structured deferral.
+Other staged waits and repeated console messages retain their 15-second same-key throttle.
 
 A prior GREEN/inactive HSL observation may expire immediately before an unchanged fresh observation
 replaces it. The producer marks only this proven replacement case; both events retain their durable

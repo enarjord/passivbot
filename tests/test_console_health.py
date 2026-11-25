@@ -234,3 +234,37 @@ def test_ordinary_progress_alert_requires_continued_cycles_and_reports_recovery(
     assert progress["ordinary_progress"]["last_defer"] is None
     assert not progress["ordinary_progress"]["stalled"]
     assert "ordinary_accepted_age=1.0s" in format_periodic_health_summary(progress)
+
+
+def test_pending_preparation_warns_once_without_a_false_stall_or_recovery(caplog):
+    from live.console_health import observe_ordinary_acceptance, observe_ordinary_outer_cycle
+
+    task = SimpleNamespace(done=lambda: False)
+    bot = SimpleNamespace(_hsl_live=SimpleNamespace(_ordinary=task, _ordinary_started_ms=1000))
+    caplog.set_level(logging.INFO)
+    for now in (1000, 200_000, 301_000, 310_000):
+        observe_ordinary_outer_cycle(bot, now, accepted=False)
+    assert caplog.text.count("ordinary preparation still running") == 1
+    assert "pending_age=300.0s" in caplog.text
+    observe_ordinary_acceptance(bot, 320_000)
+    assert "stalled" not in caplog.text and "recovered" not in caplog.text
+
+
+def test_only_ordinary_discards_bypass_the_staged_event_throttle(monkeypatch, caplog):
+    from live import planning_gates
+
+    now = 10_000
+    monkeypatch.setattr(planning_gates, "_utc_ms", lambda: now)
+    events = []
+    bot = SimpleNamespace(_emit_planning_unavailable_diagnostic=events.append,
+                          _format_staged_execution_defer_message=lambda details: "input wait")
+    details = {"context": "rust order calculation"}
+    caplog.set_level(logging.INFO)
+    for ordinary_discard in (False, False, True, True):
+        planning_gates.log_staged_execution_defer(bot, details, ordinary_discard=ordinary_discard)
+    assert len(events) == 3
+    assert caplog.text.count("input wait") == 1
+    now += 15_000
+    planning_gates.log_staged_execution_defer(bot, details)
+    assert len(events) == 4
+    assert caplog.text.count("input wait") == 2

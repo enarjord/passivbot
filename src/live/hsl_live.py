@@ -282,7 +282,7 @@ class Owner:
                     if name in invalid
                 ]
             payload["invalid"] = invalid
-            bot._log_staged_execution_defer(payload)
+            bot._log_staged_execution_defer(payload, ordinary_discard=True)
 
         run_diagnostic_step("report ordinary plan deferral", report)
 
@@ -791,7 +791,7 @@ class Owner:
             handled, details = self.bot._handle_staged_execution_precondition_error(exc)
             if not handled:
                 raise
-            self.bot._log_staged_execution_defer(details)
+            self.bot._log_staged_execution_defer(details, ordinary_discard=True)
             return None, elapsed_ms
 
     async def _service_ordinary(self, plan, timings, *, now):

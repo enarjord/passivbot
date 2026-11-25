@@ -199,7 +199,7 @@ def handle_staged_execution_precondition_error(
     return True, details
 
 
-def log_staged_execution_defer(bot, details: dict) -> None:
+def log_staged_execution_defer(bot, details: dict, *, ordinary_discard: bool = False) -> None:
     """Log a throttled non-trading defer while staged inputs settle."""
     run_diagnostic_step(
         "record ordinary planning defer", lambda: observe_ordinary_defer(bot, details)
@@ -212,16 +212,17 @@ def log_staged_execution_defer(bot, details: dict) -> None:
     now_ms = _utc_ms()
     last_log_ms = int(getattr(bot, "_staged_execution_defer_last_log_ms", 0) or 0)
     throttle_ms = 15_000
+    throttled = (
+        log_key == getattr(bot, "_staged_execution_defer_last_log_key", None)
+        and now_ms - last_log_ms < throttle_ms
+    )
     emitter = getattr(bot, "_emit_planning_unavailable_diagnostic", None)
-    if callable(emitter):
+    if callable(emitter) and (ordinary_discard or not throttled):
         run_diagnostic_step(
             "emit planning_unavailable diagnostic",
             lambda: emitter(details),
         )
-    if (
-        log_key == getattr(bot, "_staged_execution_defer_last_log_key", None)
-        and now_ms - last_log_ms < throttle_ms
-    ):
+    if throttled:
         return
     bot._staged_execution_defer_last_log_key = log_key
     bot._staged_execution_defer_last_log_ms = now_ms

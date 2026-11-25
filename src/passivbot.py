@@ -11580,9 +11580,13 @@ class Passivbot:
         """
         return planning_gates.handle_staged_execution_precondition_error(self, exc)
 
-    def _log_staged_execution_defer(self, details: dict) -> None:
+    def _log_staged_execution_defer(
+        self, details: dict, *, ordinary_discard: bool = False
+    ) -> None:
         """Log a throttled non-trading defer while staged inputs settle."""
-        return planning_gates.log_staged_execution_defer(self, details)
+        return planning_gates.log_staged_execution_defer(
+            self, details, ordinary_discard=ordinary_discard
+        )
 
     async def _defer_staged_execution_cycle(
         self, details: dict, loop_start_ms: int
