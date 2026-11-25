@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Service completed ordinary plans before the live loop sleeps and recheck plans blocked only
+  by account age after the scheduled refresh. Console health reports slow preparation,
+  reconciliation stalls and recovery.
+
 - Correct Bitget Classic hedge closes and one-way forced closes so position sizes and
   trailing confirmation follow the affected position. Reconstruct cached fills from retained
   exchange executions on startup.

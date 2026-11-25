@@ -1415,6 +1415,10 @@ def test_state_debug_profile_adds_bounded_refresh_shape():
 
 def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     import passivbot as pb_mod
+    from live.console_health import (
+        observe_ordinary_acceptance,
+        observe_ordinary_outer_cycle,
+    )
 
     class FakePipeline:
         def __init__(self):
@@ -1526,7 +1530,10 @@ def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     )
 
     bot = FakeBot()
+    observe_ordinary_acceptance(bot, 159_100)
+    observe_ordinary_outer_cycle(bot, 159_700, accepted=True)
     payload = bot._build_health_summary_payload(now_ms=160_000)
+    assert payload["ordinary_progress"]["last_accepted_age_ms"] == 900
 
     assert payload["uptime_ms"] == 60_000
     assert payload["health_summary_lag_ms"] == 2345

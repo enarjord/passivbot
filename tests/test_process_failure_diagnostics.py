@@ -351,7 +351,9 @@ async def test_recovery_waits_for_admitted_ordinary_execution(outcome, caplog):
         bot.execute_order_plan_to_exchange.side_effect = shutdown_during_execute
     instance = Owner(bot)
     instance.protect = AsyncMock(return_value=False)
-    instance._account_matches = lambda *args: outcome != "rejected"
+    instance._account_mismatch_reason = lambda *args: (
+        "positions_changed" if outcome == "rejected" else None
+    )
     if outcome != "pending":
         instance._ordinary = asyncio.get_running_loop().create_future()
         if outcome == "failed":
