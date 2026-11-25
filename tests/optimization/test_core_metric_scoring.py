@@ -189,3 +189,17 @@ def test_resume_resolves_the_same_native_campaign_half_life(authored):
         "ew_half_life_days" in value
         for value in _resume_config_mismatches(previous, current)
     )
+
+
+def test_evaluation_contract_resolves_explicit_null_half_life():
+    from config.metrics import DEFAULT_EW_HALF_LIFE_DAYS
+    from config.schema import get_expanded_config_prototype
+    from optimization.evaluation_contract import build_evaluation_contract
+
+    config = get_expanded_config_prototype()
+    config["backtest"]["ew_half_life_days"] = None
+
+    assert (
+        build_evaluation_contract(config)["exponential_weighting"]["half_life_days"]
+        == DEFAULT_EW_HALF_LIFE_DAYS
+    )

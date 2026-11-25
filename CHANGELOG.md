@@ -14,6 +14,9 @@ its own version heading. See [release status](docs/releases.md).
   and broaden optimizer bounds, limits, and search budget (`iters: 8192`,
   `population_size: 256`).
 
+- Preserve explicit null values for nullable settings in cleaned configurations
+  and optimizer results so runs with automatic population sizing can resume.
+
 - On Hyperliquid with HSL enabled, schedule routine fill refreshes after prepared
   ordinary order attempts when fill inputs are ready. This prevents the bot's own
   refresh from repeatedly invalidating entry creates queued for submission.
