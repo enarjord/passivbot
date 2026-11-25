@@ -1185,6 +1185,33 @@ def test_validate_optimizer_limit_suite_mode_rejects_unknown_scenario_early():
         )
 
 
+def test_shipped_example_configs_pass_optimizer_limit_suite_mode_validation():
+    from config.load import load_prepared_config
+
+    examples_dir = Path(__file__).resolve().parents[2] / "configs" / "examples"
+    example_paths = sorted(examples_dir.glob("*.json"))
+    assert example_paths
+    for example_path in example_paths:
+        config = load_prepared_config(str(example_path), live_only=False)
+        suite_enabled = bool(config["backtest"]["suite_enabled"])
+        scenario_labels = [
+            sc["label"]
+            for sc in config["backtest"].get("scenarios", [])
+            if isinstance(sc, dict) and sc.get("label")
+        ]
+        optimize._validate_optimizer_limit_suite_mode(
+            config,
+            suite_enabled=suite_enabled,
+            scenario_labels=scenario_labels or None,
+        )
+        if scenario_labels:
+            optimize._validate_optimizer_limit_suite_mode(
+                config,
+                suite_enabled=True,
+                scenario_labels=scenario_labels,
+            )
+
+
 def test_optimize_parser_accepts_short_limit_alias():
     parser = optimize.build_command_parser(
         prog="passivbot optimize",

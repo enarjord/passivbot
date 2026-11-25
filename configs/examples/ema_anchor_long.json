@@ -276,7 +276,7 @@
                 "enabled": true,
                 "metric": "cagr_fraction_strategy_equity_ew",
                 "penalize_if": "less_than",
-                "scenario": "base",
+                "reducer": "mean",
                 "value": 0.3
             }
         ],
