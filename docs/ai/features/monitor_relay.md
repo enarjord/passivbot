@@ -30,6 +30,9 @@ An invalid unterminated final row is an unfinished append. Retain its live byte 
 after more bytes arrive. Replay also defers that row. Complete JSON without a final newline remains
 readable, including older files. Split UTF-8 characters must not prevent delivery of preceding rows.
 
+Poll batches yield between groups of live messages to let subscriber writers drain during
+event and history bursts. A subscriber that still overflows receives the resync-required signal.
+
 The dashboard uses the aggregate feed. Query parameters only set initial client-side bot and symbol
 focus. Keep its static reader small, read-only, and independent of bot internals.
 

@@ -5,6 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Let monitor WebSocket writers drain between live poll batches so a ready client
+  can receive event and history bursts without a spurious resync.
+
 - On Hyperliquid, round the derived account balance (equity minus uPnL) to the
   exchange's 8-decimal USDC precision. Floating-point residue from the
   subtraction previously made an unchanged balance differ between reads by about
