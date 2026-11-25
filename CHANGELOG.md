@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Give admitted Binance limit closes for a confirmed uncovered position priority over
+  ordinary entries at the creation batch limit. Keep risk-critical and native loss-gate
+  allocation priority.
+
 - On Hyperliquid, round the derived account balance (equity minus uPnL) to the
   exchange's 8-decimal USDC precision. Floating-point residue from the
   subtraction previously made an unchanged balance differ between reads by about
