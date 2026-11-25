@@ -2,276 +2,224 @@
 
 ## Objective
 
-Eliminate the failure class in which a single forager candidate with an incomplete one-minute
-candle history permanently blocks all new entries on a trading side, while simplifying live RMS
-directionality acquisition, gap handling, and forager readiness into the canonical `1m` EMA and
-candidate-eligibility pipelines.
+Remove the failure class where one forager candidate with incomplete one-minute history
+blocks all new entries on a trading side. Do it by making RMS directionality follow the same
+present-or-excluded rule as the other forager ranking features. Separately, fix the RMS data
+path so a complete window is easier to obtain and keep.
 
 ## Problem Statement
 
-On `v9`, three independent design choices compound into a brittle live failure mode:
+On `v9`, four mechanisms combine:
 
-1. **Excessive unbroken 1m history requirement (`20 * span`):**
-   - `passivbot-rust/src/rms_directionality.rs::warmup_returns()`,
-     `src/live/rms_directionality.py::history_candle_count()`,
-     `src/warmup_utils.py::_rms_warmup_minutes()`,
-     `src/optimization/gpu/mps_kernel.py`, and
-     `src/optimization/gpu/service.py` all hardcode `ceil(20.0 * span)` returns (`+ 1` closes).
-   - For the default `forager.rms_directionality_ema_span_minutes = 2179.8856`, every candidate
-     must maintain **43,599 consecutive 1-minute bars (30.28 days)** with zero breaks.
-   - Because `alpha = 2 / (span + 1)`, the exponential tail weight remaining after `20 * span`
-     bars is approximately `e^-40 ≈ 4.2e-18` (below IEEE-754 `f64` machine epsilon). Requiring
-     `20 * span` buys sub-`1e-12` numerical parity at a steep operational cost in disk/RAM I/O,
-     backfill time, and gap exposure.
+1. **Whole-side kill switch (the failure class).**
+   In `passivbot-rust/src/orchestrator.rs::build_forager_candidates_into()`, a missing
+   `volume_ema`, `log_range_ema`, or `ema_bands` marks only that candidate `enabled: false`
+   through `unavailable_forager_candidate`. With
+   `cfg.require_forager && normalized_weights.rms_directionality > 0.0`, a missing RMS score on
+   any one enabled candidate sets `ranking_unavailable` and runs `out.clear()`. No new entries
+   open on that side. `docs/ai/features/strategy_runtime.md` documents this as "never select from
+   a history-ready subset". Backtests share the code path: a coin listed in
+   `rms_directionality_warmup_spans` raises `RmsDirectionalityUnavailable` and defers the side
+   in the same way.
 
-2. **Bespoke RMS data and repair pipeline with split-brain gap semantics:**
-   - Live RMS bypasses `CandlestickManager`'s canonical EMA metric path and loads raw candles via
-     `src/live/rms_directionality.py::load()` with `standardize=False`, then splits contiguous
-     segments on `np.diff(ts, append=-1) != 60_000`.
-   - PR #2298 added a separate `"rms"` pseudo-timeframe repair surface in
-     `src/passivbot.py` (`refresh_forager_candles`), but two structural defects remain:
-     - **Verified `no_trades` deadlock:** `CandlestickManager.get_completed_candle_health()`
-       subtracts `verified_no_trade_spans` (`GAP_REASON_NO_TRADES`) from
-       `refreshable_missing_spans`, so the repair loop considers those minutes resolved.
-       Meanwhile, `rms_directionality.load()` uses `standardize=False`, which skips
-       `standardize_gaps()` and omits verified zero-trade candles. A single verified zero-trade
-       minute anywhere inside a 30.28-day window permanently breaks RMS continuity for that
-       symbol until the minute ages out 30 days later.
-     - **Slow 100-bar repair pagination:** Each background `"rms"` repair attempt is capped at
-       `99 * ONE_MIN_MS` (100 bars) while sharing `max_ohlcv_fetches_per_minute` with all other
-       surfaces. Backfilling ~30k missing bars takes ~300 background turns even when the exchange
-       supports up to 1,000 1m bars per request.
+2. **Long unbroken history requirement.**
+   `warmup_returns(span) = ceil(20 * span)`, and live history needs that many returns plus one
+   close. For the default `forager.rms_directionality_ema_span_minutes = 2179.8856`, every
+   candidate needs 43,599 consecutive one-minute bars (about 30.3 days). Live RMS reads with
+   `standardize=False` and splits segments on any timestamp gap, so one missing minute in that
+   window makes the candidate unavailable. The `20` multiplier is duplicated in
+   `src/live/rms_directionality.py`, `src/warmup_utils.py`, `src/optimization/gpu/mps_kernel.py`,
+   `src/optimization/gpu/service.py`, and `src/optimization/gpu/model.py`.
 
-3. **Whole-side kill switch on any single missing candidate:**
-   - In `passivbot-rust/src/orchestrator.rs::build_forager_candidates_into()`, missing
-     `volume_ema`, `log_range_ema`, or `ema_bands` marks only the affected candidate
-     `enabled: false` (`unavailable_forager_candidate`).
-   - By contrast, when `cfg.require_forager && normalized_weights.rms_directionality > 0.0`,
-     a missing RMS score on **any single candidate** sets `ranking_unavailable = true` and runs
-     `out.clear()`, halting all new entries on the entire side.
-   - Any newly listed coin with `< 30.28` days of history, any unrepairable exchange outage gap,
-     or any verified zero-trade minute on one approved coin freezes new entries across all open
-     slots for every healthy coin on that side.
+3. **Verified-no-trade deadlock.**
+   `CandlestickManager.get_completed_candle_health()` subtracts verified
+   `GAP_REASON_NO_TRADES` spans from `refreshable_missing_spans`, so repair treats them as
+   resolved. The RMS reader does not synthesize those minutes, so they stay holes. One verified
+   zero-trade minute inside the window keeps the symbol unavailable until the minute ages out.
+
+4. **Slow repair.**
+   The `"rms"` pseudo-timeframe repair in `src/passivbot.py::refresh_forager_candles()` pages
+   100 bars at a time (`page_end - 99 * ONE_MIN_MS`) under the shared
+   `max_ohlcv_fetches_per_minute` budget. The exchange-side page limit is often 1,000 one-minute
+   bars.
+
+5. **Invisible stalls.**
+   The forager selection event sets `candidate_count=len(top_scores)` and
+   `eligible_count=len(top_scores)` in `src/passivbot.py`. An empty score list looks the same
+   whether the universe was empty or ranking was blocked, so a stalled side raises no signal.
+
+Mechanisms 2 to 4 only change how often mechanism 1 fires. Mechanism 1 is the failure class.
+Any hole inside any finite window, whether 20 or 6 spans long, still triggers it.
 
 ## Design Goals
 
-1. **Eliminate the entire failure class by removing special cases**, rather than adding more
-   repair heuristics on top of a fragile 30-day unbroken-1m requirement.
-2. **Preserve Rust as the single source of truth** for RMS math, warmup window sizing, and
-   forager selection semantics, keeping live, CPU backtest, and GPU screening aligned.
-3. **Preserve trading-safety invariants** from `docs/ai/error_contract.md`:
-   - Never fabricate neutral RMS scores (`0.0`) for missing symbols.
-   - Never weaken fatal validation of malformed or non-finite Rust outputs.
-   - Keep protective closes, risk reducers, and panic actions completely independent of forager
-     ranking readiness.
-4. **Keep live state stateless and restart-reproducible**: no persisted synthetic candles for
-   unverified gaps and no decision-changing local state that cannot be rederived on restart.
+1. Remove the special case rather than add repair heuristics around it.
+2. Keep Rust as the single source of truth for RMS math, window sizing, and forager selection,
+   so live, CPU backtest, and GPU screening stay aligned.
+3. Keep the trading-safety invariants in `docs/ai/error_contract.md`:
+   - never fabricate a neutral RMS score for a missing symbol;
+   - malformed or non-finite producer output stays fatal;
+   - protective closes, risk reducers, and panic actions stay independent of forager ranking.
+4. Keep decisions reproducible. Eligibility at a decision cutoff depends only on the canonical
+   candle store and the cutoff. No elapsed-time grace windows, retry counters, or other
+   restart-sensitive state change which candidates are eligible.
 
 ## Non-Goals
 
-- Changing the mathematical definition of signed RMS directionality
-  (`ema(r) / sqrt(ema(r^2))` over 1m log returns with zero-seeded exponential weights).
-- Introducing multi-timeframe resampling for large RMS spans (keeping 1m returns avoids a
-  separate multi-TF semantic contract across CPU, GPU, and live).
-- Relaxing `current` (entry-cooldown) RMS strictness to allow stale cached ranking values.
+- Changing the definition of signed RMS directionality
+  (`ema(r) / sqrt(ema(r^2))` over one-minute log returns with zero-seeded weights).
+- Changing the RMS window length in this work (see PR-C).
+- Relaxing `current`-scope (entry-cooldown) RMS strictness.
+- Changing held-position behaviour. PR-A restores entries on new candidates only. A held
+  position above its effective per-position exposure limit still gets no adds, and while its
+  trailing close is not activated and the unstuck allowance is zero, it still gets no reduce
+  orders. Held positions are already marked active before candidate collection
+  (`actives_long` / `actives_short`), so candidate exclusion cannot affect them.
+- Bridging unverified internal gaps for RMS. Once PR-A lands, an unverified hole excludes only
+  that coin until it is repaired. A provisional flat bridge would approximate the squared-return
+  moment, and liveness no longer needs it.
 
-## Target Architecture
+## Target Rule
 
-The simplification rests on three orthogonal pillars.
+For every required forager ranking feature (`volume`, `log_range`, `ema_bands`,
+`rms_directionality`):
 
-### Pillar 1: Right-Size the RMS Finite Window (`20 * span` -> `6 * span`) With a Single Source of Truth
+> The feature is present at the decision cutoff, or that candidate is excluded.
 
-With `alpha = 2 / (span + 1)`, the residual exponential weight after `k * span` returns is
-`(1 - alpha)^(k * span) ≈ e^(-2k)`:
+There is exactly one side-wide deferral: **until the first startup candidate refresh pass has
+attempted every candidate**. This is a readiness bit, not a clock. It is set once that pass has
+attempted each symbol or confirmed its local cache coverage, whether or not every symbol
+succeeded. A hung or unrepairable coin therefore cannot hold it. The bit guards against startup
+selection bias, where symbols that happen to refresh first would win ranking before others have
+been read at all. After it is set, eligibility is a pure function of the stored candles and the
+cutoff.
 
-| Multiplier `k` | Residual tail weight | Bars for default `span = 2179.8856` | Calendar days |
-|---|---:|---:|---:|
-| `20` (current) | `~4.2e-18` | `43,599` | `30.28 d` |
-| `6` (proposed) | `~6.1e-6` | `13,081` | `9.08 d` |
-| `5` (alternative) | `~4.5e-5` | `10,901` | `7.57 d` |
+An excluded candidate is re-admitted on the first cycle in which its feature is present. No
+state is kept between cycles.
 
-- Change the canonical warmup multiplier from `20.0` to **`6.0`** (configurable only as a
-  compile-time constant in Rust, not a user-facing knob).
-  - Truncation error `< 1e-5` is negligible for both forager ranking and entry cooldown, while
-    cutting required 1m history, disk/memory reads, backfill requests, and gap surface area by
-    **3.3x**.
-- Define one canonical constant and helper in `passivbot-rust/src/rms_directionality.rs`:
-  - `pub const RMS_WARMUP_SPAN_MULTIPLIER: f64 = 6.0;`
-  - `pub fn warmup_returns(span: f64) -> Result<usize, String>`
-  - Expose `rms_directionality_warmup_returns(span: f64) -> PyResult<usize>` via PyO3 in
-    `passivbot-rust/src/python.rs`.
-- Replace all duplicated `20.0 * span` formulas with the canonical Rust helper/constant:
-  - `src/warmup_utils.py::_rms_warmup_minutes()`
-  - `src/optimization/gpu/mps_kernel.py`
-  - `src/optimization/gpu/service.py`
-  - Live `CandlestickManager` / RMS loader
-- Bump the GPU checkpoint/layout compatibility revision if optimizer checkpoints cache
-  pre-computed RMS-windowed fitness/replay state, so `20 * span` and `6 * span` checkpoints
-  cannot be mixed silently.
+## Implementation Plan
 
-### Pillar 2: Unify Live RMS Acquisition Into `CandlestickManager`'s Canonical 1m Metric Pipeline
+### PR-A: Per-candidate RMS exclusion and ranking observability (ships first, standalone)
 
-Remove the bespoke RMS data-loading and background-repair subsystem and make RMS a first-class
-1m metric in `CandlestickManager`:
+**Rust (`passivbot-rust/src/orchestrator.rs`)**
 
-1. **Canonical gap semantics (fixing the `GAP_REASON_NO_TRADES` deadlock):**
-   - Compute RMS from `CandlestickManager`'s standardized 1m series with
-     `fill_leading_gaps=False, fill_trailing_gaps=False`:
-     - **Verified internal `GAP_REASON_NO_TRADES` spans** are synthesized from the prior close,
-       producing an exact `r = 0.0` log return (consistent with backtest zero-candle replay).
-     - **Forager ranking (`forager` scope, current remote-enabled candidates)** may additionally
-       bridge later-bounded internal gaps within `live.max_active_candle_tail_gap_minutes` via
-       the same non-persisted provisional zero-volume continuity policy already documented for
-       `volume` and `log_range` in `docs/ai/error_contract.md`. Missing rows remain unresolved
-       and retryable and are never written to disk or runtime candle caches.
-     - **Unverified gaps exceeding the tolerance, leading gaps (pre-inception), and open tails**
-       remain unbridged so RMS reports unavailable rather than inventing returns.
-     - **Cooldown (`current` scope)** remains strict on the current completed-candle cutoff and
-       never consumes a stale cached ranking value.
+- In `build_forager_candidates_into()`, replace `ranking_unavailable = true` / `out.clear()` with
+  `out[pos] = unavailable_forager_candidate(out[pos].index)`, after the existing
+  `handle_strategy_input_error(...)` classification. Unmarked missing inputs and non-finite or
+  out-of-range scores stay fatal.
+- Backtests share this path. A coin inside `rms_directionality_warmup_spans` is then excluded
+  individually instead of deferring the side. With the default `minimum_coin_age_days = 60`,
+  which is longer than the default 30.3-day window, age admission already removes such coins.
+  The change matters only for configs with a minimum age shorter than the RMS window.
+- Add a side-level deferral input for the startup readiness bit, for example
+  `forager_ranking_ready: bool` per side, which defaults to `true`. Backtests always pass `true`.
+- Extend `OrchestratorDiagnostics` with, per side: eligible count, whether ranking was required
+  (`require_forager`), and each excluded candidate with its feature and reason
+  (`missing_rms`, `rms_warmup`, `missing_volume`, and so on), or the deferral reason.
 
-2. **Delete the separate `"rms"` pseudo-timeframe surface in `src/passivbot.py`:**
-   - Fold the `6 * span + 1` 1m candle requirement (when RMS scoring or adverse cooldown is
-     enabled for a symbol) directly into the canonical `1m` warmup window computed by
-     `compute_live_warmup_windows()`, subject to normal `1m` health tracking.
-   - When `1m` background refresh repairs a historical gap, fetch up to the exchange's native
-     page size (e.g. up to 1,000 1m bars per call, bounded by the existing per-surface time
-     slice) instead of the 100-bar cap introduced in PR #2298.
-   - Reuse `CandlestickManager._ema_cache` and its existing candle-correction / gap-evidence
-     invalidation directly inside `get_latest_ema_metrics()` / `get_latest_ema_metric_spans()`,
-     retiring `src/live/rms_directionality.py::load()` (keeping only lightweight config-gating
-     helpers `scoring_enabled` / `adverse_enabled` if still useful).
+**Python (`src/passivbot.py`, `src/live/event_emitters.py`, `src/passivbot_monitor.py`)**
 
-### Pillar 3: Unified Forager Readiness & Single-Candidate Isolation
+- Own the startup readiness bit: set it after the first candidate refresh pass has attempted
+  every candidate.
+- Fill the forager selection event from the Rust diagnostics instead of `len(top_scores)`.
+- Warn when the same symbol stays excluded across many consecutive cycles, and include the
+  feature and reason.
+- Warn, and surface in the monitor, when a side with free slots and at least one eligible
+  candidate opens no new entries for a configurable number of minutes. This catches stalls
+  from any cause, not only RMS.
 
-Replace the split between `unavailable_forager_candidate` (used for `volume`, `log_range`,
-`ema_bands`) and whole-side `out.clear()` (used only for `rms_directionality`) with one uniform
-readiness contract across **all** forager ranking features:
+**Docs**
 
-1. **Distinguish transient unavailability from persistent unavailability:**
-   - **Transient unavailability** (e.g., startup warmup before initial candidate refresh sweep
-     completes, or a bounded transient refresh/network lag within a short grace period):
-     defer ranking for the side so faster-refreshing symbols do not win via selection bias.
-   - **Persistent unavailability** (e.g., pre-inception / newly listed symbol lacking required
-     history on the exchange, unrepairable exchange gap after retry exhaustion, or a symbol
-     remaining unavailable past the transient deferral grace window):
-     exclude **only that candidate** (`enabled: false` via `unavailable_forager_candidate`)
-     and emit a structured warning/diagnostic so the remaining healthy universe continues
-     ranking and opening positions.
+- Replace the "never select from a history-ready subset" text in
+  `docs/ai/features/strategy_runtime.md`, and the matching text in `docs/ai/error_contract.md`,
+  with the target rule above.
+- Add a `CHANGELOG.md` `Unreleased` entry.
 
-2. **Uniform Rust handling in `passivbot-rust/src/orchestrator.rs`:**
-   - Remove the RMS-specific `out.clear()` branch in `build_forager_candidates_into()`.
-   - Model candidate readiness explicitly in the `SymbolInput` / `OrchestratorInput` contract:
-     - A candidate marked transiently unready defers side ranking (bounded by Python's
-       startup/refresh grace policy, or a side-level `forager_ranking_deferred` / per-candidate
-       unavailability classification).
-     - A candidate marked persistently unavailable for any required ranking feature
-       (`volume`, `log_range`, `ema_bands`, `rms_directionality`) is excluded individually
-       (`enabled: false`) and recorded in `OrchestratorDiagnostics` (with reason/feature).
-   - Malformed or non-finite supplied values remain **fatal** before reconciliation.
+**Tests**
 
-3. **Backtest parity consideration:**
-   - In multi-coin backtests where a newly listed coin enters the universe mid-run and is still
-     in `rms_directionality_warmup_spans`, excluding only that warming coin (treating it as not
-     yet eligible for ranking until its warmup completes) rather than freezing entries for all
-     already-listed coins matches the persistent-unavailability live rule and prevents one new
-     listing from stalling a multi-coin portfolio in backtests as well.
+- Rust: one candidate without RMS among several healthy candidates is excluded, and the others
+  rank; a malformed or non-finite score stays fatal; an unmarked missing score stays fatal; the
+  side defers while `forager_ranking_ready` is false; when the remaining eligible candidates fit
+  the free slots, behaviour matches the case where ranking is not required.
+- Update existing Rust and Python tests that assert whole-side deferral on
+  `rms_directionality_warmup_spans`, for example in `tests/test_adaptive_entry_cooldown.py`,
+  `orchestrator.rs`, and `backtest.rs`, so they expect single-candidate exclusion.
+- Reproducibility: an uninterrupted run and a restarted run with the same candle store and
+  cutoff produce the same eligible set and selection once the readiness bit is set.
+- Multi-symbol outage: when several symbols are missing RMS at once, only those are excluded.
+- Live fake harness: a forager side with free slots and one candidate missing RMS opens entries
+  on healthy candidates instead of producing zero orders.
 
-## Phased Implementation Plan
+### PR-B: RMS data fixes (independent of PR-A)
 
-### Phase 1: Right-Size RMS Warmup Window & Centralize Constant
+- **Verified no-trade minutes.** In the RMS read, synthesize only verified
+  `GAP_REASON_NO_TRADES` spans that have a known prior close, as flat closes giving `r = 0`. Use
+  an explicit allow-list or `excluded_synthetic_ranges`. Do not call unrestricted
+  `standardize_gaps(fill_leading_gaps=False, fill_trailing_gaps=False)`, because it synthesizes
+  every internal hole with real candles on both sides, including multi-week unverified gaps.
+  Unverified holes stay holes.
+- **Repair pages.** Size RMS history repair pages to the venue's supported one-minute page
+  limit instead of 100 bars. Keep the shared request budget, and keep scheduling for a fresh
+  tail independent from scheduling for an incomplete historical window, so a deep repair makes
+  progress across restarts while ordinary and protective work continues.
+- **Cache isolation.** Test that a ranking-only (forager-scope) cached RMS value cannot satisfy
+  `current`-scope cooldown, including at the same cutoff.
+- **Parity statement.** Backtest preparation accepts gaps up to `gap_tolerance_ohlcvs_minutes`
+  (120 by default), while live RMS accepts only verified no-trade gaps. Document this as an
+  intentional difference.
 
-- **Rust (`passivbot-rust/`):**
-  - Update `passivbot-rust/src/rms_directionality.rs`: set `RMS_WARMUP_SPAN_MULTIPLIER = 6.0`
-    and update `warmup_returns()` and unit tests.
-  - Export `rms_directionality_warmup_returns` in `passivbot-rust/src/python.rs`.
-  - Update any hardcoded `20 * span` expectations in Rust backtest/orchestrator tests.
-- **Python & GPU (`src/`):**
-  - Replace hardcoded `20.0 * span` in `src/warmup_utils.py`,
-    `src/optimization/gpu/mps_kernel.py`, and `src/optimization/gpu/service.py` with the
-    exported Rust helper (or shared constant verified against Rust in tests).
-  - Verify Metal/CUDA/ROCm RMS kernels read `rms_directionality_window` dynamically from the
-    parameter matrix (no hardcoded `20` in shader code); bump GPU checkpoint layout revision if
-    applicable.
-- **Validation:**
-  - `cargo test` in `passivbot-rust/`.
-  - Rebuild PyO3 extension (`maturin develop --release`).
-  - Run CPU/GPU parity tests (`tests/test_rms_directionality*`, GPU parity tests,
-    `tests/test_warmup_utils.py`).
+**Tests:** a verified no-trade minute inside the window yields the same score as backtest flat
+replay; an unverified internal gap remains unavailable; a large historical gap backfills in
+venue-sized pages; and repair resumes after a restart.
 
-### Phase 2: Unify Live RMS Into `CandlestickManager`
+### PR-C: Centralize the window multiplier, keeping 20
 
-- **`src/candlestick_manager.py`:**
-  - Add RMS directionality support to the canonical 1m metric reader
-    (`get_latest_ema_metrics` / `get_latest_ema_metric_spans` or dedicated method sharing the
-    same standardized 1m fetch + `_ema_cache` invalidation path).
-  - Ensure verified `GAP_REASON_NO_TRADES` internal spans are standardized (`r = 0.0`) while
-    unverified leading/trailing gaps remain unbridged.
-  - Apply the existing bounded provisional internal-gap continuity policy
-    (`live.max_active_candle_tail_gap_minutes`) to remote-enabled forager ranking reads, with
-    identical transition diagnostics as `volume` and `log_range`.
-- **`src/passivbot.py` & `src/live/rms_directionality.py`:**
-  - Remove the `"rms"` pseudo-timeframe surface and its 100-bar repair branch from
-    `refresh_forager_candles()`.
-  - Fold RMS 1m candle count into canonical `1m` warmup/health calculation and ensure
-    historical 1m gap repair uses full exchange page size (up to 1,000 bars/request, bounded by
-    the cycle time slice).
-  - Route orchestrator RMS bundle loading through `CandlestickManager` and retire
-    `src/live/rms_directionality.py::load()`.
-- **Validation:**
-  - Regression test: a symbol with a verified `GAP_REASON_NO_TRADES` minute inside its RMS
-    window still produces a valid RMS score matching backtest zero-candle replay.
-  - Regression test: a symbol with an unverified internal gap within
-    `live.max_active_candle_tail_gap_minutes` uses bounded continuity for ranking without
-    persisting synthetic rows, and resumes authoritative candles once repaired.
-  - Regression test: a large historical 1m gap backfills in exchange-page-sized chunks rather
-    than 100-bar increments.
+- Define `pub const RMS_WARMUP_SPAN_MULTIPLIER: f64 = 20.0` and `warmup_returns()` in
+  `passivbot-rust/src/rms_directionality.rs`, and expose the helper through PyO3.
+- Replace the duplicated `20.0 * span` in `src/live/rms_directionality.py`,
+  `src/warmup_utils.py`, `src/optimization/gpu/mps_kernel.py`,
+  `src/optimization/gpu/service.py`, and `src/optimization/gpu/model.py` with the Rust helper,
+  or with a constant that a test checks against Rust.
+- No behaviour change.
 
-### Phase 3: Unified Forager Readiness & Single-Candidate Isolation
+**A shorter window is a separate experiment, not part of this plan.** The residual EMA weight
+after `k` spans (about `e^(-2k)`) does not bound the error in the normalized score. The
+numerator's residual scales like `e^(-2k)`, while `sqrt(ema(r^2))` keeps a residual of about
+`e^(-k)`, so the ratio can move by roughly `e^(-k)`. For span 100, 1,400 log returns of 0.0001
+followed by 600 zero returns, the existing recurrence gives about `0.00247826` over 20 spans and
+exactly zero over 6. Before any change, measure signed-RMS deltas, ranking and slot-selection
+changes, cooldown durations, backtest and optimizer outcomes, and CPU/GPU parity. Bump the GPU
+checkpoint layout revision if one is adopted.
 
-- **Rust (`passivbot-rust/src/orchestrator.rs`, `coin_selection.rs`):**
-  - Unify missing-feature handling across `volume_ema`, `log_range_ema`, `ema_bands`, and
-    `rms_directionality_score` in `build_forager_candidates_into()`.
-  - Replace the RMS-only `out.clear()` with explicit distinction between transient side-level
-    deferral and persistent single-candidate exclusion (`unavailable_forager_candidate`), plus
-    structured `OrchestratorDiagnostics` reporting of excluded candidates and reasons.
-  - Align `rms_directionality_warmup_spans` in backtests with single-candidate exclusion (or
-    document the exact chosen semantics if kept separate).
-- **Python (`src/passivbot.py`, `src/passivbot_monitor.py`, `src/live/event_emitters.py`):**
-  - Classify candidate unavailability as transient vs. persistent based on `CandlestickManager`
-    health (leading/pre-inception gap, retry-exhausted gap, or grace window elapsed).
-  - Surface persistent single-candidate exclusions clearly in logs, live events, and monitor
-    state so operators immediately see which symbol is excluded and why, while healthy symbols
-    continue trading.
-- **Canonical Contracts & Docs:**
-  - Update `docs/ai/error_contract.md` (Forager And Eligibility Inputs).
-  - Update `docs/ai/features/strategy_runtime.md` (Adaptive entry timing and RMS
-    directionality: `6 * span`, standardized `no_trades` continuity, unified candidate
-    isolation).
-  - Update `docs/ai/features/candlestick_manager.md` (remove `"rms"` pseudo-timeframe surface,
-    document canonical 1m warmup + full-page repair).
-  - Add net user-facing summary to `CHANGELOG.md` under `Unreleased` when implementing.
-- **Validation:**
-  - Rust unit/integration tests for single-candidate exclusion vs. transient deferral and fatal
-    malformed-score rejection.
-  - Python live/fake-harness regression test: 10-slot forager with 5 held positions and 1
-    candidate missing RMS (e.g., pre-inception or unrepairable gap) continues ranking and
-    opening entries on the remaining healthy candidates instead of producing zero orders.
-  - Documentation checks:
-    `PYTHONPATH=src python src/tools/check_ai_docs.py`,
-    `PYTHONPATH=src python src/tools/generate_live_event_registry.py --check`,
-    `pytest tests/test_ai_docs.py tests/test_live_event_registry_docs.py`.
+### PR-D: Consolidate RMS acquisition into `CandlestickManager` (cleanup)
 
-## Open Decisions to Confirm Before Implementation
+- Remove the `"rms"` pseudo-timeframe surface from `refresh_forager_candles()`, and retire
+  `src/live/rms_directionality.py::load()`. Keep `scoring_enabled` and `adverse_enabled` if they
+  are still useful.
+- Read RMS windows through the canonical one-minute metric path, so they share the gap evidence
+  and `_ema_cache` invalidation used by the other metrics. Keep the PR-B synthesis restrictions,
+  and keep the window requirement separate from other 1m readiness requirements.
+- Update `docs/ai/features/candlestick_manager.md`.
 
-1. **Warmup multiplier (`6 * span` vs. `5 * span`):**
-   - `6 * span` (`~6.1e-6` tail weight, ~9.1 days for default span) is the recommended default;
-     `5 * span` (`~4.5e-5` tail weight, ~7.6 days) is a viable tighter alternative.
-2. **Transient deferral grace window:**
-   - Proposed default: defer side ranking only during initial startup sweep or while an active
-     repair is in progress up to a bounded grace period (e.g., `max_forager_candle_staleness_minutes`
-     or 5 minutes); once a candidate is proven pre-inception or exceeds the grace window,
-     exclude only that candidate.
-3. **Backtest listing-warmup parity:**
-   - Confirm whether mid-backtest newly listed coins in `rms_directionality_warmup_spans` should
-     also be excluded individually (recommended, for live/backtest parity) rather than deferring
-     ranking for the entire side.
+This is a simplification of code paths, not a liveness fix. PR-A and PR-B do not depend on it.
+
+## Validation Commands
+
+- `cargo test` in `passivbot-rust/`, then rebuild the extension with
+  `maturin develop --release`.
+- Targeted pytest for forager selection, RMS directionality, adaptive entry cooldown, warmup
+  utilities, and GPU parity, as each PR touches them.
+- `PYTHONPATH=src python src/tools/check_ai_docs.py`
+- `PYTHONPATH=src python src/tools/generate_live_event_registry.py --check` when PR-A changes
+  event fields.
+
+## Decisions Recorded
+
+- Eligibility is evidence-based at the cutoff. The plan uses no grace timers and no
+  retry-exhaustion classification.
+- The startup readiness bit is the only side-wide deferral, and it is set once every candidate
+  has been attempted, not once every candidate has succeeded.
+- The window stays at 20 spans in this work.
+- Unverified internal gaps are never synthesized for RMS.
+- Backtest per-coin exclusion comes from the shared Rust path. There is no separate backtest
+  rule.
