@@ -55,6 +55,7 @@ fn activation_input(kind: StrategyKind, side: PositionSide, held: bool) -> Orche
         symbols: vec![symbol],
         peek_hints: None,
         forager_hysteresis: None,
+        forager_ranking_ready: Default::default(),
     }
 }
 

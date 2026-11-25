@@ -202,17 +202,21 @@ async def test_candidate_maintainer_cancellation_drains_only_its_registry_worker
 
 
 @pytest.mark.asyncio
-async def test_candidate_rms_repairs_history_in_pages_with_fresh_ws_tail_and_restart(tmp_path, monkeypatch):
-    from live.rms_directionality import history_candle_count, load
+@pytest.mark.parametrize("current_span_longer", [False, True])
+async def test_candidate_rms_repairs_history_in_pages_with_fresh_ws_tail_and_restart(
+    tmp_path, monkeypatch, current_span_longer
+):
+    from live.rms_directionality import read_required
 
     now = 1_800_000_000_000
     symbol = "APT/USDT:USDT"
-    span = 12.5
-    count = history_candle_count(span)
+    span = 65.0
+    adverse_span = 70.0 if current_span_longer else span
+    count = CandlestickManager.rms_history_candle_count(adverse_span)
     end = now - ONE_MIN_MS
     start = end - (count - 1) * ONE_MIN_MS
     gap_start = start + 30 * ONE_MIN_MS
-    gap_end = gap_start + 169 * ONE_MIN_MS
+    gap_end = gap_start + 1169 * ONE_MIN_MS
 
     def row(ts):
         price = 10 + (ts - start) / ONE_MIN_MS * 0.01
@@ -225,7 +229,7 @@ async def test_candidate_rms_repairs_history_in_pages_with_fresh_ws_tail_and_res
             self.calls = []
 
         async def fetch_ohlcv(self, symbol, timeframe="1m", since=None, limit=None, params=None):
-            self.calls.append(since)
+            self.calls.append((since, limit))
             return [row(ts) for ts in range(int(since), end + 1, ONE_MIN_MS)][:limit]
 
     exchange = PublicFixture()
@@ -245,13 +249,27 @@ async def test_candidate_rms_repairs_history_in_pages_with_fresh_ws_tail_and_res
         bot.approved_coins_minus_ignored_coins = {"long": {symbol}, "short": set()}
         bot.positions = bot.open_orders = {}
         bot.is_forager_mode = lambda side=None: side in (None, "long")
-        bot.is_pside_enabled = lambda side: side == "long"
-        bot.is_approved = lambda side, coin: side == "long"
+        bot.is_pside_enabled = lambda side: side == "long" or current_span_longer
+        bot.is_approved = lambda side, coin: bot.is_pside_enabled(side)
         bot.get_max_n_positions = lambda side: 1
         bot.get_current_n_positions = lambda side: 0
         bot.get_exchange_time = lambda: now
-        bot.bot_value = lambda side, key: {"rms_directionality": 1.0} if key == "forager_score_weights" else span
-        bot.bp = lambda side, key, coin: {"adverse_directionality": 0.0} if key == "entry_cooldown_weights_minutes" else 0.0
+        bot.bot_value = lambda side, key: (
+            {"rms_directionality": float(side == "long")}
+            if key == "forager_score_weights"
+            else span if side == "long" else adverse_span
+        )
+        cooldown = {
+            "entry_cooldown_weights_minutes": {"adverse_directionality": 1.0},
+            "risk_entry_cooldown_minutes": 0.0,
+            "entry_cooldown_min_duration_minutes": 0.0,
+            "entry_cooldown_max_duration_minutes": 60.0,
+        }
+        bot.bp = lambda side, key, coin: (
+            {"adverse_directionality": 0.0}
+            if side == "long" and key == "entry_cooldown_weights_minutes"
+            else cooldown.get(key, 0.0)
+        )
         bot._get_fetch_delay_seconds = lambda: 0.0
         def target_staleness(surface_count, max_calls):
             # One ordinary 1m surface sets the freshness target. The separate
@@ -268,12 +286,23 @@ async def test_candidate_rms_repairs_history_in_pages_with_fresh_ws_tail_and_res
         data = [row(ts) for ts in range(start, end, ONE_MIN_MS) if not gap_start <= ts <= gap_end]
         bot.cm._persist_batch(symbol, np.array([tuple(r) for r in data], dtype=CANDLE_DTYPE), last_refresh_ms=now)
         bot.cm._persist_batch(symbol, np.array([tuple(row(end))], dtype=CANDLE_DTYPE), source="ws")
-        assert not (await load(bot, [symbol], {symbol}))[1][symbol]
+        assert not (await read_required(bot, [symbol], {symbol}))[1][symbol]
 
+        # Scanning can discover an unsatisfied history job before the worker
+        # can reserve a fetch token. Ranking is still deferred in that case.
+        bot._forager_refresh_budget = lambda *a, consume, **k: int(not consume)
         await bot._refresh_forager_candidate_candles()
+        assert not exchange.calls
+        assert bot._forager_startup_ready_sides == set()
+
+        bot._forager_refresh_budget = lambda *a, **k: 1
+        await bot._refresh_forager_candidate_candles()
+        assert bot._forager_startup_ready_sides == {"long"}
         health = bot.cm.get_completed_candle_health(symbol, {"1m": count}, now_ms=now)["timeframes"]["1m"]
-        assert health["missing_spans"] == [(gap_start, gap_end - 100 * ONE_MIN_MS)]
-        assert not (await load(bot, [symbol], {symbol}))[1][symbol]
+        assert health["missing_spans"] == [(gap_start, gap_end - 1000 * ONE_MIN_MS)]
+        assert exchange.calls == [(gap_end - 999 * ONE_MIN_MS, 1000)]
+        assert bot.cm.get_last_refresh_ms(symbol) == now
+        assert not (await read_required(bot, [symbol], {symbol}))[1][symbol]
     finally:
         bot.cm.close()
 
@@ -281,11 +310,242 @@ async def test_candidate_rms_repairs_history_in_pages_with_fresh_ws_tail_and_res
     try:
         await restarted._refresh_forager_candidate_candles()
         before = len(exchange.calls)
-        assert before >= 2
-        current, ranking, missing = await load(restarted, [symbol], {symbol})
-        assert current == ranking and ranking[symbol][span] > 0.99
+        assert exchange.calls[-1] == (gap_start, 1000)
+        assert before == 2
+        current, ranking, missing = await read_required(restarted, [symbol], {symbol})
+        assert set(current[symbol]) == ({adverse_span} if current_span_longer else set())
+        assert ranking[symbol][span] > 0.99
         assert not missing
         await restarted._refresh_forager_candidate_candles()
         assert len(exchange.calls) == before
     finally:
         restarted.cm.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "gap_reason", ["no_trades", "fetch_failed", "proof_after_unknown", "verified_tail"]
+)
+async def test_rms_uses_only_contiguous_verified_no_trade_minutes(tmp_path, gap_reason):
+    import passivbot_rust as pbr
+
+    symbol = "APT/USDT:USDT"
+    span = 1.0
+    base = 1_800_000_000_000
+    end = base + 20 * ONE_MIN_MS
+    prices = [100.0 + i for i in range(21)]
+    missing_start = 19 if gap_reason == "verified_tail" else 8
+    prices[missing_start:missing_start + 2] = [prices[missing_start - 1]] * 2
+    data = np.array(
+        [
+            (base + i * ONE_MIN_MS, price, price, price, price, 1.0)
+            for i, price in enumerate(prices)
+            if i not in (missing_start, missing_start + 1)
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    with CandlestickManager(exchange_name="fixture", cache_dir=str(tmp_path)) as manager:
+        manager._now_ms_callback = lambda: end + ONE_MIN_MS
+        manager._persist_batch(symbol, data, timeframe="1m")
+        gap_start = base + missing_start * ONE_MIN_MS
+        gap_end = gap_start + ONE_MIN_MS
+        if gap_reason in ("no_trades", "verified_tail"):
+            manager._record_verified_gap(symbol, gap_start, gap_end)
+        elif gap_reason == "proof_after_unknown":
+            manager._record_verified_gap(symbol, gap_end, gap_end)
+        else:
+            manager._add_known_gap(symbol, gap_start, gap_end, reason=gap_reason)
+        scores = await manager.get_rms_emas(
+            symbol, {"forager": {span}, "current": {span}},
+            end_ts=end, forager_max_age_ms=0, allow_remote_fetch=False,
+        )
+        if gap_reason in ("no_trades", "verified_tail"):
+            expected = (pbr.calc_signed_rms_directionality(prices, span), end)
+            assert scores == {"forager": {span: expected}, "current": {span: expected}}
+            raw = await manager.get_candles(
+                symbol, start_ts=base, end_ts=end, timeframe="1m",
+                allow_remote_fetch=False, standardize=False,
+            )
+            assert len(raw) == len(data)
+        else:
+            assert scores == {"forager": {}, "current": {}}
+
+
+@pytest.mark.asyncio
+async def test_rms_ranking_only_memo_cannot_satisfy_current_at_same_cutoff(tmp_path, monkeypatch):
+    symbol = "APT/USDT:USDT"
+    base = 1_800_000_000_000
+    end = base + 20 * ONE_MIN_MS
+    data = np.array(
+        [(base + i * ONE_MIN_MS, 100 + i, 100 + i, 100 + i, 100 + i, 1.0) for i in range(21)],
+        dtype=CANDLE_DTYPE,
+    )
+    read_options = {"end_ts": end, "forager_max_age_ms": ONE_MIN_MS, "allow_remote_fetch": False}
+    with CandlestickManager(exchange_name="fixture", cache_dir=str(tmp_path)) as manager:
+        manager._now_ms_callback = lambda: end + ONE_MIN_MS
+        manager._persist_batch(symbol, data, timeframe="1m")
+        ranking = await manager.get_rms_emas(symbol, {"forager": {1.0}}, **read_options)
+        assert ranking["forager"][1.0][1] == end
+
+        async def incomplete_read(*args, **kwargs):
+            return data[:-1]
+
+        monkeypatch.setattr(manager, "get_candles", incomplete_read)
+        current = await manager.get_rms_emas(symbol, {"current": {1.0}}, **read_options)
+        assert current == {"current": {}}
+        assert manager.cached_rms_ema(symbol, "forager", 1.0) == ranking["forager"][1.0]
+
+
+@pytest.mark.asyncio
+async def test_rms_late_arrival_displaces_stale_ranking_memo_at_same_cutoff(tmp_path):
+    symbol = "APT/USDT:USDT"
+    base = 1_800_000_000_000
+    end = base + 21 * ONE_MIN_MS
+    data = np.array(
+        [(base + i * ONE_MIN_MS, 100 + i, 100 + i, 100 + i, 100 + i, 1.0) for i in range(21)],
+        dtype=CANDLE_DTYPE,
+    )
+    late = np.array([(end, 115.0, 115.0, 115.0, 115.0, 1.0)], dtype=CANDLE_DTYPE)
+    read_options = {"end_ts": end, "forager_max_age_ms": ONE_MIN_MS, "allow_remote_fetch": False}
+    with CandlestickManager(exchange_name="fixture", cache_dir=str(tmp_path)) as manager:
+        manager._now_ms_callback = lambda: end + ONE_MIN_MS
+        manager._persist_batch(symbol, data, timeframe="1m")
+        before = await manager.get_rms_emas(symbol, {"forager": {1.0}}, **read_options)
+        assert before["forager"][1.0][1] == end - ONE_MIN_MS
+        manager._persist_batch(symbol, late, timeframe="1m")
+        after = await manager.get_rms_emas(symbol, {"forager": {1.0}}, **read_options)
+        assert after["forager"][1.0][1] == end
+        assert after["forager"][1.0][0] != before["forager"][1.0][0]
+
+    with CandlestickManager(exchange_name="fixture", cache_dir=str(tmp_path)) as restarted:
+        restarted._now_ms_callback = lambda: end + ONE_MIN_MS
+        assert await restarted.get_rms_emas(symbol, {"forager": {1.0}}, **read_options) == after
+
+
+@pytest.mark.asyncio
+async def test_rms_cache_only_reuses_unchanged_window_until_age_or_new_candles(tmp_path, monkeypatch):
+    symbol = "APT/USDT:USDT"
+    base = 1_800_000_000_000
+    end = base + 20 * ONE_MIN_MS
+    data = np.array(
+        [(base + i * ONE_MIN_MS, 100 + i, 100 + i, 100 + i, 100 + i, 1.0) for i in range(21)],
+        dtype=CANDLE_DTYPE,
+    )
+    clock = [end + ONE_MIN_MS]
+    with CandlestickManager(exchange_name="fixture", cache_dir=str(tmp_path)) as manager:
+        manager._now_ms_callback = lambda: clock[0]
+        manager._persist_batch(symbol, data, timeframe="1m")
+        read = manager.get_candles
+        reads = []
+
+        async def counted_read(*args, **kwargs):
+            reads.append(kwargs["end_ts"])
+            return await read(*args, **kwargs)
+
+        monkeypatch.setattr(manager, "get_candles", counted_read)
+
+        async def score(cutoff):
+            clock[0] = cutoff + ONE_MIN_MS
+            return await manager.get_rms_emas(
+                symbol, {"forager": {1.0}}, end_ts=cutoff,
+                forager_max_age_ms=2 * ONE_MIN_MS, allow_remote_fetch=False,
+            )
+
+        initial = await score(end)
+        assert await score(end + ONE_MIN_MS) == initial
+        assert await score(end + 2 * ONE_MIN_MS) == initial
+        assert reads == [end]
+        assert await score(end + 3 * ONE_MIN_MS) == {"forager": {}}
+        assert reads == [end, end + 3 * ONE_MIN_MS]
+
+        # The same index is shared by independent owners. Its new finalized
+        # row must be considered even though this manager has a memo in RAM.
+        next_ts = end + ONE_MIN_MS
+        late = np.array([(next_ts, 115, 115, 115, 115, 1.0)], dtype=CANDLE_DTYPE)
+        with CandlestickManager(exchange_name="fixture", cache_dir=str(tmp_path)) as writer:
+            writer._now_ms_callback = lambda: clock[0]
+            writer._persist_batch(symbol, late, timeframe="1m")
+        refreshed = await score(end + 2 * ONE_MIN_MS)
+        assert refreshed["forager"][1.0][1] == next_ts
+        assert refreshed["forager"][1.0][0] != initial["forager"][1.0][0]
+
+
+@pytest.mark.asyncio
+async def test_rms_cache_only_reconsiders_verified_proof_beyond_prior_cutoff(tmp_path):
+    symbol = "APT/USDT:USDT"
+    base = 1_800_000_000_000
+    end = base + 20 * ONE_MIN_MS
+    data = np.array(
+        [(base + i * ONE_MIN_MS, 100 + i, 100 + i, 100 + i, 100 + i, 1.0) for i in range(21)],
+        dtype=CANDLE_DTYPE,
+    )
+    next_ts = end + ONE_MIN_MS
+    with CandlestickManager(exchange_name="fixture", cache_dir=str(tmp_path)) as manager:
+        manager._now_ms_callback = lambda: next_ts + ONE_MIN_MS
+        manager._persist_batch(symbol, data, timeframe="1m")
+        manager._record_verified_gap(symbol, next_ts, next_ts)
+        initial = await manager.get_rms_emas(
+            symbol, {"forager": {1.0}}, end_ts=end,
+            forager_max_age_ms=ONE_MIN_MS, allow_remote_fetch=False,
+        )
+        assert initial["forager"][1.0][1] == end
+        updated = await manager.get_rms_emas(
+            symbol, {"forager": {1.0}}, end_ts=next_ts,
+            forager_max_age_ms=ONE_MIN_MS, allow_remote_fetch=False,
+        )
+        assert updated["forager"][1.0][1] == next_ts
+        manager.clear_known_gaps(symbol, date_range=(next_ts, next_ts))
+        after_clear = await manager.get_rms_emas(
+            symbol, {"forager": {1.0}, "current": {1.0}},
+            end_ts=next_ts, forager_max_age_ms=ONE_MIN_MS, allow_remote_fetch=False,
+        )
+        assert after_clear == {"forager": initial["forager"], "current": {}}
+
+
+@pytest.mark.asyncio
+async def test_rms_history_repair_fetches_missing_seed_outside_verified_window(tmp_path, monkeypatch):
+    import passivbot_rust as pbr
+
+    symbol = "APT/USDT:USDT"
+    base = 1_800_000_000_000
+    end = base + 20 * ONE_MIN_MS
+    proof_start = base - ONE_MIN_MS
+    seed_ts = proof_start - ONE_MIN_MS
+    prices = [99.0] * 2 + [100.0 + i for i in range(2, 21)]
+    candles = np.array(
+        [
+            (base + i * ONE_MIN_MS, price, price, price, price, 1.0)
+            for i, price in enumerate(prices)
+            if i >= 2
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    seed = np.array([(seed_ts, 99, 99, 99, 99, 1.0)], dtype=CANDLE_DTYPE)
+    with CandlestickManager(exchange_name="fixture", cache_dir=str(tmp_path)) as manager:
+        manager._now_ms_callback = lambda: end + ONE_MIN_MS
+        manager._persist_batch(symbol, candles, timeframe="1m")
+        # The proof crosses the requested window start. The only priced
+        # predecessor is two minutes before that start.
+        manager._record_verified_gap(symbol, proof_start, base + ONE_MIN_MS)
+        assert manager.plan_rms_history_repair(symbol, 1.0, now_ms=end + ONE_MIN_MS) == (
+            seed_ts, seed_ts,
+        )
+        assert await manager.get_rms_emas(
+            symbol, {"current": {1.0}}, end_ts=end,
+            forager_max_age_ms=0, allow_remote_fetch=False,
+        ) == {"current": {}}
+
+        async def fetch_page(sym, start, end_exclusive, *, timeframe, single_page):
+            assert (sym, start, end_exclusive, timeframe, single_page) == (
+                symbol, seed_ts, seed_ts + ONE_MIN_MS, "1m", True,
+            )
+            return seed
+
+        manager.exchange = SimpleNamespace()
+        monkeypatch.setattr(manager, "_fetch_ohlcv_paginated", fetch_page)
+        assert await manager.repair_completed_minute_page(symbol, seed_ts, seed_ts) == 1
+        assert manager.plan_rms_history_repair(symbol, 1.0, now_ms=end + ONE_MIN_MS) is None
+        assert await manager.get_rms_emas(
+            symbol, {"current": {1.0}}, end_ts=end,
+            forager_max_age_ms=0, allow_remote_fetch=False,
+        ) == {"current": {1.0: (pbr.calc_signed_rms_directionality(prices, 1.0), end)}}

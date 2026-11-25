@@ -1426,7 +1426,10 @@ def _expected_rust_execution_type(
 
 
 def _submitted_rust_input_context(
-    orchestrator_input: dict, expected_symbol_idxs: set[int]
+    orchestrator_input: dict,
+    expected_symbol_idxs: set[int],
+    *,
+    active_entry_cooldowns: set[tuple[int, str]] | None = None,
 ) -> tuple[
     dict[tuple[int, str], object],
     dict[int, tuple[float, float]],
@@ -1729,6 +1732,8 @@ def _submitted_rust_input_context(
                 entry_cooldown_active[(symbol_idx, pside)] = False
             if cooldown_unavailable:
                 entry_cooldown_active[(symbol_idx, pside)] = True
+            elif active_entry_cooldowns is not None and entry_cooldown_active[(symbol_idx, pside)]:
+                active_entry_cooldowns.add((symbol_idx, pside))
             wallet_exposure_limit_ratio = _validated_rust_finite_number(
                 bot_params.get("wallet_exposure_limit_ratio"),
                 f"symbol input {input_idx} has invalid {pside} wallet_exposure_limit_ratio",
@@ -1838,6 +1843,8 @@ def validate_rust_orchestrator_output(
     out: object,
     idx_to_symbol: dict[int, str],
     orchestrator_input: object,
+    *,
+    active_entry_cooldowns: set[tuple[int, str]] | None = None,
 ) -> list[dict]:
     """Validate the required Rust output envelope before any result is consumed."""
     if not isinstance(orchestrator_input, dict) or not isinstance(
@@ -1874,7 +1881,9 @@ def validate_rust_orchestrator_output(
         submitted_entry_sequential_staging,
         submitted_close_retracement_enabled,
         submitted_hsl_execution_policy,
-    ) = _submitted_rust_input_context(orchestrator_input, expected_symbol_idxs)
+    ) = _submitted_rust_input_context(
+        orchestrator_input, expected_symbol_idxs, active_entry_cooldowns=active_entry_cooldowns
+    )
     seen_conversion_identities: dict[tuple[object, float, float, str], int] = {}
     aggregate_close_qty: dict[tuple[int, str], float] = {}
     ema_anchor_entry_count: dict[tuple[int, str], int] = {}
@@ -2739,21 +2748,29 @@ def validate_rust_orchestrator_output(
         "score_gap",
     )
     forager_selected_pairs: set[tuple[int, str]] = set()
+    forager_selection_sides: set[str] = set()
+    exclusion_features = {
+        "missing_volume": "volume",
+        "missing_log_range": "log_range",
+        "missing_ema_bands": "ema_bands",
+        "invalid_ema_bands": "ema_bands",
+        "invalid_entry_offset": "ema_bands",
+        "missing_rms": "rms_directionality",
+        "rms_warmup": "rms_directionality",
+    }
     for selection_idx, selection in enumerate(forager_selections):
         context = f"forager_selection {selection_idx}"
         if not isinstance(selection, dict):
             raise FatalBotException(f"Rust orchestrator {context} must be a mapping")
         selection_pside = selection.get("pside")
         validate_diagnostic_pside(selection_pside, context)
-        slots_to_fill = selection.get("slots_to_fill")
-        if (
-            isinstance(slots_to_fill, bool)
-            or not isinstance(slots_to_fill, int)
-            or slots_to_fill < 0
-        ):
-            raise FatalBotException(
-                f"Rust orchestrator {context} has invalid slots_to_fill"
-            )
+        if selection_pside in forager_selection_sides:
+            raise FatalBotException(f"Rust orchestrator {context} repeats a selection side")
+        forager_selection_sides.add(selection_pside)
+        for field in ("slots_to_fill", "candidate_count", "eligible_count"):
+            value = selection.get(field)
+            if type(value) is not int or value < 0:
+                raise FatalBotException(f"Rust orchestrator {context} has invalid {field}")
         if not isinstance(selection.get("ranking_required"), bool):
             raise FatalBotException(
                 f"Rust orchestrator {context} has invalid ranking_required"
@@ -2773,6 +2790,41 @@ def validate_rust_orchestrator_output(
                     "disagree with submitted flat active symbol states"
                 )
             forager_selected_pairs.add(pair)
+
+        excluded = selection.get("excluded_candidates")
+        if not isinstance(excluded, list):
+            raise FatalBotException(f"Rust orchestrator {context} excluded_candidates must be a list")
+        excluded_indices = set()
+        for row in excluded:
+            if not isinstance(row, dict):
+                raise FatalBotException(f"Rust orchestrator {context} exclusion must be a mapping")
+            idx = row.get("symbol_idx")
+            validate_diagnostic_symbol_idx(idx, f"{context} exclusion")
+            reason = row.get("reason")
+            if (
+                not isinstance(reason, str)
+                or reason not in exclusion_features
+                or row.get("feature") != exclusion_features[reason]
+                or idx in excluded_indices
+                or idx in selected_symbol_indices
+            ):
+                raise FatalBotException(f"Rust orchestrator {context} has invalid exclusion")
+            excluded_indices.add(idx)
+        deferral = selection.get("deferral_reason")
+        if "deferral_reason" not in selection or deferral not in (None, "startup_refresh_pending"):
+            raise FatalBotException(f"Rust orchestrator {context} has invalid deferral_reason")
+        startup_ready = orchestrator_input.get("forager_ranking_ready", {}).get(
+            selection_pside, True
+        )
+        expected_deferral = not startup_ready and selection["candidate_count"] > 0
+        has_result = selected_symbol_indices or excluded or selection["eligible_count"]
+        if bool(deferral) != expected_deferral or (deferral and has_result):
+            raise FatalBotException(f"Rust orchestrator {context} has inconsistent startup deferral")
+        if not deferral and (
+            len(selected_symbol_indices) > selection["eligible_count"]
+            or selection["eligible_count"] + len(excluded) != selection["candidate_count"]
+        ):
+            raise FatalBotException(f"Rust orchestrator {context} has inconsistent candidate counts")
 
         top_scores = selection.get("top_scores")
         if not isinstance(top_scores, list):
@@ -2934,6 +2986,8 @@ def parse_and_validate_rust_orchestrator_output(
     out_json: object,
     idx_to_symbol: dict[int, str],
     orchestrator_input: object,
+    *,
+    active_entry_cooldowns: set[tuple[int, str]] | None = None,
 ) -> tuple[dict, list[dict]]:
     """Decode and validate Rust output, preserving malformed-output fatality."""
     try:
@@ -2945,7 +2999,9 @@ def parse_and_validate_rust_orchestrator_output(
         )
     except (TypeError, ValueError, RecursionError, OverflowError) as exc:
         raise FatalBotException("Rust orchestrator returned malformed JSON") from exc
-    orders = validate_rust_orchestrator_output(out, idx_to_symbol, orchestrator_input)
+    orders = validate_rust_orchestrator_output(
+        out, idx_to_symbol, orchestrator_input, active_entry_cooldowns=active_entry_cooldowns
+    )
     return out, orders
 
 

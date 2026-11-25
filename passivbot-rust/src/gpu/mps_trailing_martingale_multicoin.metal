@@ -3570,7 +3570,7 @@ inline bool update_tm_multicoin_dual_side_hsl(
         && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, coin_count);
 }
 
-inline void update_tm_multicoin_side_selection(
+inline bool update_tm_multicoin_side_selection(
     thread TrailingMartingaleMulticoinSideState& side,
     thread const TrailingMartingaleMulticoinSideConfig& config,
     constant float* bars,
@@ -3694,16 +3694,24 @@ inline void update_tm_multicoin_side_selection(
         enabled_count -= 1;
         slots -= 1;
     }
+    if (enabled_count > slots && config.adaptive.score_weight > 0.0f) {
+        for (int c = 0; c < coin_count; ++c) {
+            if (!survivor[c]) continue;
+            int first_valid = int(coin_settings[c * COIN_COLS + 6]);
+            // Only an incomplete window is expected unavailability.
+            if (k - first_valid < side.adaptive[c].window) {
+                survivor[c] = false;
+                enabled_count -= 1;
+            } else if (!isfinite(side.adaptive[c].score)) {
+                return false;
+            }
+        }
+    }
     if (enabled_count <= slots) {
         for (int c = 0; c < coin_count; ++c) {
             if (survivor[c]) selected[c] = true;
         }
-        return;
-    }
-    if (config.adaptive.score_weight > 0.0f) {
-        for (int c = 0; c < coin_count; ++c) {
-            if (survivor[c] && !isfinite(side.adaptive[c].score)) return;
-        }
+        return true;
     }
     float rms_directionality_min = INFINITY;
     float rms_directionality_max = -INFINITY;
@@ -3825,6 +3833,7 @@ inline void update_tm_multicoin_side_selection(
             }
         }
     }
+    return true;
 }
 
 inline bool tm_unstuck_policy_active(
@@ -5638,14 +5647,17 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         }
         if (long_can_generate) {
             if (long_entries_enabled) {
-            update_tm_multicoin_side_selection(
-                long_side, long_config, bars, coin_settings ORGANILLO_PASS,
-                long_coin_overrides, k, C, false,
-                any_fill,
-                long_effective_n_positions, long_score_hysteresis,
-                long_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost_long, account.balance
-            );
+                if (!update_tm_multicoin_side_selection(
+                    long_side, long_config, bars, coin_settings ORGANILLO_PASS,
+                    long_coin_overrides, k, C, false,
+                    any_fill,
+                    long_effective_n_positions, long_score_hysteresis,
+                    long_one_way_selection_blocked_mask,
+                    filter_by_min_effective_cost_long, account.balance
+                )) {
+                    scalars[int(b) * FUSED_SCALAR_COLS + 9] = -9.0f;
+                    return;
+                }
             }
             int long_next_fill_ticks[MAX_COINS];
             ulong long_next_fill_valid_mask = 0ul;
@@ -5680,14 +5692,17 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         }
         if (short_can_generate) {
             if (short_entries_enabled) {
-            update_tm_multicoin_side_selection(
-                short_side, short_config, bars, coin_settings ORGANILLO_PASS,
-                short_coin_overrides, k, C, true,
-                any_fill,
-                short_effective_n_positions, short_score_hysteresis,
-                short_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost_short, account.balance
-            );
+                if (!update_tm_multicoin_side_selection(
+                    short_side, short_config, bars, coin_settings ORGANILLO_PASS,
+                    short_coin_overrides, k, C, true,
+                    any_fill,
+                    short_effective_n_positions, short_score_hysteresis,
+                    short_one_way_selection_blocked_mask,
+                    filter_by_min_effective_cost_short, account.balance
+                )) {
+                    scalars[int(b) * FUSED_SCALAR_COLS + 9] = -9.0f;
+                    return;
+                }
             }
             int short_next_fill_ticks[MAX_COINS];
             ulong short_next_fill_valid_mask = 0ul;
@@ -6419,14 +6434,17 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         }
         if (can_generate) {
             if (entries_enabled) {
-            update_tm_multicoin_side_selection(
-                side, config, bars, coin_settings ORGANILLO_PASS, coin_overrides,
-                k, C, short_side,
-                any_fill,
-                effective_n_positions,
-                score_hysteresis, 0ul,
-                filter_by_min_effective_cost, account.balance
-            );
+                if (!update_tm_multicoin_side_selection(
+                    side, config, bars, coin_settings ORGANILLO_PASS, coin_overrides,
+                    k, C, short_side,
+                    any_fill,
+                    effective_n_positions,
+                    score_hysteresis, 0ul,
+                    filter_by_min_effective_cost, account.balance
+                )) {
+                    scalars[int(b) * SCALAR_COLS + 9] = -9.0f;
+                    return;
+                }
             }
 
             int next_fill_ticks[MAX_COINS];

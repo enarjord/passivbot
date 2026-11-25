@@ -395,6 +395,7 @@ Scope, consumers, domains, override permissions, display order, units/denominato
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `logging.backup_count` | integer | `5` | — | — | — | — | — | python |
 | `logging.dir` | string | `"logs"` | — | — | — | — | — | python |
+| `logging.forager_no_entries_warning_minutes` | float | `15.0` | minutes | — | — | — | >= 0.0; finite | python |
 | `logging.level` | integer | `1` | — | — | — | — | — | python |
 | `logging.live_event_debug_profiles` | array | `[]` | — | — | — | — | — | python |
 | `logging.max_bytes_mib` | float | `10.0` | MiB | — | — | — | — | python |

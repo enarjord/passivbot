@@ -105,6 +105,10 @@ warnings.filterwarnings(
 # ----- Constants and dtypes -----
 
 ONE_MIN_MS = 60_000
+_RMS_EMA_METRICS = {
+    "current": "signed_rms_directionality_current",
+    "forager": "signed_rms_directionality",
+}
 
 # High-volume storage and fetch diagnostics are emitted at TRACE.
 _CANDLE_TRACE_EVENTS = frozenset({
@@ -1478,6 +1482,9 @@ class CandlestickManager:
         if isinstance(self._ex_id, str) and "bitunix" in self._ex_id.lower():
             # Bitunix futures caps every kline response at 200 rows.
             self._ccxt_limit_default = 200
+        if isinstance(self._ex_id, str) and "okx" in self._ex_id.lower():
+            # Standard OKX trade candles are capped by the CCXT adapter.
+            self._ccxt_limit_default = 300
 
         # Optional per-page range logging for selected symbols (debug pagination)
         self._page_debug_all = False
@@ -3624,7 +3631,11 @@ class CandlestickManager:
         retained = {
             key: value for key, value in cache.items()
             if (tf_key is not None and (len(key) < 3 or str(key[2]) != tf_key))
-            or (changed_from_ts is not None and int(value[1]) < int(changed_from_ts))
+            or (
+                changed_from_ts is not None
+                and int(value[2 if key[0] == _RMS_EMA_METRICS["forager"] else 1])
+                < int(changed_from_ts)
+            )
         }
         inputs = self._ema_inputs.get(symbol, {})
         if retained:
@@ -4272,6 +4283,31 @@ class CandlestickManager:
             or now - last_retry_at >= _KUCOIN_CONTEXTUAL_GAP_RETRY_MS
         )
 
+    def _kucoin_contextual_verification_due(
+        self,
+        gaps: Iterable[GapEntry],
+        start_ts: int,
+        end_ts: int,
+        *,
+        now_ms: int,
+    ) -> bool:
+        """Check whether the full omission is ready for one boundary probe."""
+        cursor = start_ts
+        has_unverified = False
+        for gap in gaps:
+            if int(gap["end_ts"]) < cursor:
+                continue
+            if int(gap["start_ts"]) > cursor:
+                return False
+            if gap["reason"] != GAP_REASON_NO_TRADES:
+                if not self._kucoin_contextual_retry_due(gap, now_ms=now_ms):
+                    return False
+                has_unverified = True
+            cursor = int(gap["end_ts"]) + ONE_MIN_MS
+            if cursor > end_ts:
+                return has_unverified
+        return False
+
     def _defer_kucoin_contextual_gap_retry(
         self,
         symbol: str,
@@ -4688,6 +4724,8 @@ class CandlestickManager:
             idx["meta"]["known_gaps"] = []
             self._index[symbol] = idx
             self._save_index(symbol)
+            if any(gap["reason"] == GAP_REASON_NO_TRADES for gap in gaps):
+                self._invalidate_ema_cache(symbol, timeframe="1m")
             self._log(
                 "info",
                 "gaps_cleared",
@@ -4700,15 +4738,19 @@ class CandlestickManager:
         range_start, range_end = date_range
         remaining = []
         cleared = 0
+        removed_proof = False
         for gap in gaps:
             if gap["end_ts"] < range_start or gap["start_ts"] > range_end:
                 # Outside range - keep
                 remaining.append(gap)
             else:
                 cleared += 1
+                removed_proof |= gap["reason"] == GAP_REASON_NO_TRADES
 
         if cleared > 0:
             self._save_known_gaps_enhanced(symbol, remaining)
+            if removed_proof:
+                self._invalidate_ema_cache(symbol, timeframe="1m")
             self._log(
                 "info",
                 "gaps_cleared",
@@ -4899,6 +4941,7 @@ class CandlestickManager:
         *,
         now_ms: Optional[int] = None,
         max_span_log: int = 3,
+        exclude_verified_no_trade_from_repair: bool = False,
     ) -> Dict[str, Any]:
         """Return read-only diagnostics for completed-candle coverage.
 
@@ -4906,6 +4949,8 @@ class CandlestickManager:
         in-progress timeframe bucket. It inspects disk cache plus runtime 1m
         cache and reports whether the requested completed candle windows are
         covered without retaining the disk history in the runtime candle cache.
+        RMS repair can omit all verified no-trade minutes from fetch planning.
+        The metric still has to establish a continuous price seed in its input.
         """
         ts_now = _utc_now_ms() if now_ms is None else int(now_ms)
         requested = windows or {"1m": 1, "15m": 1, "1h": 1}
@@ -5090,6 +5135,9 @@ class CandlestickManager:
                     clipped_gap = (max(gap_start, start_ts), min(gap_end, end_ts))
                     reason = str(gap.get("reason", GAP_REASON_AUTO))
                     if reason == GAP_REASON_NO_TRADES:
+                        if exclude_verified_no_trade_from_repair:
+                            verified_masks.append(clipped_gap)
+                            continue
                         # A continuity candle needs real price on both sides.
                         # Open tails remain unavailable so a delayed exchange
                         # candle can replace them authoritatively.
@@ -5789,6 +5837,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         *,
         tf: Optional[str] = None,
+        retry: bool = True,
     ) -> list:
         """Fetch a single OHLCV page from ccxt, with basic retry/backoff."""
         self._raise_if_shutdown_requested("ccxt_fetch_ohlcv_once")
@@ -5803,7 +5852,7 @@ class CandlestickManager:
         is_bybit = "bybit" in exid
         is_weex = "weex" in exid
         is_hyperliquid = "hyperliquid" in exid
-        max_attempts = 9 if is_bybit else 5
+        max_attempts = (9 if is_bybit else 5) if retry else 1
         backoff = 1.0 if is_bybit else 0.5
         backoff_cap = 20.0 if is_bybit else 8.0
         last_exc: Optional[Exception] = None
@@ -6367,6 +6416,7 @@ class CandlestickManager:
         right_boundary_ts: int,
         gap_start_ts: int,
         gap_end_ts: int,
+        retry: bool = True,
     ) -> Tuple[np.ndarray, bool]:
         """Fetch one raw KuCoin page and verify an omission between real bounds.
 
@@ -6390,6 +6440,7 @@ class CandlestickManager:
             requested_buckets,
             end_exclusive_ms=right_ts + ONE_MIN_MS,
             tf="1m",
+            **({"retry": False} if not retry else {}),
         )
         normalized = self._normalize_ccxt_ohlcv(page)
         if normalized.size:
@@ -6600,6 +6651,7 @@ class CandlestickManager:
         tf: Optional[str] = None,
         on_batch: Optional[Callable[[np.ndarray], None]] = None,
         raise_on_partial_empty_page: bool = False,
+        single_page: bool = False,
     ) -> np.ndarray:
         """Fetch OHLCV from `since_ms` up to but excluding `end_exclusive_ms`.
 
@@ -6658,7 +6710,8 @@ class CandlestickManager:
             # Bitget auto-probe: try a larger limit once to see if the API supports it.
             probe_limit = None
             if (
-                not self._ccxt_limit_probe_done
+                not single_page
+                and not self._ccxt_limit_probe_done
                 and isinstance(self._ex_id, str)
                 and "bitget" in self._ex_id.lower()
                 and tf_norm == "1m"
@@ -6666,7 +6719,8 @@ class CandlestickManager:
                 probe_limit = 1000
             use_limit = probe_limit or limit
             page = await self._ccxt_fetch_ohlcv_once(
-                symbol, since, use_limit, end_exclusive_ms=end_excl, tf=tf_norm
+                symbol, since, use_limit, end_exclusive_ms=end_excl, tf=tf_norm,
+                **({"retry": False} if single_page else {}),
             )
             if not page:
                 if (
@@ -6893,7 +6947,7 @@ class CandlestickManager:
                 )
                 break
             last_ts = int(arr[-1]["ts"])  # inclusive last
-            if last_ts >= end_excl - period_ms:
+            if single_page or last_ts >= end_excl - period_ms:
                 break
             # Throttled progress logs (INFO) for long-running paginated fetches
             try:
@@ -6961,6 +7015,7 @@ class CandlestickManager:
         assume_sorted: bool = False,
         symbol: Optional[str] = None,
         excluded_synthetic_ranges: Optional[List[Tuple[int, int]]] = None,
+        allowed_synthetic_ranges: Optional[List[Tuple[int, int]]] = None,
     ) -> np.ndarray:
         """Return a new array with zero-candles synthesized for missing minutes.
 
@@ -6988,6 +7043,8 @@ class CandlestickManager:
         excluded_synthetic_ranges : list[tuple[int, int]], optional
             Inclusive missing-minute ranges that must remain absent rather than
             being represented by synthetic zero-volume continuity candles.
+        allowed_synthetic_ranges : list[tuple[int, int]], optional
+            When supplied, synthesize only within these inclusive ranges.
         """
         a = _ensure_dtype(candles)
         if a.size == 0:
@@ -7115,6 +7172,13 @@ class CandlestickManager:
             source_rows[0] = i0 - 1 if i0 else (0 if fill_leading_gaps else -1)
         np.maximum.accumulate(source_rows, out=source_rows)
         synthetic = ~real & (source_rows >= 0)
+        if allowed_synthetic_ranges is not None:
+            allowed = np.zeros(expected.size, dtype=bool)
+            for start, end in allowed_synthetic_ranges:
+                lo_idx = np.searchsorted(expected, int(start), side="left")
+                hi_idx = np.searchsorted(expected, int(end), side="right")
+                allowed[lo_idx:hi_idx] = True
+            synthetic &= allowed
         for start, end in excluded_synthetic_ranges or ():
             lo_idx = np.searchsorted(expected, int(start), side="left")
             hi_idx = np.searchsorted(expected, int(end), side="right")
@@ -9418,29 +9482,6 @@ class CandlestickManager:
                         for gap in current_gap_index().overlapping(s, e)
                     )
 
-                def contextual_gap_verification_due(
-                    s: int, e: int, checked_gaps: _KnownGapIndex
-                ) -> bool:
-                    # A contiguous omission can have several metadata records
-                    # as its tail grows. Keep their retry clocks independent;
-                    # one boundary request must be eligible over the whole span.
-                    cursor = int(s)
-                    has_unverified = False
-                    for gap in checked_gaps.overlapping(s, e):
-                        if int(gap["end_ts"]) < cursor:
-                            continue
-                        if int(gap["start_ts"]) > cursor:
-                            return False
-                        reason = str(gap.get("reason", GAP_REASON_AUTO))
-                        if reason != GAP_REASON_NO_TRADES:
-                            if not self._kucoin_contextual_retry_due(gap, now_ms=now):
-                                return False
-                            has_unverified = True
-                        cursor = int(gap["end_ts"]) + ONE_MIN_MS
-                        if cursor > int(e):
-                            return has_unverified
-                    return False
-
                 def kucoin_verification_bounds(
                     candles: np.ndarray, s: int, e: int, checked_gaps: _KnownGapIndex
                 ) -> Optional[Tuple[int, int]]:
@@ -9457,7 +9498,9 @@ class CandlestickManager:
                         and "kucoin" in self._ex_id.lower()
                     ):
                         return None
-                    if not contextual_gap_verification_due(s, e, checked_gaps):
+                    if not self._kucoin_contextual_verification_due(
+                        checked_gaps.overlapping(s, e), s, e, now_ms=now
+                    ):
                         return None
                     real = np.sort(_ensure_dtype(candles), order="ts")
                     provisional = self._synthetic_timestamps.get(symbol, set())
@@ -10890,6 +10933,326 @@ class CandlestickManager:
             out[metric_key] = res
 
         return out
+
+    @staticmethod
+    def rms_history_candle_count(span: float) -> int:
+        """A completed close is required before the first RMS return."""
+        return pbr.rms_directionality_warmup_returns(span) + 1
+
+    @staticmethod
+    def _rms_ema_key(scope: str, span: float) -> Tuple[str, float, str]:
+        return _RMS_EMA_METRICS[scope], span, str(ONE_MIN_MS)
+
+    def prune_rms_emas(self, spans_by_symbol: dict[str, dict[str, set[float]]]) -> None:
+        """Bound RMS memoization to the current universe and requested scopes."""
+        for symbol, cached in self._ema_cache.items():
+            wanted = {
+                self._rms_ema_key(scope, span)
+                for scope, spans in spans_by_symbol.get(symbol, {}).items()
+                for span in spans
+            }
+            for key in list(cached):
+                if key[0] in _RMS_EMA_METRICS.values() and key not in wanted:
+                    del cached[key]
+
+    def cached_rms_ema(
+        self, symbol: str, scope: str, span: float
+    ) -> Optional[Tuple[float, int]]:
+        observation = self._ema_cache.get(symbol, {}).get(self._rms_ema_key(scope, span))
+        return observation[:2] if observation is not None else None
+
+    def plan_rms_history_repair(
+        self, symbol: str, span: float, *, now_ms: int
+    ) -> Optional[Tuple[int, int]]:
+        """Find the newest repairable page independently of tail freshness."""
+        history_end = _floor_minute(now_ms) - 2 * ONE_MIN_MS
+        for scope in _RMS_EMA_METRICS:
+            memo = self.cached_rms_ema(symbol, scope, span)
+            if memo is not None and history_end <= memo[1] <= history_end + ONE_MIN_MS:
+                return None
+        count = self.rms_history_candle_count(span)
+        report = self.get_completed_candle_health(
+            symbol, {"1m": count}, now_ms=now_ms, exclude_verified_no_trade_from_repair=True
+        )["timeframes"]["1m"]
+        exid = str(self._ex_id or "").lower()
+        capacity = self._ccxt_limit_default
+        if "weex" in exid:
+            capacity = _WEEX_HISTORICAL_OHLCV_LIMIT
+        if self._ccxt_since_exclusive:
+            capacity -= self._ccxt_page_overlap_candles
+        # These venues cap age independently of their per-call page capacity.
+        earliest = 0
+        if "hyperliquid" in exid:
+            earliest = history_end - (5000 - 2) * ONE_MIN_MS
+        elif "gateio" in exid:
+            earliest = history_end - (_GATEIO_RECENT_1M_LIMIT_CANDLES - 2) * ONE_MIN_MS
+        for gap_start, gap_end in reversed(report["refreshable_missing_spans"]):
+            page_end = min(gap_end, history_end)
+            page_start = max(gap_start, earliest, page_end - (capacity - 1) * ONE_MIN_MS)
+            if page_start <= page_end:
+                return page_start, page_end
+        # Health excludes verified no-trade minutes from fetching. At the
+        # window's leading edge their preceding close can lie outside the
+        # scanned range and still be required to replay those minutes.
+        start_ts = report["start_ts"]
+        missing = report["missing_spans"]
+        if missing and missing[0][0] == start_ts:
+            for proof_start, proof_end in self._rms_no_trade_spans(symbol):
+                if proof_start > start_ts:
+                    break
+                if proof_end < start_ts:
+                    continue
+                seed_ts = proof_start - ONE_MIN_MS
+                if (
+                    earliest <= seed_ts <= history_end
+                    and self._fetch_ranges_excluding_deferred_gaps(
+                        symbol, seed_ts, seed_ts, now_ms=now_ms
+                    )
+                    and not self._rms_seed_candle(symbol, seed_ts).size
+                ):
+                    return seed_ts, seed_ts
+                break
+        return None
+
+    async def repair_completed_minute_page(
+        self, symbol: str, start_ts: int, end_ts: int
+    ) -> int:
+        """Repair one planned history page without spending a tail refresh."""
+        if self.exchange is None:
+            return 0
+        async with self._acquire_fetch_lock(symbol, "1m"):
+            rows = await self.get_candles(
+                symbol,
+                start_ts=start_ts - ONE_MIN_MS,
+                end_ts=end_ts + ONE_MIN_MS,
+                timeframe="1m",
+                allow_remote_fetch=False,
+                standardize=False,
+            )
+            existing = self._slice_ts_range(rows, start_ts, end_ts)
+            for lo, hi in reversed(self._missing_spans(existing, start_ts, end_ts)):
+                ranges = self._fetch_ranges_excluding_deferred_gaps(symbol, lo, hi)
+                left, right = lo - ONE_MIN_MS, hi + ONE_MIN_MS
+                has_real_borders = (
+                    np.any(rows["ts"] == left) and np.any(rows["ts"] == right)
+                )
+                if (
+                    self._record_payload_gaps_as_known
+                    and has_real_borders
+                    and self._kucoin_contextual_gap_request(left, right) is not None
+                    and self._kucoin_contextual_verification_due(
+                        _KnownGapIndex(self._get_known_gaps_in_range(symbol, lo, hi)).overlapping(lo, hi),
+                        lo, hi, now_ms=self._now_ms(),
+                    )
+                ):
+                    fetched, verified = await self._fetch_kucoin_contextual_gap_page(
+                        symbol,
+                        left_boundary_ts=left,
+                        right_boundary_ts=right,
+                        gap_start_ts=lo,
+                        gap_end_ts=hi,
+                        retry=False,
+                    )
+                    if fetched.size:
+                        self._persist_batch(symbol, fetched, timeframe="1m")
+                    if verified:
+                        self._record_verified_gap(symbol, lo, hi)
+                        return int(fetched.size)
+                    self._defer_kucoin_contextual_gap_retry(symbol, lo, hi)
+                    return int(self._slice_ts_range(fetched, lo, hi).size)
+                if not ranges:
+                    continue
+                lo, hi = ranges[-1]
+                fetched = await self._fetch_ohlcv_paginated(
+                    symbol, lo, hi + ONE_MIN_MS, timeframe="1m", single_page=True
+                )
+                fetched = self._slice_ts_range(fetched, lo, hi)
+                if fetched.size:
+                    self._persist_batch(symbol, fetched, timeframe="1m")
+                for start, end in self._missing_spans(fetched, lo, hi):
+                    for pending_start, pending_end in self._fetch_ranges_excluding_deferred_gaps(
+                        symbol, start, end
+                    ):
+                        self._add_known_gap(
+                            symbol, pending_start, pending_end, reason=GAP_REASON_FETCH_FAILED
+                        )
+                return int(fetched.size)
+        return 0
+
+    def _rms_no_trade_spans(self, symbol: str) -> list[Tuple[int, int]]:
+        """Join adjacent verified minutes regardless of the probe that proved them."""
+        proofs: list[Tuple[int, int]] = []
+        for gap in sorted(
+            self._get_known_gaps_enhanced(symbol), key=lambda gap: int(gap["start_ts"])
+        ):
+            if gap["reason"] != GAP_REASON_NO_TRADES:
+                continue
+            lo, hi = int(gap["start_ts"]), int(gap["end_ts"])
+            if proofs and lo <= proofs[-1][1] + ONE_MIN_MS:
+                proofs[-1] = (proofs[-1][0], max(hi, proofs[-1][1]))
+            else:
+                proofs.append((lo, hi))
+        return proofs
+
+    def _rms_seed_candle(self, symbol: str, seed_ts: int) -> np.ndarray:
+        """Load the exact real close preceding a verified no-trade span."""
+        rows = self._load_from_disk(
+            symbol, seed_ts, seed_ts, timeframe="1m", merge_memory_cache=False
+        )
+        if rows is not None:
+            seed = self._slice_ts_range(rows, seed_ts, seed_ts)
+            if seed.size:
+                return seed
+        cached = self._cache.get(symbol)
+        if cached is None:
+            return np.empty((0,), dtype=CANDLE_DTYPE)
+        return self._slice_ts_range(cached, seed_ts, seed_ts)
+
+    def _verified_rms_candle_rows(
+        self, symbol: str, rows: np.ndarray, start_ts: int, end_ts: int
+    ) -> np.ndarray:
+        """Fill only physically missing minutes proved contiguous with a known close."""
+        rows = self._slice_ts_range(rows, start_ts, end_ts)
+        # No gap evidence lookup is needed for the usual complete history.
+        gaps = self._missing_spans(rows, start_ts, end_ts)
+        if not gaps:
+            return rows
+        proofs = self._rms_no_trade_spans(symbol)
+        if not proofs:
+            return rows
+        allowed = []
+        proof_idx = 0
+        for lo, hi in gaps:
+            while proof_idx < len(proofs) and proofs[proof_idx][1] < lo:
+                proof_idx += 1
+            if proof_idx >= len(proofs):
+                break
+            known_start, known_end = proofs[proof_idx]
+            if known_start > lo:
+                continue
+            if lo == start_ts:
+                seed = self._rms_seed_candle(symbol, known_start - ONE_MIN_MS)
+                if not seed.size:
+                    continue
+                rows = np.concatenate((seed, rows))
+            # Any later proof after the first unknown minute cannot inherit
+            # the previous close. A later real row reestablishes continuity.
+            allowed.append((lo, min(hi, known_end)))
+        if not allowed:
+            return rows
+        return self.standardize_gaps(
+            rows,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            assume_sorted=True,
+            symbol=symbol,
+            allowed_synthetic_ranges=allowed,
+        )
+
+    def _rms_ranking_cutoff_has_no_new_evidence(
+        self, symbol: str, index: dict, previous_end: int, end_ts: int
+    ) -> bool:
+        """Check whether advancing the cutoff can reveal a better complete window."""
+        shards = index.get("shards")
+        if not shards:
+            return False
+        cached = self._cache.get(symbol)
+        if (
+            (cached is not None and cached.size and int(cached[-1]["ts"]) > previous_end)
+            or self._index_timestamp(index, "last_final_ts") > previous_end
+            or self._get_legacy_shard_paths(symbol, "1m")
+        ):
+            return False
+        # A known legacy or unindexed shard may contain rows beyond the
+        # timestamp represented by index metadata. Use a full read in that case.
+        if self._iter_shard_paths(symbol, tf="1m").keys() - shards.keys():
+            return False
+        return not any(
+            gap["reason"] == GAP_REASON_NO_TRADES
+            and int(gap["start_ts"]) <= end_ts
+            and int(gap["end_ts"]) > previous_end
+            for gap in self._get_known_gaps_in_range(
+                symbol, previous_end + ONE_MIN_MS, end_ts, index=index
+            )
+        )
+
+    async def get_rms_emas(
+        self,
+        symbol: str,
+        spans_by_scope: dict[str, set[float]],
+        *,
+        end_ts: int,
+        forager_max_age_ms: int,
+        allow_remote_fetch: bool,
+    ) -> dict[str, dict[float, Tuple[float, int]]]:
+        """Replay verified completed closes through Rust's RMS estimator."""
+        ages = {"current": 0, "forager": forager_max_age_ms}
+        result: dict[str, dict[float, Tuple[float, int]]] = {
+            scope: {} for scope in spans_by_scope
+        }
+        requests = [(scope, span) for scope, spans in spans_by_scope.items() for span in sorted(spans)]
+        if not requests:
+            return result
+        # Reload index metadata when another writer changes the candle store.
+        # A change to authoritative history invalidates the affected memos.
+        index = self._ensure_symbol_index(symbol) if symbol in self._ema_cache else None
+        cached = self._ema_cache.get(symbol, {})
+        unchanged_at_cutoff: dict[int, bool] = {}
+        for scope, span in requests:
+            memo = cached.get(self._rms_ema_key(scope, span))
+            if memo is None or not 0 <= end_ts - memo[1] <= (
+                0 if allow_remote_fetch else ages[scope]
+            ):
+                continue
+            previous_end = memo[2]
+            if previous_end == end_ts:
+                result[scope][span] = memo[:2]
+            elif scope == "forager" and not allow_remote_fetch and previous_end < end_ts:
+                if previous_end not in unchanged_at_cutoff:
+                    unchanged_at_cutoff[previous_end] = self._rms_ranking_cutoff_has_no_new_evidence(
+                        symbol, index, previous_end, end_ts
+                    )
+                if unchanged_at_cutoff[previous_end]:
+                    result[scope][span] = memo[:2]
+        if all(span in result[scope] for scope, span in requests):
+            return result
+        counts = {span: self.rms_history_candle_count(span) for _, span in requests}
+        lookback = math.ceil(forager_max_age_ms / ONE_MIN_MS)
+        start_ts = end_ts - (max(counts.values()) - 1 + lookback) * ONE_MIN_MS
+        read_args = dict(start_ts=start_ts, end_ts=end_ts, timeframe="1m", standardize=False)
+        try:
+            rows = await self.get_candles(symbol, allow_remote_fetch=allow_remote_fetch, **read_args)
+        except TimeoutError:
+            if not allow_remote_fetch:
+                raise
+            # The deadline may have left enough completed history on disk.
+            rows = await self.get_candles(symbol, allow_remote_fetch=False, **read_args)
+        rows = self._verified_rms_candle_rows(symbol, rows, start_ts, end_ts)
+        ts = rows["ts"]
+        stops = np.flatnonzero(np.diff(ts, append=-1) != ONE_MIN_MS) + 1
+        lengths = stops - np.r_[0, stops][:len(stops)]
+        stop_ages = end_ts - ts[stops - 1]
+        scores = {}
+        for scope, span in requests:
+            result[scope].pop(span, None)
+            complete = stops[(stop_ages <= ages[scope]) & (lengths >= counts[span])]
+            if not complete.size:
+                continue
+            stop = int(complete[-1])
+            source_end = int(ts[stop - 1])
+            # I/O can invalidate a memo when candles or gap proofs change.
+            memo = self.cached_rms_ema(symbol, scope, span)
+            if memo is not None and memo[1] == source_end:
+                value = memo[0]
+            else:
+                if (span, stop) not in scores:
+                    closes = rows["c"][stop - counts[span]:stop]
+                    scores[span, stop] = pbr.calc_signed_rms_directionality(closes.tolist(), span)
+                value = scores[span, stop]
+            result[scope][span] = (value, source_end)
+            cached = self._ema_cache.setdefault(symbol, {})
+            cached[self._rms_ema_key(scope, span)] = (value, source_end, end_ts)
+        return result
 
     async def get_latest_ema_metric_spans(
         self,

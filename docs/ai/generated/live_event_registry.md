@@ -211,6 +211,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `min_effective_cost_blocked`
 - `new_fill`
 - `new_fill_batch`
+- `no_entries_with_free_slots`
 - `open_orders_snapshot_delta`
 - `open_tail_projection`
 - `optional_ema_dropped`
@@ -223,6 +224,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `ordinary_create_wave_stopped`
 - `pending_exchange_config`
 - `periodic_health_summary`
+- `persistent_feature_exclusion`
 - `pipeline_closing`
 - `pre_create_market_snapshot_unavailable`
 - `pre_create_planning_snapshot_invalid`
@@ -252,6 +254,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `staged_refresh_timing`
 - `startup_error`
 - `startup_phase_ready`
+- `startup_refresh_pending`
 - `state_change_detected`
 - `submitted_to_exchange`
 - `trailing_status`

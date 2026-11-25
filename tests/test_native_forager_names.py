@@ -292,12 +292,14 @@ def test_released_rms_directionality_duration_and_bounds_use_frozen_source_names
     ]
 
 
-def test_fractional_rms_directionality_span_keeps_derived_window():
+@pytest.mark.parametrize("span,returns", [(1.0, 20), (3.75, 75), (2179.8856, 43598), (100000.0, 2000000)])
+def test_rms_directionality_span_keeps_derived_window(span, returns):
     from optimization.gpu.model import adaptive_params
+    from passivbot_rust import rms_directionality_warmup_returns
 
-    derived = adaptive_params({"rms_directionality_ema_span_minutes": 3.75})
-    assert derived["rms_directionality_ema_span_minutes"] == 3.75
-    assert derived["rms_directionality_window"] == 75
+    derived = adaptive_params({"rms_directionality_ema_span_minutes": span})
+    assert derived["rms_directionality_ema_span_minutes"] == span
+    assert derived["rms_directionality_window"] == rms_directionality_warmup_returns(span) == returns
 
 
 def test_rms_directionality_span_keeps_minute_admission():

@@ -595,7 +595,7 @@ mod tests {
         assert!(!MPS_EMA_ANCHOR_MULTICOIN_BODY.contains("start_hour_minute"));
         assert!(source.contains("bool any_fill = process_ema_multicoin_side_fills("));
         assert!(source.contains(
-            "update_ema_multicoin_side_selection(\n                side, config, bars, coin_settings, coin_overrides"
+            "if (!update_ema_multicoin_side_selection(\n                    side, config, bars, coin_settings, coin_overrides"
         ));
         assert!(source.contains(
             "generate_ema_multicoin_side_orders(\n                side, config, account"
@@ -817,7 +817,7 @@ mod tests {
             "bool any_fill = process_tm_multicoin_side_fills(\n            market_execution_ticks,\n            side, config, account, fills"
         ));
         assert!(source.contains(
-            "update_tm_multicoin_side_selection(\n                side, config, bars, coin_settings, coin_overrides"
+            "if (!update_tm_multicoin_side_selection(\n                    side, config, bars, coin_settings, coin_overrides"
         ));
         assert!(source
             .contains("generate_tm_multicoin_side_orders(\n                side, config, account"));

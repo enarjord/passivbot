@@ -31,6 +31,7 @@ def planning_bot(monkeypatch, *, mode="coin", stage="ema", change=None, refresh_
     bot.stop_signal_received = False
     bot.active_symbols = [SYMBOL]
     bot.approved_coins_minus_ignored_coins = {"long": {SYMBOL}, "short": set()}
+    bot.is_forager_mode = lambda side=None: False
     bot.effective_min_cost = {SYMBOL: 1.0}
     bot._build_orchestrator_mode_overrides = lambda symbols: {"long": {}, "short": {}}
     bot._apply_exchange_symbol_unavailable_planning_policy = lambda *args, **kwargs: set()

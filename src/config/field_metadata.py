@@ -115,6 +115,12 @@ def enrich_fields(fields):
             ("monitor", "price_tick_min_interval_milliseconds"),
         }:
             data["unit"] = "milliseconds"
+        if path == ("logging", "forager_no_entries_warning_minutes"):
+            data.update(
+                unit="minutes",
+                domain=FieldDomain(minimum=0.0, finite=True),
+                description="Warn when free forager slots have candidates but no working initial entry. Zero disables the warning.",
+            )
         if path in {("logging", "max_bytes_mib"), ("monitor", "event_rotation_mib")}:
             data["unit"] = "MiB"
         if path == ("optimize", "scoring", "*", "goal"):

@@ -38,6 +38,14 @@ def _install_passivbot_rust_stub():
 
     stub = types.ModuleType("passivbot_rust")
     stub.__is_stub__ = True
+    stub.RMS_WARMUP_SPAN_MULTIPLIER = 20.0
+
+    def _rms_directionality_warmup_returns(span):
+        if not 1.0 <= span <= 100_000.0:
+            raise ValueError("RMS directionality span must be finite and between 1 and 100000")
+        return math.ceil(stub.RMS_WARMUP_SPAN_MULTIPLIER * span)
+
+    stub.rms_directionality_warmup_returns = _rms_directionality_warmup_returns
 
     def _identity(x, *_args, **_kwargs):
         return x

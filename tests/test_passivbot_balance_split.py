@@ -3668,6 +3668,11 @@ def test_forager_selection_diagnostics_preserves_transition_and_cadence(
                 {
                     "pside": "long",
                     "slots_to_fill": 1,
+                    "ranking_required": True,
+                    "candidate_count": 2,
+                    "eligible_count": 2,
+                    "excluded_candidates": [],
+                    "deferral_reason": None,
                     "score_hysteresis_margin": 0.005,
                     "selected_symbol_indices": [0],
                     "incumbent_symbol_indices": [0],
@@ -3744,6 +3749,11 @@ def test_forager_selection_compact_info_preserves_structured_and_debug_detail(ca
                 {
                     "pside": "long",
                     "slots_to_fill": 1,
+                    "ranking_required": True,
+                    "candidate_count": 2,
+                    "eligible_count": 2,
+                    "excluded_candidates": [],
+                    "deferral_reason": None,
                     "score_hysteresis_margin": 0.005,
                     "selected_symbol_indices": [0],
                     "incumbent_symbol_indices": [0],
@@ -3832,6 +3842,11 @@ def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
                 {
                     "pside": "long",
                     "slots_to_fill": 1,
+                    "ranking_required": True,
+                    "candidate_count": 2,
+                    "eligible_count": 2,
+                    "excluded_candidates": [],
+                    "deferral_reason": None,
                     "score_hysteresis_margin": 0.005,
                     "selected_symbol_indices": [1],
                     "incumbent_symbol_indices": [1],
@@ -3915,6 +3930,11 @@ def test_forager_selection_diagnostics_demotes_rank_only_changes(caplog):
                 {
                     "pside": "long",
                     "slots_to_fill": 2,
+                    "ranking_required": True,
+                    "candidate_count": 2,
+                    "eligible_count": 2,
+                    "excluded_candidates": [],
+                    "deferral_reason": None,
                     "score_hysteresis_margin": 0.005,
                     "selected_symbol_indices": [0, 1],
                     "incumbent_symbol_indices": [0, 1],
@@ -3966,6 +3986,11 @@ def test_forager_selection_diagnostics_demotes_no_incumbent_selection_churn(capl
                 {
                     "pside": "long",
                     "slots_to_fill": 1,
+                    "ranking_required": True,
+                    "candidate_count": 2,
+                    "eligible_count": 2,
+                    "excluded_candidates": [],
+                    "deferral_reason": None,
                     "score_hysteresis_margin": 0.02,
                     "selected_symbol_indices": [0],
                     "incumbent_symbol_indices": [],
@@ -12034,6 +12059,11 @@ def test_empty_forager_selection_is_not_repeated_periodically(monkeypatch, caplo
                 {
                     "pside": "short",
                     "slots_to_fill": 1,
+                    "ranking_required": True,
+                    "candidate_count": 2,
+                    "eligible_count": 2,
+                    "excluded_candidates": [],
+                    "deferral_reason": None,
                     "score_hysteresis_margin": 0.02,
                     "selected_symbol_indices": [],
                     "incumbent_symbol_indices": [],
@@ -12097,6 +12127,11 @@ def test_forager_selection_becoming_empty_is_visible_once(monkeypatch, caplog):
     selection = dict(
         pside="long",
         slots_to_fill=1,
+        ranking_required=True,
+        candidate_count=2,
+        eligible_count=1,
+        excluded_candidates=[],
+        deferral_reason=None,
         selected_symbol_indices=[0],
         incumbent_symbol_indices=[],
         top_scores=[],
@@ -12171,8 +12206,12 @@ def test_mode_outage_and_recovery_are_immediate_and_grouped(monkeypatch, caplog)
 def test_empty_forager_slot_changes_remain_quiet(monkeypatch, caplog):
     bot = _unit_bot()
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_000_000)
-    selection = dict(pside="long", slots_to_fill=1, selected_symbol_indices=[],
-                     incumbent_symbol_indices=[], top_scores=[], hysteresis_events=[])
+    selection = dict(
+        pside="long", slots_to_fill=1, selected_symbol_indices=[],
+        incumbent_symbol_indices=[], top_scores=[], hysteresis_events=[],
+        ranking_required=False, candidate_count=0, eligible_count=0,
+        excluded_candidates=[], deferral_reason=None,
+    )
     result = {"diagnostics": {"forager_selections": [selection]}}
     with caplog.at_level(logging.INFO):
         for slots in (1, 0, 2, 0, 1):

@@ -463,6 +463,15 @@ isolation, caller propagation, connector calls, or trading behavior.
 
 ## Fresh-Entry Eligibility
 
+Rust-owned `forager.selection` events report the candidate and eligible counts, whether ranking
+was required, sampled exclusions with feature and reason, and any startup deferral.
+The event warns when a symbol is excluded for the same reason across ten consecutive plans.
+It also warns when a side with free slots and candidates has neither a working initial
+entry nor a newly opened position for `logging.forager_no_entries_warning_minutes`. This includes
+sides whose candidates are all excluded. Startup deferral and active cooldown on every selected
+candidate reset the stall timer. The monitor snapshot exposes an active entry stall. These
+observations do not affect order permissions.
+
 Completed normal live plans emit `entry.initial_eligibility` to structured and monitor sinks. The
 producer observes the existing Rust plan, reconciliation, and local pre-connector filters; it does
 not create another trading gate.

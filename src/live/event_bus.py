@@ -366,6 +366,9 @@ class ReasonCodes:
     PRE_CREATE_PLANNING_SNAPSHOT_INVALID = "pre_create_planning_snapshot_invalid"
     QUEUE_FULL = "queue_full"
     RANKING_FEATURES_UNAVAILABLE = "ranking_features_unavailable"
+    STARTUP_REFRESH_PENDING = "startup_refresh_pending"
+    PERSISTENT_FEATURE_EXCLUSION = "persistent_feature_exclusion"
+    NO_ENTRIES_WITH_FREE_SLOTS = "no_entries_with_free_slots"
     FORAGER_ELIGIBILITY_MEMBERSHIP_CHANGED = "forager_eligibility_membership_changed"
     CONFIG_MARKET_UNSUPPORTED = "config_market_unsupported"
     CONFIG_ISOLATED_ONLY_MARKET_BLOCKED = "config_isolated_only_market_blocked"
@@ -2310,6 +2313,17 @@ def _console_forager_selection_summary(event: LiveEvent) -> list[str]:
     hysteresis_events = _data_int(data, "hysteresis_event_count")
     if hysteresis_events:
         parts.append(f"hysteresis_events={hysteresis_events}")
+    if event.reason_code == ReasonCodes.NO_ENTRIES_WITH_FREE_SLOTS:
+        stall_ms = _data_int(data, "entry_stall_ms")
+        if stall_ms is not None:
+            parts.append(f"no_entry_for={stall_ms / 60_000:.1f}m")
+    persistent = data.get("persistent_exclusions")
+    if isinstance(persistent, list) and persistent:
+        sample = ",".join(
+            ":".join(str(row.get(key, "-"))[:32] for key in ("symbol", "feature", "reason"))
+            for row in persistent[:3] if isinstance(row, Mapping)
+        )
+        parts.append(f"excluded={sample}")
     source = _data_str(data, "source")
     if source:
         parts.append(f"source={source}")
@@ -2833,7 +2847,7 @@ def _operator_sink_event_visible(event: LiveEvent) -> bool:
     if event.event_type == EventTypes.FILL_INGESTED:
         return True
     if event.event_type == EventTypes.FORAGER_SELECTION:
-        return str(data.get("source") or "") != "rust_orchestrator"
+        return event.level == "warning" or data.get("source") != "rust_orchestrator"
     if event.event_type == EventTypes.HSL_STATUS:
         return _hsl_status_operator_visible(event)
     if event.event_type == EventTypes.EMA_FALLBACK_USED:
@@ -4502,7 +4516,10 @@ class LiveEventPipeline:
         self, sink_name: str, event: LiveEvent, route: EventRoute
     ) -> bool:
         interval_ms = int(route.throttle_interval_ms or 0)
-        if interval_ms <= 0:
+        if interval_ms <= 0 or (
+            event.event_type == EventTypes.FORAGER_SELECTION and event.level == "warning"
+        ):
+            # The forager observer rate-limits warnings per side and condition.
             return True
         key = (str(sink_name), event.event_type)
         now_ms = int(event.ts_ms)

@@ -207,12 +207,13 @@ When the forager setting is unset, its budget-derived acceptable age must not be
 tail grace period. An explicit positive forager cap is an operator override.
 
 Candidates with no prior feature basis, non-finite carried values, or excessive feature age are
-unavailable for new entries. Do not silently rank only the subset that happened to refresh first.
-Ranking-feature absence must remain scoped to forager selection: when the exact remaining eligible
-candidate count fits the remaining slots, Rust may select those candidates without ranking and
-must not let Python turn that unused input absence into symbol-wide non-tradability or a current
-ranking-unavailable alert. Diagnostics may retain the gap as conditional until Rust reports that
-ranking was required for that side.
+unavailable for new entries. At live startup, defer ranking until the sweep has attempted
+each candidate's due refreshes, including any due history repair. After that, an
+explicitly unavailable required ranking feature excludes only its candidate at that cutoff.
+A candidate returns to selection as soon as its required features are available. Rust can select
+without scoring when all eligible candidates fit the free slots. Unused ranking-feature absence
+cannot become a symbol-wide restriction or current ranking warning. Missing cooldown inputs
+remain scoped to the entry branch that requires them.
 
 Approved and ignored coin state is an entry-eligibility input. Stale or unreadable eligibility
 blocks affected initial entries but not protective management. With
