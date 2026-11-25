@@ -210,7 +210,10 @@ logs, runtime windows, and immutable manifests.
    chained additions in the same nonzero timestamp cohort only when the raw close component
    explicitly reports PnL. A normalized default of zero does not prove zero realized PnL. A matching
    position size at a later timestamp does not prove continuity across a potentially incomplete
-   history window. If the chain is ambiguous, keep the existing order and do not choose a different
+   history window. An explicitly covered suffix can carry a raw flat opening's basis through
+   consecutive additive fills with matching exchange sizes and complete raw components. Missing
+   components, incompatible sizes or a reduction end that cross-timestamp proof.
+   If the chain is ambiguous, keep the existing order and do not choose a different
    anchor from mutable exchange position state. Hyperliquid's incremental overlap counts timestamp
    cohorts rather than individual executions and uses the earlier of that cohort anchor and the
    time-based refresh checkpoint. A same-millisecond burst or an older cohort therefore cannot be

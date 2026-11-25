@@ -850,14 +850,20 @@ def compute_psize_pprice(
     return final_state
 
 
-def apply_exchange_raw_position_overrides(events: List[Dict[str, object]]) -> None:
-    apply_hyperliquid_raw_psize_overrides(events)
+def apply_exchange_raw_position_overrides(
+    events: List[Dict[str, object]], *, hyperliquid_flat_replay_start_ms: int = 0
+) -> None:
+    apply_hyperliquid_raw_psize_overrides(
+        events, flat_replay_start_ms=hyperliquid_flat_replay_start_ms
+    )
     from exchanges.lighter_fill_events import apply_lighter_raw_position_overrides
 
     apply_lighter_raw_position_overrides(events)
 
 
-def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> None:
+def apply_hyperliquid_raw_psize_overrides(
+    events: List[Dict[str, object]], *, flat_replay_start_ms: int = 0
+) -> None:
     """
     Improve Hyperliquid psize/pprice annotations from raw fill startPosition data.
 
@@ -865,8 +871,10 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
     window, which is necessarily best-effort when the cache starts mid-position.
     Hyperliquid raw fills include the position size before each component fill;
     when present, use that exchange-provided state for the after-fill size.
+    A caller-proven covered suffix also allows strictly additive chains to
+    carry their basis forward from a raw flat opening across timestamps.
     """
-    recovered_state: Dict[Tuple[str, str], Tuple[float, Optional[float], int]] = {}
+    recovered_state: Dict[Tuple[str, str], Tuple[float, Optional[float], int, bool]] = {}
     for ev in events:
         components = _hyperliquid_raw_position_components(ev)
         candidates = [
@@ -941,14 +949,37 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
         first_before = ordered_components[0][0]
         previous = recovered_state.get(key)
         event_timestamp = int(ev.get("timestamp") or 0)
+        raw_components = _normalize_raw_field(ev.get("raw")) if flat_replay_start_ms else []
+        covered_adds = (
+            0 < flat_replay_start_ms <= event_timestamp
+            and len(components) == len(raw_components)
+            and all(
+                row["data"]["info"]["startPosition"] not in (None, "")
+                and not isinstance(row["data"]["info"]["startPosition"], bool)
+                for row in raw_components
+            )
+            and all(
+                not reducing and all(math.isfinite(x) for x in (before, after, qty, price))
+                and price > 0.0
+                for before, after, qty, price, _entry, reducing in components
+            )
+            and _is_same_position_size(
+                sum(component[2] for component in components),
+                abs(float(ev.get("qty") or ev.get("amount") or 0.0))
+                * float(ev.get("c_mult", 1.0) or 1.0),
+            )
+        )
+        from_flat = covered_adds and first_before <= 1e-12
         basis: Optional[float] = None
         if (
             previous is not None
             and event_timestamp > 0
-            and previous[2] == event_timestamp
             and _is_same_position_size(previous[0], first_before)
         ):
-            basis = previous[1]
+            carries_flat = covered_adds and previous[3] and previous[2] <= event_timestamp
+            if previous[2] == event_timestamp or carries_flat:
+                basis = previous[1]
+            from_flat = from_flat or carries_flat
         position_size = first_before
         for (
             before_size,
@@ -960,6 +991,7 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
         ) in ordered_components:
             if not _is_same_position_size(position_size, before_size):
                 basis = None
+                from_flat = False
             if reducing:
                 if entry_price > 0.0:
                     basis = entry_price
@@ -981,7 +1013,7 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
             ev["pprice"] = 0.0
         elif basis is not None and basis > 0.0:
             ev["pprice"] = basis
-        recovered_state[key] = (position_size, basis, event_timestamp)
+        recovered_state[key] = (position_size, basis, event_timestamp, from_flat)
 
 
 def _is_same_position_size(lhs: float, rhs: float) -> bool:
@@ -3738,7 +3770,7 @@ class FillEventsManager:
         self._events: List[FillEvent] = []
         # A disposable proof that replay left this exact history unchanged.
         # Own nested data too: frozen FillEvents still contain mutable raw/fee data.
-        self._empty_refresh_proof: Optional[Tuple[Tuple[float, float], List[FillEvent]]] = None
+        self._empty_refresh_proof: Optional[Tuple[Tuple[float, float, int], List[FillEvent]]] = None
         self._loaded = False
         self._lock = asyncio.Lock()
         self._degraded_pnl_repair_attempted_keys: set[str] = set()
@@ -4004,7 +4036,12 @@ class FillEventsManager:
                 ensure_qty_signage(payload)
                 order_same_timestamp_fills(payload)
                 compute_psize_pprice(payload)
-                apply_exchange_raw_position_overrides(payload)
+                apply_exchange_raw_position_overrides(
+                    payload,
+                    hyperliquid_flat_replay_start_ms=(
+                        self._hyperliquid_flat_replay_start_ms() if not dropped else 0
+                    ),
+                )
                 synthesized_days = self._synthesize_missing_pnls(payload)
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
                 normalized_days = {_day_key(ev.timestamp) for ev in self._events}
@@ -5284,7 +5321,12 @@ class FillEventsManager:
         # has demonstrated a fixed point. New rows (including duplicate fetches),
         # PnL observations, policy changes and nested-data changes use the full path.
         empty_refresh = not fetched_batches and not fetched_events and not pnl_observations
-        fee_policy = (self.fee_pct_fallback, self.fee_pct_sanity_abs_max)
+        flat_replay_start_ms = self._hyperliquid_flat_replay_start_ms()
+        fee_policy = (
+            self.fee_pct_fallback,
+            self.fee_pct_sanity_abs_max,
+            flat_replay_start_ms,
+        )
         proof = self._empty_refresh_proof
         self._empty_refresh_proof = None
         unchanged = bool(
@@ -5305,7 +5347,9 @@ class FillEventsManager:
             ensure_qty_signage(payload)
             order_same_timestamp_fills(payload)
             compute_psize_pprice(payload)
-            apply_exchange_raw_position_overrides(payload)
+            apply_exchange_raw_position_overrides(
+                payload, hyperliquid_flat_replay_start_ms=flat_replay_start_ms
+            )
             synthesized_days = self._synthesize_missing_pnls(payload)
             cycle_reconciled_days = self._reconcile_pnl_observations(payload, pnl_observations)
             self._events = [FillEvent.from_dict(ev) for ev in payload]
@@ -5780,6 +5824,26 @@ class FillEventsManager:
             if gap_start < window_end and gap_end > window_start:
                 blocking.append(gap)
         return blocking
+
+    def _hyperliquid_flat_replay_start_ms(self) -> int:
+        """Earliest usable start in the covered suffix after unresolved gaps."""
+        if self.exchange.lower() != "hyperliquid":
+            return 0
+        metadata = self.cache.load_metadata()
+        try:
+            covered_start = _cache_metadata_timestamp(metadata, "covered_start_ms")
+        except FillEventCacheContractError:
+            return 0
+        gaps = metadata.get("known_gaps", [])
+        if covered_start <= 0 or not isinstance(gaps, list):
+            return 0
+        for gap in gaps:
+            bounds = self._known_gap_bounds(gap)
+            if bounds is None:
+                return 0
+            if not self._known_gap_confirmed_legitimate(gap):
+                covered_start = max(covered_start, bounds[1] + 1)
+        return covered_start
 
     def get_coverage_status(
         self,

@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve the entry price of a Hyperliquid position opened from a raw flat boundary when
+  later additions are proven by covered fill history and matching exchange position sizes.
+
 - Service completed ordinary plans before the live loop sleeps and recheck plans blocked only
   by account age after the scheduled refresh. Console health reports slow preparation,
   reconciliation stalls and recovery.

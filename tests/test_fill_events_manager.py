@@ -8806,6 +8806,65 @@ def test_hyperliquid_raw_basis_does_not_propagate_across_timestamps():
     assert events[-1]["pprice"] != pytest.approx(expected_stale_pprice)
 
 
+@pytest.mark.parametrize(
+    "replay_start,corrupt_middle,expected_price",
+    [(2_000, False, 112.0), (2_001, False, 104.0), (2_000, True, 104.0)],
+)
+def test_hyperliquid_covered_raw_flat_basis_survives_later_add(
+    replay_start, corrupt_middle, expected_price
+):
+    def buy(timestamp, before, qty, price):
+        return {
+            "symbol": "TEST/USDC:USDC",
+            "position_side": "long",
+            "side": "buy",
+            "timestamp": timestamp,
+            "qty": qty,
+            "price": price,
+            "raw": [
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "side": "buy",
+                        "amount": qty,
+                        "price": price,
+                        "info": {"startPosition": str(before)},
+                    },
+                }
+            ],
+        }
+
+    events = [
+        buy(1_000, 0, 10.0, 100.0),  # Older generic replay residue.
+        buy(2_000, 0, 2.0, 100.0),
+        buy(3_000, 2.0, 3.0, 120.0),
+    ]
+    if corrupt_middle:
+        events[1]["raw"].append({"data": {}})
+
+    compute_psize_pprice(events)
+    apply_hyperliquid_raw_psize_overrides(events, flat_replay_start_ms=replay_start)
+
+    assert events[-1]["psize"] == pytest.approx(5.0)
+    assert events[-1]["pprice"] == pytest.approx(expected_price)
+
+
+def test_hyperliquid_raw_flat_basis_coverage_starts_after_unresolved_gap():
+    manager = FillEventsManager.__new__(FillEventsManager)
+    manager.exchange = "hyperliquid"
+    manager.cache = types.SimpleNamespace(
+        load_metadata=lambda: {
+            "covered_start_ms": 1_000,
+            "known_gaps": [
+                {"start_ts": 1_200, "end_ts": 1_500, "reason": GAP_REASON_FETCH_FAILED},
+                {"start_ts": 2_100, "end_ts": 2_300, "reason": fem.GAP_REASON_CONFIRMED},
+            ],
+        }
+    )
+
+    assert manager._hyperliquid_flat_replay_start_ms() == 1_501
+
+
 def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
     buy_1, sell_1 = _hyperliquid_same_millisecond_events()
     buy_1["id"] = "buy-1"
