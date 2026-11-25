@@ -4,6 +4,7 @@ import logging
 import re
 from collections import Counter
 from copy import deepcopy
+from functools import cache
 from typing import Any, Dict, Tuple, List, Union, Optional, Iterable
 
 from config.access import (
@@ -678,12 +679,27 @@ def _clean_dynamic_node(value):
     return deepcopy(value)
 
 
+# Omitted fields hydrate from the template. Explicit null may carry authored intent.
+_MISSING_CONFIG_VALUE = object()
+
+
+@cache
+def _clean_config_field_registry():
+    from config.field_registry import get_field_registry
+
+    return get_field_registry()
+
+
 def _clean_with_template(template_node, source_node, path: Path = ()):
+    if source_node is None and template_node is not None:
+        field = _clean_config_field_registry().find(path)
+        if field is not None and field.nullable:
+            return None
     if isinstance(template_node, dict):
         source_dict = source_node if isinstance(source_node, dict) else {}
         if path in PARTIALLY_OPEN_CONFIG_PATHS:
             if not isinstance(source_node, dict):
-                return _clean_with_template(template_node, None, ())
+                return _clean_with_template(template_node, _MISSING_CONFIG_VALUE)
             cleaned = {}
             for key, value in source_dict.items():
                 if key in template_node:
@@ -695,7 +711,7 @@ def _clean_with_template(template_node, source_node, path: Path = ()):
             if path == ("backtest", "reducer") and "default" not in cleaned:
                 cleaned["default"] = _clean_with_template(
                     template_node["default"],
-                    None,
+                    _MISSING_CONFIG_VALUE,
                     path + ("default",),
                 )
             return cleaned
@@ -704,14 +720,14 @@ def _clean_with_template(template_node, source_node, path: Path = ()):
         result = {}
         for key, tmpl_value in template_node.items():
             result[key] = _clean_with_template(
-                tmpl_value, source_dict.get(key), path + (key,)
+                tmpl_value, source_dict.get(key, _MISSING_CONFIG_VALUE), path + (key,)
             )
         return result
     if isinstance(template_node, list):
         if isinstance(source_node, list):
             return [_clean_dynamic_node(item) for item in source_node]
         return deepcopy(template_node)
-    if source_node is None:
+    if source_node is None or source_node is _MISSING_CONFIG_VALUE:
         return deepcopy(template_node)
     return deepcopy(source_node)
 

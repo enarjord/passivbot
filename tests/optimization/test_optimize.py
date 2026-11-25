@@ -5744,6 +5744,53 @@ def test_validate_resume_results_rejects_changed_search_domain(tmp_path: Path):
         optimize._validate_resume_results(str(tmp_path), config)
 
 
+@pytest.mark.parametrize("compress", [False, True])
+def test_validate_resume_results_preserves_auto_population_size(tmp_path: Path, compress):
+    config = _resume_validation_entry()
+    config["optimize"]["population_size"] = None
+    config["optimize"]["compress_results_file"] = compress
+    entry = build_pymoo_record_entry(
+        vector=[],
+        metrics={
+            "definition_version": optimize.CORE_METRIC_DEFINITION_VERSION,
+            "objectives": {"cagr_fraction_strategy_equity": 0.1},
+        },
+        template=config,
+        build_config_fn=None,
+        overrides_fn=None,
+        prepared_config=config,
+    )
+    assert entry["config"]["optimize"]["population_size"] is None
+
+    next_entry = deepcopy(entry)
+    next_entry["metrics"]["objectives"]["cagr_fraction_strategy_equity"] = 0.2
+    recorder = ResultRecorder(
+        results_dir=str(tmp_path), sig_digits=6, flush_interval=60,
+        scoring_keys=["cagr_fraction_strategy_equity"], compress=compress,
+        write_all_results=True,
+    )
+    try:
+        recorder.record(entry)
+        recorder.record(next_entry)
+    finally:
+        recorder.close()
+
+    assert optimize._validate_resume_results(str(tmp_path), config) == 2
+
+
+@pytest.mark.parametrize("stored,current", [(128, None), (None, 128), (128, 64)])
+def test_resume_config_mismatches_rejects_population_size_change(stored, current):
+    entry = _resume_validation_entry()
+    entry["optimize"]["population_size"] = stored
+    config = deepcopy(entry)
+    config["optimize"]["population_size"] = current
+
+    assert any(
+        "optimize.population_size" in diff
+        for diff in optimize._resume_config_mismatches(entry, config)
+    )
+
+
 def test_validate_resume_results_counts_entries(tmp_path: Path):
     entry = _resume_validation_entry()
     _write_msgpack_entries(tmp_path / "all_results.bin", [entry, deepcopy(entry)])

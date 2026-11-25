@@ -3,6 +3,7 @@
 from copy import deepcopy
 import platform
 
+from config.ew import EW_DEFINITION_VERSION, validate_ew_half_life_days
 from config.overrides import parse_overrides
 from config.policy import effective_minimum_cost_filters
 from config.param_paths import resolve_optimizer_key_path
@@ -147,13 +148,12 @@ def build_evaluation_contract(config: dict) -> dict:
     policy = resolve_prefilter(config.get("optimize", {}).get("prefilter"))
     if prefilter_enabled(policy):
         contract["prefilter"] = {"version": PREFILTER_VERSION, "policy": policy}
-    half_life = effective.get("backtest", {}).get("ew_half_life_days")
-    if half_life is not None:
-        from config.ew import EW_DEFINITION_VERSION
-        contract["exponential_weighting"] = {
-            "half_life_days": half_life,
-            "definition_version": EW_DEFINITION_VERSION,
-        }
+    contract["exponential_weighting"] = {
+        "half_life_days": validate_ew_half_life_days(
+            effective["backtest"].get("ew_half_life_days")
+        ),
+        "definition_version": EW_DEFINITION_VERSION,
+    }
     if config.get("optimize", {}).get("backend") == "gpu":
         # Authoritative GPU fitness must never inherit CPU/proxy-validation
         # compatibility. Source and dependency identities above include the
