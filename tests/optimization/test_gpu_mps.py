@@ -9004,6 +9004,178 @@ def test_mps_tm_multicoin_same_tick_wel_resizes_merged_market_group_once(side):
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_same_tick_wel_unexpanded_market_only_fill_parity(side):
+    from backtest import run_backtest
+    from config.schema import get_expanded_config_prototype
+
+    gen_touch = 99.0 if side == "long" else 101.0
+    next_price = 98.0 if side == "long" else 102.0
+    common = dict(
+        maker_fee_fraction=0.0,
+        price_step=1.0,
+        close_qty_fraction=0.1,
+        next_high=next_price,
+        next_low=next_price,
+        market_orders_allowed=True,
+        market_order_near_touch_fraction=0.005,
+        generation_touch=gen_touch,
+        next_close=next_price,
+        min_cost=0.0,
+        collect_coin_fill_counts=True,
+    )
+    same_tick_runner, same_tick_candidate, _ = _tm_multicoin_off_tick_reducer_case(
+        side,
+        close_threshold_base=0.01,
+        close_threshold_we=-0.02,
+        **common,
+    )
+    far_grid_runner, far_grid_candidate, _ = _tm_multicoin_off_tick_reducer_case(
+        side,
+        close_threshold_base=0.5,
+        close_threshold_we=0.0,
+        **common,
+    )
+    for candidate in (same_tick_candidate, far_grid_candidate):
+        idx = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "wel_enforcer_threshold_ratio"
+        )
+        candidate[idx] = 0.99
+
+    same_tick_out = same_tick_runner.run(
+        np.asarray([same_tick_candidate], dtype=np.float64)
+    )
+    far_grid_out = far_grid_runner.run(
+        np.asarray([far_grid_candidate], dtype=np.float64)
+    )
+    synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    # Passive sell/buy at generation touch is unreachable on the next bar, so
+    # exact Rust does not expand calc_closes_* and emits raw calc_next_close_*
+    # WEL alone; near-touch market promotion must liquidate only that raw WEL.
+    assert same_tick_out["fill_count"].item() == 2.0
+    assert same_tick_out["coin_fill_counts"][0, 0].item() == 2.0
+    assert same_tick_out[size_key].item() == pytest.approx(
+        far_grid_out[size_key].item(), abs=1.0e-5
+    )
+    assert same_tick_out["balance"].item() == pytest.approx(
+        far_grid_out["balance"].item(), abs=1.0e-4
+    )
+
+    # Verify direct CPU/Rust backtest parity on the exact same fixture.
+    count = 6
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    hlcvs = np.zeros((count, 2, 4), dtype=np.float64)
+    hlcvs[:, 0, 0] = [100.0, 100.0, 100.0, 102.0, next_price, 100.0]
+    hlcvs[:, 0, 1] = [100.0, 100.0, 100.0, 98.0, next_price, 100.0]
+    hlcvs[:, 0, 2] = [100.0, 100.0, 100.0, gen_touch, next_price, 100.0]
+    hlcvs[:, 0, 3] = 100.0
+    hlcvs[:, 1, 0] = 121.0
+    hlcvs[:, 1, 1] = 119.0
+    hlcvs[:, 1, 2] = 120.0
+    hlcvs[:, 1, 3] = 100.0
+    market_settings = {
+        coin: {
+            "qty_step": 0.001,
+            "price_step": 1.0,
+            "min_qty": 0.001,
+            "min_cost": 0.0,
+            "c_mult": 1.0,
+            "maker": 0.0,
+            "taker": 0.0,
+            "exchange": "bybit",
+            "first_valid_index": 0,
+            "last_valid_index": count - 1,
+            "warmup_minutes": 1,
+        }
+        for coin in ("BTC", "ETH")
+    }
+    market_settings["__meta__"] = {
+        "requested_start_ts": int(timestamps[0]),
+        "requested_start_date": "2023-11-14",
+        "warmup_minutes_requested": 1,
+    }
+    config = get_expanded_config_prototype()
+    config["bot"]["portfolio"]["strategy_kind"] = "trailing_martingale"
+    config["bot"]["portfolio"]["warmup"]["max_minutes"] = 1
+    config["bot"]["portfolio"]["hedge_mode"] = False
+    config["bot"]["portfolio"]["execution"]["market_orders_allowed"] = True
+    config["bot"]["portfolio"]["execution"]["market_order_near_touch_fraction"] = 0.005
+    config["backtest"]["starting_balance"] = 1_000.0
+    config["backtest"]["market_order_slippage_fraction"] = 0.0
+    config["backtest"]["limit_order_fill_buffer_fraction"] = 0.0
+    config["backtest"]["maker_fee_override_fraction"] = 0.0
+    config["backtest"]["taker_fee_override_fraction"] = 0.0
+    config["backtest"]["coins"] = {"bybit": ["BTC", "ETH"]}
+    config["backtest"]["exchanges"] = ["bybit"]
+    set_side_universe_sources(
+        config,
+        "approved_coins",
+        {s: ["BTC"] if s == side else [] for s in ("long", "short")},
+    )
+    for s in ("long", "short"):
+        enabled = s == side
+        config["bot"][s]["enabled"] = enabled
+        config["bot"][s]["universe"]["minimum_coin_age_days"] = 0.0
+        config["bot"][s]["universe"]["filter_by_min_effective_cost"] = False
+        config["bot"][s]["entry_cooldown"]["base_duration_minutes"] = 100.0
+        config["bot"][s]["entry_cooldown"]["min_duration_minutes"] = 0.0
+        config["bot"][s]["entry_cooldown"]["weights_minutes"] = {
+            "exposure_ratio": 0.0,
+            "adverse_directionality": 0.0,
+        }
+        config["bot"][s]["forager"]["score_weights"] = {
+            "rms_directionality": 0.0,
+            "ema_readiness": 0.0,
+            "log_range": 0.0,
+            "volume": 1.0,
+        }
+        config["bot"][s]["forager"]["volume_ema_span_minutes"] = 1.0
+        config["bot"][s]["forager"]["log_range_ema_span_minutes"] = 1.0
+        config["bot"][s]["forager"]["rms_directionality_ema_span_minutes"] = 1.0
+        risk = config["bot"][s]["risk"]
+        risk["total_wallet_exposure_limit_ratio"] = 1.0 if enabled else 0.0
+        risk["max_positions"] = 1 if enabled else 0
+        risk["we_excess_allowance_fraction"] = 0.0
+        risk["position_exposure_enforcer"]["enabled"] = enabled
+        risk["position_exposure_enforcer"]["threshold_ratio"] = 0.99
+        risk["total_exposure_enforcer"]["enabled"] = False
+        risk["hsl"]["enabled"] = False
+        risk["unstuck"]["enabled"] = False
+        strategy = config["bot"][s]["strategy"]["trailing_martingale"]
+        for section in (strategy["entry"], strategy["close"]):
+            for key in section:
+                if key.endswith("_coefficient"):
+                    section[key] = 0.0
+        strategy["entry"]["ema_span_0_minutes"] = 2.0
+        strategy["entry"]["ema_span_1_minutes"] = 3.0
+        strategy["entry"]["initial_qty_fraction"] = 1.0
+        strategy["entry"]["initial_ema_distance_fraction"] = 0.01
+        strategy["entry"]["threshold_base_fraction"] = 10.0
+        strategy["entry"]["retracement_base_fraction"] = 0.0
+        strategy["entry"]["reentry_qty_multiplier"] = 0.0
+        strategy["close"]["qty_fraction"] = 0.1
+        strategy["close"]["threshold_base_fraction"] = 0.01
+        strategy["close"]["threshold_exposure_ratio_coefficient"] = -0.02
+        strategy["close"]["retracement_base_fraction"] = 0.0
+
+    btc_prices = np.full(count, 50_000.0)
+    exact_fills, _, _ = run_backtest(
+        hlcvs, market_settings, config, "bybit", btc_prices, timestamps
+    )
+    assert len(exact_fills) == 2
+    assert exact_fills[-1][13] == f"close_auto_reduce_wel_{side}"
+    assert exact_fills[-1][14] == "taker"
+    assert same_tick_out[size_key].item() == pytest.approx(
+        abs(float(exact_fills[-1][11])), abs=1.0e-4
+    )
+    assert same_tick_out["balance"].item() == pytest.approx(
+        float(exact_fills[-1][7]), abs=1.0e-3
+    )
+
+
+@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_early_market_reducer_charges_taker_fee_fraction(side):
     common = {
         "side": side,

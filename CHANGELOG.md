@@ -5,6 +5,11 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Preserve `CloseAutoReduceWelLong` and `CloseAutoReduceWelShort` order types when
+  a Trailing Martingale grid close merges at the same price as a WEL auto-reduce
+  close (in both CPU Rust and GPU replay), so merged WEL reductions retain
+  protective reducer semantics.
+
 - Refresh `configs/examples/ema_anchor_long.json` with updated EMA Anchor,
   forager, entry-cooldown, risk (`max_positions: 3`, tighter
   `we_excess_allowance_fraction: 0.185`), and portfolio loss-gate parameters

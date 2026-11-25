@@ -1550,6 +1550,195 @@ mod tests {
         }];
         sort_closes_by_price(&mut closes, false, "calc_closes_long");
     }
+
+    #[test]
+    fn test_calc_closes_long_same_price_merge_preserves_wel_auto_reduce_order_type() {
+        let exchange = make_exchange_params();
+        let state = StateParams {
+            balance: 1000.0,
+            order_book: crate::types::OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit_ratio: 0.5,
+            risk_we_excess_allowance_fraction: 0.0,
+            risk_wel_enforcer_enabled: true,
+            risk_wel_enforcer_threshold_ratio: 1.0,
+            ..Default::default()
+        };
+        let runtime_context = RuntimeOrderContext {
+            effective_wallet_exposure_limit_ratio: 0.5,
+        };
+        let pos = Position {
+            size: 10.0,
+            price: 100.0,
+        };
+
+        // Case 1: full position merges at the same price as WEL auto-reduce.
+        let full_merge_close = TrailingMartingaleCloseParams {
+            qty_fraction: 0.5,
+            threshold_base_fraction: 0.0,
+            threshold_exposure_ratio_coefficient: 0.0,
+            ..make_close_params()
+        };
+        let full_closes = calc_closes_long(
+            &exchange,
+            &state,
+            &bot,
+            &runtime_context,
+            &full_merge_close,
+            &pos,
+            &TrailingPriceBundle::default(),
+        );
+        assert_eq!(full_closes.len(), 1);
+        assert_eq!(full_closes[0].order_type, OrderType::CloseAutoReduceWelLong);
+        assert_eq!(full_closes[0].price, 100.0);
+        assert_eq!(full_closes[0].qty, -10.0);
+
+        // Case 2: first grid rung merges with WEL at ask, later grid rung at higher price stays CloseGridLong.
+        let partial_state = StateParams {
+            balance: 1000.0,
+            order_book: crate::types::OrderBook {
+                bid: 101.0,
+                ask: 101.0,
+            },
+            ..Default::default()
+        };
+        let partial_merge_close = TrailingMartingaleCloseParams {
+            qty_fraction: 0.5,
+            threshold_base_fraction: 0.015,
+            threshold_exposure_ratio_coefficient: -0.01,
+            ..make_close_params()
+        };
+        let partial_closes = calc_closes_long(
+            &exchange,
+            &partial_state,
+            &bot,
+            &runtime_context,
+            &partial_merge_close,
+            &pos,
+            &TrailingPriceBundle::default(),
+        );
+        assert!(
+            partial_closes.len() >= 2,
+            "expected merged WEL close plus higher grid close, got {:?}",
+            partial_closes
+        );
+        assert_eq!(
+            partial_closes[0].order_type,
+            OrderType::CloseAutoReduceWelLong
+        );
+        assert_eq!(partial_closes[0].price, 101.0);
+        assert!(
+            partial_closes[0].qty < -5.1,
+            "expected WEL close (-5.1) merged with same-price grid close, got {}",
+            partial_closes[0].qty
+        );
+        assert!(partial_closes[1..]
+            .iter()
+            .all(|order| order.order_type == OrderType::CloseGridLong && order.price > 101.0));
+        let total_qty: f64 = partial_closes.iter().map(|o| o.qty).sum();
+        assert!((total_qty + 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_calc_closes_short_same_price_merge_preserves_wel_auto_reduce_order_type() {
+        let exchange = make_exchange_params();
+        let state = StateParams {
+            balance: 1000.0,
+            order_book: crate::types::OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit_ratio: 0.5,
+            risk_we_excess_allowance_fraction: 0.0,
+            risk_wel_enforcer_enabled: true,
+            risk_wel_enforcer_threshold_ratio: 1.0,
+            ..Default::default()
+        };
+        let runtime_context = RuntimeOrderContext {
+            effective_wallet_exposure_limit_ratio: 0.5,
+        };
+        let pos = Position {
+            size: -10.0,
+            price: 100.0,
+        };
+
+        // Case 1: full position merges at the same price as WEL auto-reduce.
+        let full_merge_close = TrailingMartingaleCloseParams {
+            qty_fraction: 0.5,
+            threshold_base_fraction: 0.0,
+            threshold_exposure_ratio_coefficient: 0.0,
+            ..make_close_params()
+        };
+        let full_closes = calc_closes_short(
+            &exchange,
+            &state,
+            &bot,
+            &runtime_context,
+            &full_merge_close,
+            &pos,
+            &TrailingPriceBundle::default(),
+        );
+        assert_eq!(full_closes.len(), 1);
+        assert_eq!(
+            full_closes[0].order_type,
+            OrderType::CloseAutoReduceWelShort
+        );
+        assert_eq!(full_closes[0].price, 100.0);
+        assert_eq!(full_closes[0].qty, 10.0);
+
+        // Case 2: first grid rung merges with WEL at bid, later grid rung at lower price stays CloseGridShort.
+        let partial_state = StateParams {
+            balance: 1000.0,
+            order_book: crate::types::OrderBook {
+                bid: 99.0,
+                ask: 99.0,
+            },
+            ..Default::default()
+        };
+        let partial_merge_close = TrailingMartingaleCloseParams {
+            qty_fraction: 0.5,
+            threshold_base_fraction: 0.015,
+            threshold_exposure_ratio_coefficient: -0.01,
+            ..make_close_params()
+        };
+        let partial_closes = calc_closes_short(
+            &exchange,
+            &partial_state,
+            &bot,
+            &runtime_context,
+            &partial_merge_close,
+            &pos,
+            &TrailingPriceBundle::default(),
+        );
+        assert!(
+            partial_closes.len() >= 2,
+            "expected merged WEL close plus lower grid close, got {:?}",
+            partial_closes
+        );
+        assert_eq!(
+            partial_closes[0].order_type,
+            OrderType::CloseAutoReduceWelShort
+        );
+        assert_eq!(partial_closes[0].price, 99.0);
+        assert!(
+            partial_closes[0].qty > 5.1,
+            "expected WEL close (5.1) merged with same-price grid close, got {}",
+            partial_closes[0].qty
+        );
+        assert!(partial_closes[1..]
+            .iter()
+            .all(|order| order.order_type == OrderType::CloseGridShort && order.price < 99.0));
+        let total_qty: f64 = partial_closes.iter().map(|o| o.qty).sum();
+        assert!((total_qty - 10.0).abs() < 1e-9);
+    }
 }
 
 pub fn calc_closes_long(
@@ -1598,17 +1787,21 @@ pub fn calc_closes_long(
                 break;
             }
             if closes[closes.len() - 1].price == close.price {
-                let previous_close = closes.pop();
+                let previous_close = closes
+                    .pop()
+                    .expect("calc_closes_long merge requires existing close");
+                let merged_order_type = if previous_close.order_type
+                    == OrderType::CloseAutoReduceWelLong
+                    || close.order_type == OrderType::CloseAutoReduceWelLong
+                {
+                    OrderType::CloseAutoReduceWelLong
+                } else {
+                    close.order_type
+                };
                 let merged_close = Order {
-                    qty: round_(
-                        previous_close
-                            .expect("calc_closes_long merge requires existing close")
-                            .qty
-                            + close.qty,
-                        exchange_params.qty_step,
-                    ),
+                    qty: round_(previous_close.qty + close.qty, exchange_params.qty_step),
                     price: close.price,
-                    order_type: close.order_type,
+                    order_type: merged_order_type,
                 };
                 let mut merged_close = merged_close;
                 merged_close.price = quantize_price(
@@ -1680,17 +1873,21 @@ pub fn calc_closes_short(
                 break;
             }
             if closes[closes.len() - 1].price == close.price {
-                let previous_close = closes.pop();
+                let previous_close = closes
+                    .pop()
+                    .expect("calc_closes_short merge requires existing close");
+                let merged_order_type = if previous_close.order_type
+                    == OrderType::CloseAutoReduceWelShort
+                    || close.order_type == OrderType::CloseAutoReduceWelShort
+                {
+                    OrderType::CloseAutoReduceWelShort
+                } else {
+                    close.order_type
+                };
                 let merged_close = Order {
-                    qty: round_(
-                        previous_close
-                            .expect("calc_closes_short merge requires existing close")
-                            .qty
-                            + close.qty,
-                        exchange_params.qty_step,
-                    ),
+                    qty: round_(previous_close.qty + close.qty, exchange_params.qty_step),
                     price: close.price,
-                    order_type: close.order_type,
+                    order_type: merged_order_type,
                 };
                 let mut merged_close = merged_close;
                 merged_close.price = quantize_price(
