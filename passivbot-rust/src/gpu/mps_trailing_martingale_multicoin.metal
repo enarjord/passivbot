@@ -340,37 +340,23 @@ inline bool tm_close_ladder_would_expand_next_bar(
     thread const TmCloseGridContext& context,
     int wel_ticks,
     float wel_qty,
-    constant float* bars,
-    constant int* fill_ticks,
-    constant float* coin_settings,
-    int k,
-    int T,
-    int C,
-    int coin
+    bool has_next_fill_tick,
+    int next_fill_tick
 ) {
-    if (fill_ticks == nullptr || k + 1 >= T
-        || k + 1 < int(coin_settings[coin * COIN_COLS + 8])
-        || k + 1 > int(coin_settings[coin * COIN_COLS + 7])) {
+    if (!has_next_fill_tick) {
         return false;
     }
-    int offset = ((k + 1) * C + coin) * 4;
-    if (!(finite_positive(bars[offset])
-            && finite_positive(bars[offset + 1])
-            && finite_positive(bars[offset + 2]))) {
-        return false;
-    }
-    int ticks = ((k + 1) * C + coin) * 2;
     if (wel_qty > 0.0f && (context.short_side
-            ? wel_ticks > fill_ticks[ticks + 1]
-            : wel_ticks <= fill_ticks[ticks])) {
+            ? wel_ticks > next_fill_tick
+            : wel_ticks <= next_fill_tick)) {
         return true;
     }
     TmCloseGridIterator iterator = tm_close_grid_iterator(context);
     CloseGroup group;
     while (next_tm_close_grid_group(context, iterator, group)) {
         if (context.short_side
-                ? group.ticks > fill_ticks[ticks + 1]
-                : group.ticks <= fill_ticks[ticks]) {
+                ? group.ticks > next_fill_tick
+                : group.ticks <= next_fill_tick) {
             return true;
         }
     }
@@ -762,9 +748,25 @@ inline void prepare_tm_close_admission(
     // cannot fill next bar. Only inactive positions may use the fill hint.
     source.expanded = !source.trailing && (gate_enabled || source.unstuck_policy_enabled);
     if (!source.expanded && !source.trailing) {
+        bool has_next_fill_tick = k + 1 < T
+            && k + 1 >= int(coin_settings[coin * COIN_COLS + 8])
+            && k + 1 <= int(coin_settings[coin * COIN_COLS + 7]);
+        int next_fill_tick = 0;
+        if (has_next_fill_tick) {
+            int offset = ((k + 1) * C + coin) * 4;
+            has_next_fill_tick = finite_positive(bars[offset])
+                && finite_positive(bars[offset + 1])
+                && finite_positive(bars[offset + 2]);
+            if (has_next_fill_tick) {
+                int ticks = ((k + 1) * C + coin) * 2;
+                next_fill_tick = context.short_side
+                    ? fill_ticks[ticks + 1]
+                    : fill_ticks[ticks];
+            }
+        }
         source.expanded = tm_close_ladder_would_expand_next_bar(
             context, source.reducers[0].ticks, source.reducers[0].qty,
-            bars, fill_ticks, coin_settings, k, T, C, coin
+            has_next_fill_tick, next_fill_tick
         );
     }
     if (source.expanded) {
@@ -4062,8 +4064,8 @@ inline void generate_tm_multicoin_side_orders(
     bool market_orders_allowed,
     float market_order_near_touch_fraction,
     ulong one_way_initial_blocked_mask,
-    constant int* fill_ticks = nullptr,
-    int T = 0
+    thread const int* next_fill_ticks = nullptr,
+    ulong next_fill_valid_mask = 0ul
 ) {
     const int C = coin_count;
     const float reentry_qty_multiplier = config.reentry_qty_multiplier;
@@ -4891,9 +4893,12 @@ inline void generate_tm_multicoin_side_orders(
                 market_order_near_touch_fraction,
                 psize[c]
             };
+            bool has_next_fill_tick = next_fill_ticks != nullptr
+                && (next_fill_valid_mask & (1ul << ulong(c))) != 0ul;
+            int next_fill_tick = has_next_fill_tick ? next_fill_ticks[c] : 0;
             bool strategy_closes_expanded = tm_close_ladder_would_expand_next_bar(
                 wel_grid_context, wel_reducer_tick, strategy_wel_reducer_qty,
-                bars, fill_ticks, coin_settings, k, T, C, c
+                has_next_fill_tick, next_fill_tick
             );
             strategy_wel_merged = strategy_closes_expanded
                 && merged_tm_wel_prefix_group(wel_grid_context, merged_wel);
@@ -5642,6 +5647,25 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 filter_by_min_effective_cost_long, account.balance
             );
             }
+            int long_next_fill_ticks[MAX_COINS];
+            ulong long_next_fill_valid_mask = 0ul;
+            if (!close_admission_enabled && k + 1 < T) {
+                for (int c = 0; c < C; ++c) {
+                    if (long_side.psize[c] <= 0.0f
+                        || k + 1 < int(coin_settings[c * COIN_COLS + 8])
+                        || k + 1 > int(coin_settings[c * COIN_COLS + 7])) {
+                        continue;
+                    }
+                    int offset = ((k + 1) * C + c) * 4;
+                    if (finite_positive(bars[offset])
+                        && finite_positive(bars[offset + 1])
+                        && finite_positive(bars[offset + 2])) {
+                        int ticks = ((k + 1) * C + c) * 2;
+                        long_next_fill_ticks[c] = fill_ticks[ticks];
+                        long_next_fill_valid_mask |= (1ul << ulong(c));
+                    }
+                }
+            }
             generate_tm_multicoin_side_orders(
                 long_side, long_config, account,
                 bars, touch_ticks, touch_nearest_ticks,
@@ -5651,7 +5675,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 long_effective_n_positions, long_hsl_mode,
                 close_admission_enabled, market_orders_allowed,
                 market_order_near_touch_fraction, long_one_way_order_blocked_mask,
-                fill_ticks, T
+                long_next_fill_ticks, long_next_fill_valid_mask
             );
         }
         if (short_can_generate) {
@@ -5665,6 +5689,25 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 filter_by_min_effective_cost_short, account.balance
             );
             }
+            int short_next_fill_ticks[MAX_COINS];
+            ulong short_next_fill_valid_mask = 0ul;
+            if (!close_admission_enabled && k + 1 < T) {
+                for (int c = 0; c < C; ++c) {
+                    if (short_side.psize[c] <= 0.0f
+                        || k + 1 < int(coin_settings[c * COIN_COLS + 8])
+                        || k + 1 > int(coin_settings[c * COIN_COLS + 7])) {
+                        continue;
+                    }
+                    int offset = ((k + 1) * C + c) * 4;
+                    if (finite_positive(bars[offset])
+                        && finite_positive(bars[offset + 1])
+                        && finite_positive(bars[offset + 2])) {
+                        int ticks = ((k + 1) * C + c) * 2;
+                        short_next_fill_ticks[c] = fill_ticks[ticks + 1];
+                        short_next_fill_valid_mask |= (1ul << ulong(c));
+                    }
+                }
+            }
             generate_tm_multicoin_side_orders(
                 short_side, short_config, account,
                 bars, touch_ticks, touch_nearest_ticks,
@@ -5674,7 +5717,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_effective_n_positions, short_hsl_mode,
                 close_admission_enabled, market_orders_allowed,
                 market_order_near_touch_fraction, short_one_way_order_blocked_mask,
-                fill_ticks, T
+                short_next_fill_ticks, short_next_fill_valid_mask
             );
         }
 
@@ -6386,6 +6429,28 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             );
             }
 
+            int next_fill_ticks[MAX_COINS];
+            ulong next_fill_valid_mask = 0ul;
+            if (!close_admission_enabled && k + 1 < T) {
+                for (int c = 0; c < C; ++c) {
+                    if (side.psize[c] <= 0.0f
+                        || k + 1 < int(coin_settings[c * COIN_COLS + 8])
+                        || k + 1 > int(coin_settings[c * COIN_COLS + 7])) {
+                        continue;
+                    }
+                    int offset = ((k + 1) * C + c) * 4;
+                    if (finite_positive(bars[offset])
+                        && finite_positive(bars[offset + 1])
+                        && finite_positive(bars[offset + 2])) {
+                        int ticks = ((k + 1) * C + c) * 2;
+                        next_fill_ticks[c] = short_side
+                            ? fill_ticks[ticks + 1]
+                            : fill_ticks[ticks];
+                        next_fill_valid_mask |= (1ul << ulong(c));
+                    }
+                }
+            }
+
             generate_tm_multicoin_side_orders(
                 side, config, account,
                 bars, touch_ticks, touch_nearest_ticks,
@@ -6395,7 +6460,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 effective_n_positions, current_hsl_mode,
                 close_admission_enabled, market_orders_allowed,
                 market_order_near_touch_fraction, 0ul,
-                fill_ticks, T
+                next_fill_ticks, next_fill_valid_mask
             );
         }
 
