@@ -722,16 +722,31 @@ async def _handle_ws(request: web.Request) -> web.StreamResponse:
 
     ws = web.WebSocketResponse(heartbeat=30.0)
     await ws.prepare(request)
-    for message in snapshot_messages:
-        await ws.send_json(message)
     subscription = keys[0] if len(keys) == 1 else None
-    for message in relay.load_recent_messages(subscription):
-        await ws.send_json(message)
     queue = relay.subscribe(subscription)
+    sender_finishing = False
+
+    async def send_messages() -> None:
+        nonlocal sender_finishing
+        try:
+            for message in snapshot_messages:
+                await ws.send_json(message)
+            for message in relay.load_recent_messages(subscription):
+                await ws.send_json(message)
+            while not ws.closed:
+                await ws.send_json(await queue.get())
+        finally:
+            sender_finishing = True
+            await ws.close()
+
+    sender = asyncio.create_task(send_messages())
     try:
-        while not ws.closed:
-            message = await queue.get()
-            await ws.send_json(message)
+        # Keep receive in the request task so aiohttp can service PING, PONG
+        # and CLOSE frames even when the outbound queue is empty.
+        async for _ in ws:
+            pass
+        if sender_finishing:
+            await sender
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -743,6 +758,8 @@ async def _handle_ws(request: web.Request) -> web.StreamResponse:
         logging.info("[monitor-relay] websocket closed for %s: %s", scope, exc)
     finally:
         relay.unsubscribe(queue)
+        sender.cancel()
+        await asyncio.gather(sender, return_exceptions=True)
         await ws.close()
     return ws
 

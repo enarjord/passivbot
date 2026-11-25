@@ -4,7 +4,7 @@
 
 1. The relay is read-only and must not affect bot runtime behavior or trading decisions.
 2. The monitor root on disk remains the source of truth; the relay is a network view over that data.
-3. WebSocket clients must receive a snapshot first, then live-forward event/history messages.
+3. WebSocket clients receive a snapshot first, then recent replay and live event/history updates.
 4. Relay failures must stay contained to the relay process and must not require bot-process changes.
 5. Browser WebSocket requests must have a configured allowed origin before any monitor data is loaded or sent. HTTP Host headers must match configured origin authorities, preventing DNS rebinding. Originless native clients remain supported; these checks are not authentication. Proxy origins are configured explicitly, without trusting forwarded headers.
 
@@ -17,6 +17,11 @@
 5. The poll loop logs relay-side failures and continues; this is acceptable because the relay is observability-only and disk remains authoritative.
 6. Browser focus selection is client-side only. Query params may choose the initial bot/symbol focus, but the dashboard still attaches to the aggregate relay feed.
 7. Dashboard assets are intentionally tiny static files under `src/monitor_dashboard_static/`; keep the browser reader read-only and avoid coupling it to bot internals.
+
+8. Subscribe before sending snapshots and replay so new messages reach the bounded live queue.
+   Replay and queued live delivery may overlap. Queue overflow still requires resync.
+9. The request handler consumes WebSocket control frames while a separate sender publishes messages.
+   A disconnected client releases its subscription even if no new rows are available.
 
 ## Validation
 

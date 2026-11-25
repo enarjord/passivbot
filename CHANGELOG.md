@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Answer WebSocket heartbeats while monitor streams are idle and release subscriptions
+  when their clients disconnect. Buffer live publications during snapshot and replay sends.
+
 - Service completed ordinary plans before the live loop sleeps and recheck plans blocked only
   by account age after the scheduled refresh. Console health reports slow preparation,
   reconciliation stalls and recovery.
