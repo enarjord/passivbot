@@ -336,6 +336,47 @@ inline bool next_tm_close_grid_group(
     return false;
 }
 
+inline bool tm_close_ladder_would_expand_next_bar(
+    thread const TmCloseGridContext& context,
+    int wel_ticks,
+    float wel_qty,
+    constant float* bars,
+    constant int* fill_ticks,
+    constant float* coin_settings,
+    int k,
+    int T,
+    int C,
+    int coin
+) {
+    if (fill_ticks == nullptr || k + 1 >= T
+        || k + 1 < int(coin_settings[coin * COIN_COLS + 8])
+        || k + 1 > int(coin_settings[coin * COIN_COLS + 7])) {
+        return false;
+    }
+    int offset = ((k + 1) * C + coin) * 4;
+    if (!(finite_positive(bars[offset])
+            && finite_positive(bars[offset + 1])
+            && finite_positive(bars[offset + 2]))) {
+        return false;
+    }
+    int ticks = ((k + 1) * C + coin) * 2;
+    if (wel_qty > 0.0f && (context.short_side
+            ? wel_ticks > fill_ticks[ticks + 1]
+            : wel_ticks <= fill_ticks[ticks])) {
+        return true;
+    }
+    TmCloseGridIterator iterator = tm_close_grid_iterator(context);
+    CloseGroup group;
+    while (next_tm_close_grid_group(context, iterator, group)) {
+        if (context.short_side
+                ? group.ticks > fill_ticks[ticks + 1]
+                : group.ticks <= fill_ticks[ticks]) {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline void finalize_tm_close_grid_group(
     thread const TmCloseGridContext& context,
     thread CloseGroup& group
@@ -720,24 +761,11 @@ inline void prepare_tm_close_admission(
     // Risk policy needs the entire current intent, including orders that
     // cannot fill next bar. Only inactive positions may use the fill hint.
     source.expanded = !source.trailing && (gate_enabled || source.unstuck_policy_enabled);
-    if (!source.expanded && !source.trailing && k + 1 < T
-        && k + 1 >= int(coin_settings[coin * COIN_COLS + 8])
-        && k + 1 <= int(coin_settings[coin * COIN_COLS + 7])) {
-        int offset = ((k + 1) * C + coin) * 4;
-        bool next_valid = finite_positive(bars[offset])
-            && finite_positive(bars[offset + 1]) && finite_positive(bars[offset + 2]);
-        if (next_valid) {
-            int ticks = ((k + 1) * C + coin) * 2;
-            CloseGroup wel = source.reducers[0];
-            source.expanded = wel.qty > 0.0f && (context.short_side
-                ? wel.ticks > fill_ticks[ticks + 1] : wel.ticks <= fill_ticks[ticks]);
-            TmCloseGridIterator iterator = tm_close_grid_iterator(context);
-            CloseGroup group;
-            while (!source.expanded && next_tm_close_grid_group(context, iterator, group)) {
-                source.expanded = context.short_side
-                    ? group.ticks > fill_ticks[ticks + 1] : group.ticks <= fill_ticks[ticks];
-            }
-        }
+    if (!source.expanded && !source.trailing) {
+        source.expanded = tm_close_ladder_would_expand_next_bar(
+            context, source.reducers[0].ticks, source.reducers[0].qty,
+            bars, fill_ticks, coin_settings, k, T, C, coin
+        );
     }
     if (source.expanded) {
         CloseGroup merged_wel;
@@ -4033,7 +4061,9 @@ inline void generate_tm_multicoin_side_orders(
     bool close_admission_enabled,
     bool market_orders_allowed,
     float market_order_near_touch_fraction,
-    ulong one_way_initial_blocked_mask
+    ulong one_way_initial_blocked_mask,
+    constant int* fill_ticks = nullptr,
+    int T = 0
 ) {
     const int C = coin_count;
     const float reentry_qty_multiplier = config.reentry_qty_multiplier;
@@ -4826,10 +4856,11 @@ inline void generate_tm_multicoin_side_orders(
         int strategy_grid_rung_limit = strategy_wel_reducer_qty > 0.0f
             ? 499 : 500;
         CloseGroup merged_wel;
-        bool strategy_wel_merged = !trailing_close
+        bool strategy_wel_merged = false;
+        if (!trailing_close
             && strategy_wel_reducer_qty > 0.0f
-            && strategy_grid_psize > 0.0f
-            && merged_tm_wel_prefix_group(TmCloseGridContext{
+            && strategy_grid_psize > 0.0f) {
+            TmCloseGridContext wel_grid_context = TmCloseGridContext{
                 short_side,
                 strategy_grid_psize,
                 pprice[c],
@@ -4859,7 +4890,14 @@ inline void generate_tm_multicoin_side_orders(
                 market_orders_allowed,
                 market_order_near_touch_fraction,
                 psize[c]
-            }, merged_wel);
+            };
+            bool strategy_closes_expanded = tm_close_ladder_would_expand_next_bar(
+                wel_grid_context, wel_reducer_tick, strategy_wel_reducer_qty,
+                bars, fill_ticks, coin_settings, k, T, C, c
+            );
+            strategy_wel_merged = strategy_closes_expanded
+                && merged_tm_wel_prefix_group(wel_grid_context, merged_wel);
+        }
         if (strategy_wel_merged) {
             // Same-tick merge preserves CloseAutoReduceWel* with the combined
             // quantity; the remaining ordinary ladder skips the merged prefix.
@@ -5612,7 +5650,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 k, C, false, long_entries_enabled, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
                 close_admission_enabled, market_orders_allowed,
-                market_order_near_touch_fraction, long_one_way_order_blocked_mask
+                market_order_near_touch_fraction, long_one_way_order_blocked_mask,
+                fill_ticks, T
             );
         }
         if (short_can_generate) {
@@ -5634,7 +5673,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 k, C, true, short_entries_enabled, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
                 close_admission_enabled, market_orders_allowed,
-                market_order_near_touch_fraction, short_one_way_order_blocked_mask
+                market_order_near_touch_fraction, short_one_way_order_blocked_mask,
+                fill_ticks, T
             );
         }
 
@@ -6354,7 +6394,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 k, C, short_side, entries_enabled, tradable_count,
                 effective_n_positions, current_hsl_mode,
                 close_admission_enabled, market_orders_allowed,
-                market_order_near_touch_fraction, 0ul
+                market_order_near_touch_fraction, 0ul,
+                fill_ticks, T
             );
         }
 
