@@ -8721,10 +8721,7 @@ mod core {
                 .diagnostics
                 .loss_gate_blocks
                 .iter()
-                .find(|b| {
-                    b.order_type == OrderType::CloseGridLong
-                        || b.order_type == OrderType::CloseAutoReduceWelLong
-                })
+                .find(|b| b.order_type == OrderType::CloseAutoReduceWelLong)
                 .expect("expected loss-gate diagnostic for fee-inclusive close");
             assert!(block.projected_pnl < 0.0);
             assert!(block.projected_balance_after < block.balance_floor);

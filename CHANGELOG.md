@@ -5,6 +5,11 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Preserve `CloseAutoReduceWelLong` and `CloseAutoReduceWelShort` order types when
+  a Trailing Martingale grid close merges at the same price as a WEL auto-reduce
+  close (in both CPU Rust and GPU replay), so merged WEL reductions retain
+  protective reducer semantics.
+
 - Preserve explicit null values for nullable settings in cleaned configurations
   and optimizer results so runs with automatic population sizing can resume.
 

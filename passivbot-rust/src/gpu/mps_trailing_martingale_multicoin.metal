@@ -217,6 +217,7 @@ struct TmCloseGridIterator {
     float sim_psize;
     int rung;
     int group_index;
+    bool prefix_checked;
     bool have_group;
     CloseGroup pending;
 };
@@ -224,20 +225,10 @@ struct TmCloseGridIterator {
 inline TmCloseGridIterator tm_close_grid_iterator(
     thread const TmCloseGridContext& context
 ) {
-    return {context.psize, 0, 0, false, {0, 0.0f, 0.0f, false}};
+    return {context.psize, 0, 0, false, false, {0, 0.0f, 0.0f, false}};
 }
 
-inline void merge_tm_close_grid_prefix(
-    thread const TmCloseGridContext& context,
-    int group_index,
-    thread CloseGroup& group
-) {
-    if (group_index == 0 && group.ticks == context.prefix_merge_tick) {
-        group.qty = round_step(group.qty + context.prefix_merge_qty, context.qty_step);
-    }
-}
-
-inline bool next_tm_close_grid_group(
+inline bool next_tm_close_grid_group_raw(
     thread const TmCloseGridContext& context,
     thread TmCloseGridIterator& iterator,
     thread CloseGroup& group
@@ -297,15 +288,52 @@ inline bool next_tm_close_grid_group(
             round_step(iterator.sim_psize - order_qty, context.qty_step), 0.0f
         );
         if (emit) {
-            merge_tm_close_grid_prefix(context, iterator.group_index++, group);
             return true;
         }
     }
     if (!iterator.have_group) return false;
     group = iterator.pending;
     iterator.have_group = false;
-    merge_tm_close_grid_prefix(context, iterator.group_index++, group);
     return true;
+}
+
+inline bool merged_tm_wel_prefix_group(
+    thread const TmCloseGridContext& context,
+    thread CloseGroup& merged_wel
+) {
+    if (context.prefix_merge_tick <= 0 || !(context.prefix_merge_qty > 0.0f)) {
+        return false;
+    }
+    TmCloseGridIterator iterator = tm_close_grid_iterator(context);
+    CloseGroup first;
+    if (!next_tm_close_grid_group_raw(context, iterator, first)
+        || first.ticks != context.prefix_merge_tick) {
+        return false;
+    }
+    merged_wel = first;
+    merged_wel.qty = round_step(
+        first.qty + context.prefix_merge_qty, context.qty_step
+    );
+    return true;
+}
+
+inline bool next_tm_close_grid_group(
+    thread const TmCloseGridContext& context,
+    thread TmCloseGridIterator& iterator,
+    thread CloseGroup& group
+) {
+    while (next_tm_close_grid_group_raw(context, iterator, group)) {
+        bool is_first = !iterator.prefix_checked;
+        iterator.prefix_checked = true;
+        if (is_first && group.ticks == context.prefix_merge_tick) {
+            // Same-tick merge preserves CloseAutoReduceWel* as the protective
+            // WEL reducer, so this prefix is not emitted as an ordinary close.
+            continue;
+        }
+        ++iterator.group_index;
+        return true;
+    }
+    return false;
 }
 
 inline void finalize_tm_close_grid_group(
@@ -712,12 +740,10 @@ inline void prepare_tm_close_admission(
         }
     }
     if (source.expanded) {
-        TmCloseGridIterator iterator = tm_close_grid_iterator(context);
-        CloseGroup first;
-        if (next_tm_close_grid_group(context, iterator, first)
-            && first.ticks == context.prefix_merge_tick) {
-            // Duplicate-merged WEL inherits the ordinary grid order type.
-            source.reducers[0].qty = 0.0f;
+        CloseGroup merged_wel;
+        if (merged_tm_wel_prefix_group(context, merged_wel)) {
+            // Same-tick merge preserves CloseAutoReduceWel* with the combined quantity.
+            source.reducers[0].qty = merged_wel.qty;
         }
     } else if (source.reducers[0].qty > 0.0f) {
         // Without expansion the strategy exposes its WEL next-close alone.
@@ -4799,63 +4825,47 @@ inline void generate_tm_multicoin_side_orders(
             ? wel_reducer_tick : 0;
         int strategy_grid_rung_limit = strategy_wel_reducer_qty > 0.0f
             ? 499 : 500;
-        bool strategy_wel_merged = false;
-        CloseGroup strategy_first_group;
-        if (!trailing_close && strategy_wel_reducer_qty > 0.0f
-            && strategy_grid_psize > 0.0f) {
-            int strategy_group_count =
-                recursive_grid_close_groups_after_reducer(TmCloseGridContext{
-                    short_side,
-                    strategy_grid_psize,
-                    pprice[c],
-                    balance,
-                    allowed_coin_wel,
-                    touch_down,
-                    touch_up,
-                    touch_nearest_ticks[k * C + c],
-                    as_type<float>(touch_min_qty_bits[k * C + c]),
-                    touch_min_qty_relation[k * C + c],
-                    coin_close_qty_fraction,
-                    coin_close_threshold_base,
-                    coin_close_threshold_we,
-                    coin_close_threshold_v1h,
-                    coin_close_threshold_v1m,
-                    volatility_1h[c],
-                    volatility_1m[c],
-                    qty_step,
-                    price_step,
-                    min_qty,
-                    min_cost,
-                    c_mult,
-                    wel_reducer_tick,
-                    strategy_wel_reducer_qty,
-                    strategy_grid_rung_limit,
-                    price_now,
-                    market_orders_allowed,
-                    market_order_near_touch_fraction,
-                    psize[c]
-                }, 0, strategy_first_group);
-            strategy_wel_merged = strategy_group_count > 0
-                && strategy_first_group.ticks == wel_reducer_tick;
-        }
+        CloseGroup merged_wel;
+        bool strategy_wel_merged = !trailing_close
+            && strategy_wel_reducer_qty > 0.0f
+            && strategy_grid_psize > 0.0f
+            && merged_tm_wel_prefix_group(TmCloseGridContext{
+                short_side,
+                strategy_grid_psize,
+                pprice[c],
+                balance,
+                allowed_coin_wel,
+                touch_down,
+                touch_up,
+                touch_nearest_ticks[k * C + c],
+                as_type<float>(touch_min_qty_bits[k * C + c]),
+                touch_min_qty_relation[k * C + c],
+                coin_close_qty_fraction,
+                coin_close_threshold_base,
+                coin_close_threshold_we,
+                coin_close_threshold_v1h,
+                coin_close_threshold_v1m,
+                volatility_1h[c],
+                volatility_1m[c],
+                qty_step,
+                price_step,
+                min_qty,
+                min_cost,
+                c_mult,
+                wel_reducer_tick,
+                strategy_wel_reducer_qty,
+                strategy_grid_rung_limit,
+                price_now,
+                market_orders_allowed,
+                market_order_near_touch_fraction,
+                psize[c]
+            }, merged_wel);
         if (strategy_wel_merged) {
-            // The merged order retains the later ordinary-grid type in Rust,
-            // so it is no longer a protective WEL candidate.  Keeping it in
-            // the reconstructed ordinary ladder also lets a larger TWEL
-            // reducer coexist with it exactly as the orchestrator does.
-            wel_reducer_qty = 0.0f;
-            wel_reducer_market = false;
-            close_qty[c] = strategy_first_group.qty;
-            close_tick[c] = strategy_first_group.ticks;
-            close_market[c] = strategy_first_group.market;
-            close_reconstruct_after_reducer[c] = true;
-            close_recursive_mode[c] = true;
-            close_gen_balance[c] = balance;
-            close_gen_allowed_wel[c] = allowed_coin_wel;
-            close_gen_market_price[c] = price_now;
-            close_grid_gen_psize[c] = strategy_grid_psize;
-            close_grid_max_rungs[c] = strategy_grid_rung_limit;
-        } else if (wel_reducer_market) {
+            // Same-tick merge preserves CloseAutoReduceWel* with the combined
+            // quantity; the remaining ordinary ladder skips the merged prefix.
+            wel_reducer_qty = merged_wel.qty;
+        }
+        if (wel_reducer_market && wel_reducer_qty > 0.0f) {
             wel_reducer_qty = resize_market_close_qty(
                 wel_reducer_qty, psize[c], price_now,
                 qty_step, min_qty, min_cost, c_mult
