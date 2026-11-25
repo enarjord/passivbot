@@ -467,7 +467,7 @@ class Owner:
                 try:
                     result = task.result()
                 except (NetworkError, MarketSnapshotUnavailable):
-                    self.quotes.pop(symbol, None)
+                    # A failed refresh does not invalidate a still-fresh quote.
                     continue
                 if not discarded:
                     quotes.update(result)
