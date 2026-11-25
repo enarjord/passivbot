@@ -79,6 +79,21 @@ def test_clean_config_fills_missing_values_from_template():
         assert bounds[key] == [effective, effective]
 
 
+@pytest.mark.parametrize(
+    "section,key",
+    [("optimize", "population_size"), ("backtest", "ew_half_life_days")],
+)
+def test_clean_config_preserves_explicit_null_for_nullable_fields(section, key):
+    assert clean_config({section: {key: None}})[section][key] is None
+    assert clean_config({})[section][key] == get_template_config()[section][key]
+
+
+def test_clean_config_fills_non_nullable_null_from_template():
+    assert clean_config({"optimize": {"iters": None}})["optimize"]["iters"] == (
+        get_template_config()["optimize"]["iters"]
+    )
+
+
 def _mutable_container_ids(node):
     if isinstance(node, dict):
         return {id(node)}.union(*(_mutable_container_ids(value) for value in node.values()))

@@ -872,12 +872,6 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     # from artifacts written before objective_scenario existed.
     old_opt_compare.setdefault("objective_scenario", None)
     new_opt_compare = _resume_subset(new_opt, optimize_keys)
-    # An auto population size resolves at runtime, so a stored concrete value in
-    # the first result record must not invalidate an otherwise identical resume.
-    # Only a pinned population size participates in the compatibility check.
-    if new_opt_compare.get("population_size") is None:
-        old_opt_compare.pop("population_size", None)
-        new_opt_compare.pop("population_size", None)
     _append_resume_section_mismatches(
         mismatches, "optimize", old_opt_compare, new_opt_compare
     )
