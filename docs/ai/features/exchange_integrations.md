@@ -300,6 +300,12 @@ Handling:
    simultaneous strategy exposure.
 4. Require explicit side-disambiguating payloads for order/fill normalization instead of defaulting to long; open orders should carry `posSide`, while fills may use `tradeSide`/`side`/`posMode`.
 
+Classic v2 hedge fills with `tradeSide=open` or `close` identify the position through the wire
+`side` field. Buy identifies a long position and sell identifies a short position. Derive the
+execution direction from the action and position. A one-way liquidation, settlement or ADL buy
+closes a short position and its sell counterpart closes a long. Replay retained Classic executions before reconstructing cached
+positions and trailing anchors. [Bitget Classic contract trade API](https://www.bitget.com/docs/catalog/classic-contract-trade/classic-contract-trade)
+
 ### UTA / Elite hedge-mode order direction
 
 Problem:

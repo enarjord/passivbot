@@ -2579,6 +2579,24 @@ class FakeFetcher(BaseFetcher):
         return events
 
 
+def _restore_cached_bitget_fill_sides(events: List[Dict[str, object]]) -> None:
+    """Recover Classic execution sides before replaying the position ledger."""
+    for event in events:
+        rows = _normalize_raw_field(event.get("raw"))
+        if len(rows) != 1 or not isinstance(rows[0].get("data"), dict):
+            raise FillEventCacheContractError("cached Bitget fill needs one source execution")
+        row = rows[0]["data"]
+        source = rows[0].get("source")
+        if source in {"uta_fills", "legacy"} and str(row.get("execId") or "") == event["id"]:
+            continue
+        if source not in {"fill_history", "legacy"} or str(row.get("tradeId") or "") != event["id"]:
+            raise FillEventCacheContractError("cached Bitget fill has no matching Classic execution")
+        try:
+            event["side"], event["position_side"] = deduce_side_pside(row)
+        except ValueError as exc:
+            raise FillEventCacheContractError("cached Bitget Classic fill has ambiguous sides") from exc
+
+
 class BitgetFetcher(BaseFetcher):
     """Fetches and enriches fill events from Bitget."""
 
@@ -3979,6 +3997,8 @@ class FillEventsManager:
                 payload = [ev.to_dict() for ev in self._events]
                 if self.exchange.lower() == "hyperliquid":
                     payload = _expand_hyperliquid_coalesced_events(payload)
+                elif self.exchange.lower() == "bitget":
+                    _restore_cached_bitget_fill_sides(payload)
                 for raw in payload:
                     self._apply_fee_policy(raw)
                 ensure_qty_signage(payload)
