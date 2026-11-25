@@ -210,8 +210,10 @@ def deduce_side_pside(fill: dict) -> tuple[str, str]:
     def _pside_from_open_side(side: str) -> str:
         return "long" if side == "buy" else "short"
 
-    def _pside_from_close_side(side: str) -> str:
-        return "short" if side == "buy" else "long"
+    def _one_way_close(side: str, pside: str) -> tuple[str, str]:
+        if (raw_side and raw_side != side) or (raw_pside and raw_pside != pside):
+            raise FillEventDataError("Bitget Classic forced close has contradictory sides")
+        return side, pside
 
     # Normalize hedge mode strings first.
     if pos_mode == "hedge_mode":
@@ -219,18 +221,17 @@ def deduce_side_pside(fill: dict) -> tuple[str, str]:
             return _canonical("sell", "long")
         if "close_short" in trade_side:
             return _canonical("buy", "short")
-        if trade_side == "open":
+        if trade_side in {"open", "close"}:
+            # In Classic hedge mode the wire side identifies the position for both actions.
+            pside = raw_pside
             if raw_side in {"buy", "sell"}:
-                return _canonical(raw_side, _pside_from_open_side(raw_side))
-            if raw_pside:
-                return _canonical(_open_side(raw_pside), raw_pside)
-            raise ValueError(_ambiguous_bitget_fill_message(fill))
-        if trade_side == "close":
-            if raw_side in {"buy", "sell"}:
-                return _canonical(raw_side, _pside_from_close_side(raw_side))
-            if raw_pside:
-                return _canonical(_close_side(raw_pside), raw_pside)
-            raise ValueError(_ambiguous_bitget_fill_message(fill))
+                wire_pside = _pside_from_open_side(raw_side)
+                if pside and pside != wire_pside:
+                    raise FillEventDataError("Bitget Classic hedge fill has contradictory position sides")
+                pside = wire_pside
+            if not pside or (raw_side and raw_side not in {"buy", "sell"}):
+                raise FillEventDataError(_ambiguous_bitget_fill_message(fill))
+            return (_open_side(pside) if trade_side == "open" else _close_side(pside)), pside
         if "long" in trade_side:
             return _canonical("buy", "long")
         if "short" in trade_side:
@@ -240,22 +241,16 @@ def deduce_side_pside(fill: dict) -> tuple[str, str]:
         raise ValueError(_ambiguous_bitget_fill_message(fill))
 
     # One-way mode ("single") encodes direction explicitly.
-    if "reduce_buy_single" in trade_side:
-        return _canonical("buy", "long")
-    if "reduce_sell_single" in trade_side:
-        return _canonical("sell", "short")
-    if "burst_buy_single" in trade_side:
-        return _canonical("buy", "long")
-    if "burst_sell_single" in trade_side:
-        return _canonical("sell", "short")
-    if "delivery_buy_single" in trade_side:
-        return _canonical("buy", "long")
-    if "delivery_sell_single" in trade_side:
-        return _canonical("sell", "short")
-    if "dte_sys_adl_buy_in_single_side_mode" in trade_side:
-        return _canonical("buy", "long")
-    if "dte_sys_adl_sell_in_single_side_mode" in trade_side:
-        return _canonical("sell", "short")
+    if trade_side in {
+        "reduce_buy_single", "burst_buy_single", "delivery_buy_single",
+        "dte_sys_adl_buy_in_single_side_mode",
+    }:
+        return _one_way_close("buy", "short")
+    if trade_side in {
+        "reduce_sell_single", "burst_sell_single", "delivery_sell_single",
+        "dte_sys_adl_sell_in_single_side_mode",
+    }:
+        return _one_way_close("sell", "long")
     if "buy_single" in trade_side:
         return _canonical("buy", "long")
     if "sell_single" in trade_side:

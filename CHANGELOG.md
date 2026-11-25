@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Correct Bitget Classic hedge closes and one-way forced closes so position sizes and
+  trailing confirmation follow the affected position. Reconstruct cached fills from retained
+  exchange executions on startup.
+
 - Label pre-submit live order summaries as create candidates, including market orders.
   Use execution outcomes to see which orders were acknowledged, skipped, or deferred.
 
