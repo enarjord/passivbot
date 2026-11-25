@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Normalize derived Hyperliquid balances to eight decimals so rounding noise
+  does not invalidate otherwise unchanged ordinary plans.
+
 - Service completed ordinary plans before the live loop sleeps and recheck plans blocked only
   by account age after the scheduled refresh. Console health reports slow preparation,
   reconciliation stalls and recovery.
