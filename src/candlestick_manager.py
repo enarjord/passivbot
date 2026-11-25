@@ -6652,6 +6652,7 @@ class CandlestickManager:
         on_batch: Optional[Callable[[np.ndarray], None]] = None,
         raise_on_partial_empty_page: bool = False,
         single_page: bool = False,
+        seed_cold_okx_hourly_tail: bool = False,
     ) -> np.ndarray:
         """Fetch OHLCV from `since_ms` up to but excluding `end_exclusive_ms`.
 
@@ -6722,6 +6723,21 @@ class CandlestickManager:
                 symbol, since, use_limit, end_exclusive_ms=end_excl, tf=tf_norm,
                 **({"retry": False} if single_page else {}),
             )
+            tail_probe = False
+            if (
+                not page and seed_cold_okx_hourly_tail and not single_page and pages == 0
+            ):
+                # CCXT caps OKX trade candles at 300 per page and bounds the
+                # request from since. A cold window can start before listing.
+                tail_limit = min(300, use_limit)
+                tail_since = end_excl - tail_limit * period_ms
+                if tail_since > since:
+                    since = tail_since
+                    tail_probe = True
+                    page = await self._ccxt_fetch_ohlcv_once(
+                        symbol, since, tail_limit, end_exclusive_ms=end_excl,
+                        tf=tf_norm, retry=False,
+                    )
             if not page:
                 if (
                     raise_on_partial_empty_page
@@ -6947,7 +6963,7 @@ class CandlestickManager:
                 )
                 break
             last_ts = int(arr[-1]["ts"])  # inclusive last
-            if single_page or last_ts >= end_excl - period_ms:
+            if single_page or tail_probe or last_ts >= end_excl - period_ms:
                 break
             # Throttled progress logs (INFO) for long-running paginated fetches
             try:
@@ -8578,6 +8594,16 @@ class CandlestickManager:
 
                     fetched_ranges = []
                     for span_start, span_end in fetch_spans:
+                        pagination_options = {}
+                        if (
+                            exid == "okx"
+                            and period_ms == 60 * ONE_MIN_MS
+                            and span_end == finalized_end
+                            and not strict
+                            and max_age_ms != 0
+                            and (disk_arr is None or not disk_arr.size)
+                        ):
+                            pagination_options["seed_cold_okx_hourly_tail"] = True
                         persisted_batches = False
                         try:
                             batch = await self._fetch_ohlcv_paginated(
@@ -8587,6 +8613,7 @@ class CandlestickManager:
                                 timeframe=out_tf,
                                 on_batch=_persist_tf_batch,
                                 raise_on_partial_empty_page=max_age_ms == 0,
+                                **pagination_options,
                             )
                         except TypeError:
                             batch = await self._fetch_ohlcv_paginated(
