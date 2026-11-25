@@ -170,3 +170,67 @@ def test_last_write_survives_retry_cache_pruning(monkeypatch):
     reconciler.add_to_recent_order_cancellations(bot, {'id': 'cancel'})
     bot.recent_order_cancellations.clear()
     assert readiness_payload(bot, 1801000)['last_write_age_ms'] == 900000
+
+
+def test_ordinary_progress_alert_requires_continued_cycles_and_reports_recovery(caplog):
+    from live.console_health import (
+        observe_ordinary_acceptance,
+        observe_ordinary_outer_cycle,
+        ordinary_progress_payload,
+    )
+    from live.planning_gates import log_staged_execution_defer
+
+    caplog.set_level("INFO")
+    bot = SimpleNamespace(
+        _format_staged_execution_defer_message=lambda details: "defer"
+    )
+    assert ordinary_progress_payload(bot, 1000) == {}
+    observe_ordinary_outer_cycle(bot, 1000, accepted=False)
+    # Elapsed wall time alone is not evidence that cycles are still advancing.
+    observe_ordinary_outer_cycle(bot, 501_000, accepted=False)
+    observe_ordinary_outer_cycle(bot, 701_000, accepted=False)
+    assert not ordinary_progress_payload(bot, 801_000)["ordinary_progress"]["stalled"]
+    log_staged_execution_defer(
+        bot,
+        {
+            "context": "rust order calculation",
+            "defer_reason": "captured_planning_snapshot_unavailable",
+            "missing": ["market_snapshot", "secret"],
+            "exception": "secret",
+        },
+    )
+    log_staged_execution_defer(
+        bot,
+        {
+            "context": "protective rust order calculation",
+            "defer_reason": "current_account_inputs_unavailable",
+            "missing": ["balance"],
+        },
+    )
+    observe_ordinary_outer_cycle(bot, 801_000, accepted=False)
+    observe_ordinary_outer_cycle(bot, 811_000, accepted=False)
+    progress = ordinary_progress_payload(bot, 811_300)
+    assert progress["ordinary_progress"] == {
+        "last_accepted_age_ms": None,
+        "last_outer_cycle_age_ms": 300,
+        "without_acceptance_ms": 310_000,
+        "stalled": True,
+        "last_defer": {
+            "phase": "rust_order_calculation",
+            "reason": "captured_planning_snapshot_unavailable",
+            "missing_surfaces": ["market_snapshot"],
+        },
+    }
+    assert caplog.text.count("ordinary planning stalled") == 1
+    assert "missing=market_snapshot" in caplog.text
+    assert "secret" not in caplog.text
+    assert "ordinary_progress=stalled/310.0s" in format_periodic_health_summary(
+        progress
+    )
+    observe_ordinary_acceptance(bot, 812_000)
+    observe_ordinary_acceptance(bot, 813_000)
+    assert caplog.text.count("ordinary planning recovered") == 1
+    progress = ordinary_progress_payload(bot, 814_000)
+    assert progress["ordinary_progress"]["last_defer"] is None
+    assert not progress["ordinary_progress"]["stalled"]
+    assert "ordinary_accepted_age=1.0s" in format_periodic_health_summary(progress)

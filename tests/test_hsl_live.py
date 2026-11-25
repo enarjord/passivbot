@@ -415,16 +415,8 @@ def test_hsl_wave_is_not_execution_authority_after_inputs_change(monkeypatch, ch
     assert not instance.admit(order)
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-@pytest.mark.parametrize("raw_balance_drift", [False, True])
-@pytest.mark.parametrize("execution", ["direct", "owner_refresh_drift"])
-async def test_hsl_green_can_plan_entries_without_hsl_history(
-    tmp_path, monkeypatch, mode, raw_balance_drift, execution
-):
-    import asyncio
-
-    user = f"fake_hsl_green_{tmp_path.name}"
+async def _run_fake_entry_case(tmp_path, monkeypatch, mode, hsl_enabled, exercise):
+    user = f"fake_entry_{tmp_path.name}"
     _cleanup_fake_user_state(user)
     legacy = prepare_config(
         load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
@@ -437,7 +429,7 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
     cfg["live"]["approved_coins"]["long"] = ["BTC"]
     cfg["live"]["pnls_max_lookback_days"] = 1.0
     policy = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
-    policy.update(enabled=True, ema_span_minutes=1.0, red_threshold=0.5)
+    policy.update(enabled=hsl_enabled, ema_span_minutes=1.0, red_threshold=0.5)
     cfg = {key: value for key, value in cfg.items() if not key.startswith("_")}
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(cfg))
@@ -449,6 +441,31 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
     scenario["run_initial_cycle"] = True
     scenario_path = tmp_path / "scenario.hjson"
     scenario_path.write_text(hjson.dumps(scenario))
+    monkeypatch.setattr(runner, "_run_fake_cycle", exercise)
+    try:
+        args = argparse.Namespace(
+            config=str(config_path),
+            scenario=str(scenario_path),
+            user=user,
+            max_steps=1,
+            output_dir=str(tmp_path),
+            log_level=1,
+            snapshot_each_step=False,
+        )
+        assert await runner._async_main(args) == 0
+    finally:
+        _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("raw_balance_drift", [False, True])
+@pytest.mark.parametrize("execution", ["direct", "owner_refresh_drift"])
+async def test_hsl_green_can_plan_entries_without_hsl_history(
+    tmp_path, monkeypatch, mode, raw_balance_drift, execution
+):
+    import asyncio
+
     completed = []
 
     async def exercise(bot):
@@ -506,21 +523,97 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
         completed.append(True)
         return {"green_entries": True}
 
-    monkeypatch.setattr(runner, "_run_fake_cycle", exercise)
-    try:
-        args = argparse.Namespace(
-            config=str(config_path),
-            scenario=str(scenario_path),
-            user=user,
-            max_steps=1,
-            output_dir=str(tmp_path),
-            log_level=1,
-            snapshot_each_step=False,
-        )
-        assert await runner._async_main(args) == 0
-        assert completed
-    finally:
-        _cleanup_fake_user_state(user)
+    await _run_fake_entry_case(tmp_path, monkeypatch, mode, True, exercise)
+    assert completed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "expired",
+        "balance_changed",
+        "position_changed",
+        "refresh_failed",
+        "pending_before_refresh",
+        "during_refresh",
+        "expired_again",
+    ],
+)
+async def test_disabled_hsl_ordinary_plan_handoff(tmp_path, monkeypatch, case):
+    import asyncio
+
+    observed = []
+
+    async def exercise(bot):
+        instance = hsl_live.owner(bot)
+        assert not hsl_live.runtime.enabled(bot)
+        assert await bot.refresh_protective_authoritative_state(require_balance=True)
+        plan = await instance._ordinary_plan()
+        assert plan is not None and plan[1]
+        ledger = bot._ensure_freshness_ledger()
+        for surface in ("balance", "positions", "open_orders"):
+            ledger.surfaces[surface].updated_ms -= 24_000
+        pending = instance._ordinary = asyncio.get_running_loop().create_future()
+        if case != "during_refresh":
+            pending.set_result(plan)
+        if case == "pending_before_refresh":
+            bot._request_authoritative_confirmation({"open_orders"})
+        refresh = bot.refresh_protective_authoritative_state
+
+        async def confirm(**kwargs):
+            if case == "refresh_failed":
+                return False
+            if case == "balance_changed":
+                bot.cca.balance_total += 0.001
+            updated = await refresh(**kwargs)
+            if case == "position_changed":
+                bot.positions[bot.active_symbols[0]]["long"]["size"] = 1.0
+            if case == "expired_again":
+                ledger.surfaces["balance"].updated_ms -= 24_000
+            if case == "during_refresh":
+                pending.set_result(plan)
+            return updated
+
+        monkeypatch.setattr(bot, "refresh_protective_authoritative_state", confirm)
+        result = await instance.cycle()
+        expected_write = case in {"expired", "during_refresh"}
+        assert result["ordinary_completed"]
+        assert result["ordinary_executed"] is expected_write
+        writes = [
+            call
+            for call in bot.cca.export_request_log()
+            if call["method"] == "create_order"
+        ]
+        assert len(writes) == int(expected_write)
+        observed.append(result)
+        return result
+
+    await _run_fake_entry_case(tmp_path, monkeypatch, "coin", False, exercise)
+    assert len(observed) == 1
+    artifact = next(tmp_path.rglob("live_events.json"))
+    events = json.loads(artifact.read_text())
+    if observed[0]["updated"]:
+        cycles = [row["data"] for row in events if row["event_type"] == "cycle.completed"]
+        assert cycles[-1]["ordinary_executed"] is observed[0]["ordinary_executed"]
+    if not observed[0]["ordinary_executed"]:
+        expected_reason = {
+            "expired_again": "account_surface_expired",
+            "balance_changed": "raw_balance_changed",
+            "position_changed": "positions_changed",
+            "refresh_failed": "current_account_refresh_unavailable",
+            "pending_before_refresh": "current_account_inputs_unavailable",
+        }[case]
+        discards = [row["data"] for row in events if row["event_type"] == "planning.unavailable"
+                    and row["data"].get("defer_reason") == expected_reason]
+        assert len(discards) == 1
+        console = artifact.with_name("fake_live.log").read_text()
+        assert f"ordinary after_protection: {expected_reason}" in console
+        if case == "expired_again":
+            surface = discards[0]["invalid"]["balance"][0]
+            assert surface["age_ms"] >= 24_000
+            assert surface["max_age_ms"] == 10_000
+
 
 
 @pytest.mark.asyncio
@@ -1491,7 +1584,7 @@ async def test_next_planner_cannot_run_while_previous_plan_is_writing():
         live_value=lambda key: 0.05,
     )
     instance = hsl_live.Owner(bot)
-    instance._account_matches = lambda *args: True
+    instance._account_mismatch_reason = lambda *args: None
     instance.remember_position = lambda: None
     instance.schedule_history = instance.schedule_sources = lambda: None
     instance.protect = noop

@@ -11,6 +11,11 @@ from uuid import uuid4
 
 from live import hsl_runtime as runtime
 from live import position_fill_sync
+from live.console_health import (
+    observe_ordinary_acceptance,
+    observe_ordinary_outer_cycle,
+)
+from live.events import run_diagnostic_step
 from live.diagnostic_safety import log_process_recovery
 from live.market_snapshot import MarketSnapshotUnavailable
 
@@ -197,37 +202,89 @@ class Owner:
         record(self.bot, wave)
 
     def _account_matches(self, wave, now):
+        return self._account_mismatch_reason(wave, now) is None
+
+    def _account_mismatch_reason(self, wave, now):
         bot = self.bot
-        if self._shutdown_requested() or self._refresh_lock.locked():
-            return False
+        if self._shutdown_requested():
+            return "shutdown"
+        if self._refresh_lock.locked():
+            return "account_refresh_in_progress"
         if (
             wave.required_fills is not None
             and wave.required_fills != self.required_fill_facts()
         ):
-            return False
+            return "required_fill_facts_changed"
+        # Expiry is retryable only if every other admission condition passed.
         ledger = bot._ensure_freshness_ledger()
         pending = getattr(bot, "_authoritative_pending_confirmations", {})
+        max_age = bot._live_market_snapshot_max_age_ms()
+        expired = False
         for surface in ("balance", "positions", "open_orders"):
             state = ledger.surfaces[surface]
             if (
-                state.updated_ms <= 0
-                or not 0
-                <= now - state.updated_ms
-                <= bot._live_market_snapshot_max_age_ms()
+                not 0 < state.updated_ms <= now
                 or int(pending.get(surface, 0)) > state.epoch
             ):
-                return False
-        # Every write requires the current account generation. Changed size/basis
-        # requires replanning, including for a panic close.
-        if (
-            wave.generation != int(getattr(bot, "_account_invalidation_generation", 0))
-            or wave.positions != runtime.observe_positions(bot).payload
-            or wave.open_orders != runtime.observe_open_orders(bot)
-        ):
-            return False
+                return "current_account_inputs_unavailable"
+            if now - state.updated_ms > max_age:
+                expired = True
+        if wave.generation != int(getattr(bot, "_account_invalidation_generation", 0)):
+            return "account_generation_changed"
+        if wave.positions != runtime.observe_positions(bot).payload:
+            return "positions_changed"
+        if wave.open_orders != runtime.observe_open_orders(bot):
+            return "open_orders_changed"
         if wave.balance != bot.get_raw_balance():
-            return False
-        return True
+            return "raw_balance_changed"
+
+        return "account_surface_expired" if expired else None
+
+    def _defer_ordinary(
+        self, reason, *, phase, changed=(), details=None, gate_ms=None, plan=None
+    ):
+        def report():
+            bot = self.bot
+            ledger = bot._ensure_freshness_ledger()
+            payload = dict(details or {})
+            payload.update(
+                context=f"ordinary {phase}: {reason}",
+                defer_reason=reason,
+                epoch=ledger.epoch,
+            )
+            invalid = dict(payload.get("invalid", {}))
+            if changed:
+                invalid.update({fact: [{"reason": "changed"}] for fact in changed})
+            if plan is not None:
+                invalid["ordinary_plan"] = [
+                    dict(reason=reason, cancels=len(plan[0]), creates=len(plan[1]))
+                ]
+            if gate_ms is not None and reason in {
+                "account_surface_expired",
+                "current_account_inputs_unavailable",
+            }:
+                max_age = bot._live_market_snapshot_max_age_ms()
+                pending = getattr(bot, "_authoritative_pending_confirmations", {})
+                for name in ("balance", "positions", "open_orders"):
+                    state = ledger.surfaces[name]
+                    age = gate_ms - state.updated_ms if state.updated_ms > 0 else None
+                    if (
+                        age is None
+                        or not 0 <= age <= max_age
+                        or pending.get(name, 0) > state.epoch
+                    ):
+                        invalid[name] = [
+                            dict(reason=reason, age_ms=age, max_age_ms=max_age)
+                        ]
+                payload["missing"] = [
+                    name
+                    for name in ("balance", "positions", "open_orders")
+                    if name in invalid
+                ]
+            payload["invalid"] = invalid
+            bot._log_staged_execution_defer(payload)
+
+        run_diagnostic_step("report ordinary plan deferral", report)
 
     def admit(self, order):
         from utils import utc_ms
@@ -583,38 +640,56 @@ class Owner:
             self.required_fill_facts(),
         )
 
-    @staticmethod
-    def same_account_facts(before, after):
-        # Observation timestamps may advance on a confirming unchanged read.
-        # Changing facts or invalidation still void the entire prepared universe.
-        return (
-            before[0].payload == after[0].payload
-            and before[0].generation == after[0].generation
-            and before[1:] == after[1:]
+    def _ordinary_account_fact_changes(self, before):
+        after = self.account_facts()
+        # Confirming reads can advance timestamps without changing the facts.
+        comparisons = (
+            ("positions", before[0].payload, after[0].payload),
+            ("account_generation", before[0].generation, after[0].generation),
+            ("open_orders", before[1], after[1]),
+            ("strategy_balance", before[2], after[2]),
+            ("required_fills", before[3], after[3]),
+        )
+        return tuple(
+            fact for fact, previous, current in comparisons if previous != current
         )
 
     async def _ordinary_plan(self):
         bot = self.bot
         account = self.account_facts()
         await bot.prepare_planning_universe()
-        if not self.same_account_facts(account, self.account_facts()):
+        if changed := self._ordinary_account_fact_changes(account):
+            self._defer_ordinary(
+                "account_facts_changed", phase="preparation", changed=changed
+            )
             return None
         if not await bot.refresh_market_state_if_needed():
+            self._defer_ordinary("market_inputs_unavailable", phase="preparation")
             return None
-        if not self.same_account_facts(account, self.account_facts()):
+        if changed := self._ordinary_account_fact_changes(account):
+            self._defer_ordinary(
+                "account_facts_changed", phase="preparation", changed=changed
+            )
             return None
-        ready, _ = bot._staged_execution_ready_state(
+        ready, details = bot._staged_execution_ready_state(
             include_market_snapshot=False, context="hsl ordinary planning"
         )
         if not ready:
+            self._defer_ordinary(
+                "staged_inputs_unavailable", phase="preparation", details=details
+            )
             return None
         cancels, creates = await bot.calc_orders_to_cancel_and_create()
-        if not self.same_account_facts(account, self.account_facts()):
+        if changed := self._ordinary_account_fact_changes(account):
+            self._defer_ordinary(
+                "account_facts_changed", phase="after_reconciliation", changed=changed
+            )
             return None
         # Preparation may span confirming raw-balance changes. Ordinary Rust
         # risk consumes the latest raw balance at its actual calculation, so
         # reconciliation and submission must retain that exact observation.
         if bot._hsl_planning_wave.balance != bot.get_raw_balance():
+            self._defer_ordinary("raw_balance_changed", phase="after_reconciliation")
             return None
         # Empty plans need the same immutable receipt as nonempty plans. An
         # order dictionary is not the authority for the completed calculation.
@@ -706,6 +781,40 @@ class Owner:
                 task.cancel()
                 task.add_done_callback(_retrieve_on_shutdown)
 
+    def _collect_completed_ordinary(self, now_ms):
+        task, self._ordinary = self._ordinary, None
+        started_ms, self._ordinary_started_ms = self._ordinary_started_ms, None
+        elapsed_ms = None if started_ms is None else max(0, now_ms - started_ms)
+        try:
+            return task.result(), elapsed_ms
+        except RuntimeError as exc:
+            handled, details = self.bot._handle_staged_execution_precondition_error(exc)
+            if not handled:
+                raise
+            self.bot._log_staged_execution_defer(details)
+            return None, elapsed_ms
+
+    async def _service_ordinary(self, plan, timings, *, now):
+        from time import perf_counter
+        from utils import utc_ms
+
+        bot = self.bot
+        cancels, creates, snapshot, wave = plan
+        reason = self._account_mismatch_reason(wave, now)
+        if reason is not None:
+            return reason
+        bot._current_planning_snapshot = snapshot
+        started = perf_counter()
+        await bot.execute_order_plan_to_exchange(cancels, creates)
+        if not self._shutdown_requested():
+            run_diagnostic_step(
+                "record ordinary acceptance",
+                lambda: observe_ordinary_acceptance(bot, int(utc_ms())),
+            )
+            log_process_recovery(bot)
+        timings["ordinary_execute"] += int((perf_counter() - started) * 1000)
+        return None
+
     async def cycle(self):
         """One finite production pass; offline scenario stepping uses this same owner.
 
@@ -727,6 +836,8 @@ class Owner:
 
         started_ms = int(utc_ms())
         completed_cycle = False
+        ordinary_executed = False
+        retry_after_refresh = False
         timings = dict(authoritative=0, protection=0, ordinary_execute=0)
         cycle_id = None
         ordinary_elapsed_ms = None
@@ -740,21 +851,9 @@ class Owner:
             completed_plan = self._ordinary is not None and self._ordinary.done()
             # Retrieve completed failures before any fallible account refresh.
             if completed_plan:
-                if self._ordinary_started_ms is not None:
-                    ordinary_elapsed_ms = max(
-                        0, int(utc_ms()) - self._ordinary_started_ms
-                    )
-                self._ordinary_started_ms = None
-                completed, self._ordinary = self._ordinary, None
-                try:
-                    plan = completed.result()
-                except RuntimeError as exc:
-                    handled, details = bot._handle_staged_execution_precondition_error(
-                        exc
-                    )
-                    if not handled:
-                        raise
-                    bot._log_staged_execution_defer(details)
+                plan, ordinary_elapsed_ms = self._collect_completed_ordinary(
+                    int(utc_ms())
+                )
             protective_work = False
             if self._shutdown_requested():
                 return dict(
@@ -776,28 +875,30 @@ class Owner:
                         ordinary_executed=False,
                         protective_work=protective_work,
                     )
-                cancels, creates, snapshot, wave = plan
-                if self._account_matches(wave, int(utc_ms())):
-                    bot._current_planning_snapshot = snapshot
-                    phase_started = perf_counter()
-                    await bot.execute_order_plan_to_exchange(cancels, creates)
-                    if not self._shutdown_requested():
-                        log_process_recovery(bot)
-                    timings["ordinary_execute"] += int(
-                        (perf_counter() - phase_started) * 1000
-                    )
-                else:
-                    plan = None
+                gate_ms = int(utc_ms())
+                reason = await self._service_ordinary(plan, timings, now=gate_ms)
+                ordinary_executed = reason is None
+                if reason is not None:
+                    retry_after_refresh = reason == "account_surface_expired"
+                    if not retry_after_refresh:
+                        self._defer_ordinary(
+                            reason, phase="after_protection", plan=plan, gate_ms=gate_ms
+                        )
             phase_started = perf_counter()
-            refreshed = await bot.refresh_protective_authoritative_state(
-                require_balance=True
-            )
+            refreshed = False
+            try:
+                refreshed = await bot.refresh_protective_authoritative_state(require_balance=True)
+            finally:
+                if retry_after_refresh and not refreshed and not self._shutdown_requested():
+                    self._defer_ordinary(
+                        "current_account_refresh_unavailable", phase="after_protection", plan=plan
+                    )
             timings["authoritative"] = int((perf_counter() - phase_started) * 1000)
             if not refreshed or self._shutdown_requested():
                 return dict(
                     updated=False,
                     ordinary_completed=completed_plan,
-                    ordinary_executed=plan is not None,
+                    ordinary_executed=ordinary_executed,
                     protective_work=protective_work,
                 )
             self.remember_position()
@@ -811,6 +912,31 @@ class Owner:
                 await self.protect(deferred_reports=reports) or protective_work
             )
             timings["protection"] += int((perf_counter() - phase_started) * 1000)
+            # Recheck a plan blocked only by expiry, or hand off a task that
+            # just finished. Both use the protection pass just completed and
+            # the same receipt and write admission checks.
+            ready_at_tail = (
+                not completed_plan
+                and self._ordinary is not None
+                and self._ordinary.done()
+            )
+            if (
+                retry_after_refresh or ready_at_tail
+            ) and not self._shutdown_requested():
+                self.poll_inputs()  # Surface completed input failures before any write.
+                if ready_at_tail:
+                    completed_plan = True
+                    plan, ordinary_elapsed_ms = self._collect_completed_ordinary(
+                        int(utc_ms())
+                    )
+                if plan is not None:
+                    gate_ms = int(utc_ms())
+                    reason = await self._service_ordinary(plan, timings, now=gate_ms)
+                    ordinary_executed = reason is None
+                    if reason is not None:
+                        self._defer_ordinary(
+                            reason, phase="after_protection", plan=plan, gate_ms=gate_ms
+                        )
             self.schedule_account_reporting()
             if self._ordinary is None and not self._shutdown_requested():
                 self._ordinary_started_ms = int(utc_ms())
@@ -819,7 +945,7 @@ class Owner:
             return dict(
                 updated=True,
                 ordinary_completed=completed_plan,
-                ordinary_executed=plan is not None,
+                ordinary_executed=ordinary_executed,
                 protective_work=protective_work,
             )
         except InvalidNonce:
@@ -839,6 +965,12 @@ class Owner:
             for wave in reports:
                 self.report(wave)
             if completed_cycle:
+                run_diagnostic_step(
+                    "record ordinary cycle progress",
+                    lambda: observe_ordinary_outer_cycle(
+                        bot, int(utc_ms()), accepted=ordinary_executed
+                    ),
+                )
                 try:
                     from live.event_emitters import emit_live_cycle_completed
 
@@ -848,6 +980,7 @@ class Owner:
                         loop_start_ms=started_ms,
                         timings_ms=timings,
                         execution_owner="hsl",
+                        ordinary_executed=ordinary_executed,
                         ordinary_pending=self._ordinary is not None
                         and not self._ordinary.done(),
                         ordinary_prepare_elapsed_ms=ordinary_elapsed_ms,

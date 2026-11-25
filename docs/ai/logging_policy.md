@@ -245,6 +245,11 @@ activity remain in the durable health event and dedicated action/position record
 summaries split into bounded, individually timestamped records. Diagnostic projection failure must
 leave the base heartbeat visible with readiness unavailable.
 
+The heartbeat reports the age of the last ordinary plan accepted by the executor. Five minutes
+of continuing outer cycles without acceptance produces one warning with the latest known defer
+reason. The next accepted plan, including an empty reconciliation, produces one recovery line.
+Exchange writes have their own outcomes.
+
 A prior GREEN/inactive HSL observation may expire immediately before an unchanged fresh observation
 replaces it. The producer marks only this proven replacement case; both events retain their durable
 severity and freshness. Its console projection uses DEBUG and a bounded five-minute aggregate of

@@ -70,6 +70,10 @@ is shared with all trading and remains bounded; missing history cannot indefinit
 permission is never a substitute for current facts before a write. Ordinary strategy,
 unstucking and PnL consumers retain their own readiness contracts.
 
+Ordinary work that finishes during the scheduled refresh or protection pass is checked before
+the owner sleeps. A ready plan blocked only by account age gets one recheck after that refresh
+and protection pass. Changed facts, pending confirmations and expired inputs still block writes.
+
 ## Configuration and removal boundary
 
 HSL has one implementation. Old enabled configurations require migration and revalidation

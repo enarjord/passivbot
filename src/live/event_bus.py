@@ -2431,6 +2431,20 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
     pending_age = _data_number(data, "ordinary_pending_age_ms")
     if pending_age is not None:
         parts.append(f"ordinary_pending={pending_age / 1000.:.1f}s")
+    ordinary_progress = data.get("ordinary_progress")
+    if isinstance(ordinary_progress, Mapping):
+        age = _data_number(ordinary_progress, "last_accepted_age_ms")
+        parts.append(
+            f"ordinary_accepted_age={age / 1000.:.1f}s"
+            if age is not None
+            else "ordinary_accepted_age=?"
+        )
+        if ordinary_progress.get("stalled") is True:
+            stalled_for = _data_number(ordinary_progress, "without_acceptance_ms")
+            parts.append(
+                "ordinary_progress=stalled"
+                + (f"/{stalled_for / 1000.:.1f}s" if stalled_for is not None else "")
+            )
     waits = _data_int(data, "trailing_wait_count")
     if waits:
         age = _data_number(data, "trailing_wait_max_ms")
