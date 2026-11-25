@@ -5,6 +5,15 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Refresh `configs/examples/ema_anchor_long.json` with updated EMA Anchor,
+  forager, entry-cooldown, risk (`max_positions: 3`, tighter
+  `we_excess_allowance_fraction: 0.185`), and portfolio loss-gate parameters
+  (`max_realized_drawdown_fraction: 0.002`), raise `minimum_coin_age_days` to
+  `180`, remove `BTW` from the universe and suite subsets, align backtest fill
+  buffer (`0.0005`), min-cost filtering, and cost-stress maker fee (`0.0008`),
+  and broaden optimizer bounds, limits, and search budget (`iters: 8192`,
+  `population_size: 256`).
+
 - Preserve explicit null values for nullable settings in cleaned configurations
   and optimizer results so runs with automatic population sizing can resume.
 
