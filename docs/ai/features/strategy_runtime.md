@@ -587,7 +587,11 @@ CPU backtests mark exact spans still warming from known listing history in
 `rms_directionality_warmup_spans`. Warmup excludes only the affected candidate when ranking
 is required. Adverse cooldown still defers the specific entry branch that needs the score.
 The marker clears once enough closes exist. Closes and protective reducers remain independent.
-Unmarked missing RMS and malformed scores remain fatal.
+Unmarked missing RMS and malformed scores remain fatal. Backtest preparation may accept gaps
+up to `gap_tolerance_ohlcvs_minutes`; live RMS requires a continuous completed-minute window
+with flat synthesis confined to verified no-trade minutes with a known prior close.
+Ranking may use a complete window whose end is within the existing forager age allowance.
+Current-scope cooldown requires the latest completed minute and reads a scope-specific cache.
 The Python output validator evaluates the submitted cooldown inputs through the
 same pure Rust policy, rather than trusting a producer-echoed duration.
 

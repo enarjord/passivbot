@@ -19,6 +19,10 @@ its own version heading. See [release status](docs/releases.md).
   history, so healthy candidates can fill open slots. Live ranking waits for the
   initial candidate refresh pass and reports feature exclusions and sustained
   free slots without entries.
+- Read RMS through the canonical one-minute candle cache. Verified no-trade minutes
+  can contribute zero returns, and deep repair uses venue-sized pages under the
+  forager request budget. The RMS window still spans 20 times the configured EMA span.
+  OKX one-minute requests use the CCXT adapter's 300-candle limit.
 
 - Refresh `configs/examples/ema_anchor_long.json` with updated EMA Anchor,
   forager, entry-cooldown, risk (`max_positions: 3`, tighter

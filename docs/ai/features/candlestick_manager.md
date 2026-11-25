@@ -223,11 +223,27 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
    does not spawn a worker. Existing per-surface budgets, retry delays and full candidate
    cohorts remain authoritative. Shutdown cancels and drains its registered worker;
    an old owner's cancellation must not touch a replacement maintainer registry.
-   RMS forager scoring adds a separate one-minute coverage surface for the full
-   RMS history window. It shares the candidate fetch budget and checks historical
-   gaps even when the WS tail is fresh. Each attempt repairs a bounded, due
-   missing range through the canonical candle store, so the next scan resumes
-   from persisted coverage across retries and restart.
+   Forager RMS reads the canonical completed 1m store with the Rust 20-span
+   history requirement. It synthesizes flat closes only for verified
+   `no_trades` minutes with a contiguous seed close. An unresolved minute
+   breaks the window. Backtest preparation has a separate, configured internal
+   gap tolerance (`backtest.gap_tolerance_ohlcvs_minutes`).
+   Forager ranking can reuse the latest complete window within the candidate
+   staleness allowance. A cache-only ranking read can carry it to a later
+   cutoff without loading the window again when the shared index, runtime
+   tail and gap proofs show that no new minute is available.
+   Current-scope cooldown requires a window through the
+   latest completed minute and has its own cache namespace, even at the same
+   cutoff. Canonical candle and gap corrections invalidate both namespaces.
+   RMS ranking history and the ordinary 1m tail have independent scheduling
+   under the candidate fetch budget. Each history attempt uses a single page
+   sized to the venue and persists through the canonical store without advancing
+   the tail refresh clock. Repair can fetch the missing price seed immediately
+   preceding a verified no-trade run that overlaps the start of the window,
+   even when the seed lies outside the window. With the background candidate maintainer enabled,
+   approved forager candidates read RMS from that store without deep repair
+   in the ordinary planning lane. Subsequent scans resume from persisted
+   coverage across retries and restart.
    This acquisition work is never awaited by the protective lane. Completed-candle health reports
    whether missing minutes are currently refreshable separately
    from raw coverage. Verified internal `no_trades` continuity and unresolved known gaps whose retry
