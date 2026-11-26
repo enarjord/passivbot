@@ -5323,6 +5323,12 @@ class FillEventsManager:
             handle_batch(batch)
 
         events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
+        # Keep durable fills if replay or its checkpoint fails. In that case,
+        # the next load replays them against the coverage actually on disk.
+        self._events = events
+        self._loaded = False
+        proof = self._empty_refresh_proof
+        self._empty_refresh_proof = None
         pnl_observations = list(getattr(self.fetcher, "pnl_observations", []) or [])
         fetched_range = (start_ms, end_ms) if start_ms is not None and end_ms is not None else None
 
@@ -5345,8 +5351,6 @@ class FillEventsManager:
             self.fee_pct_sanity_abs_max,
             flat_replay_start_ms,
         )
-        proof = self._empty_refresh_proof
-        self._empty_refresh_proof = None
         unchanged = bool(
             empty_refresh
             and proof is not None
@@ -5398,6 +5402,7 @@ class FillEventsManager:
             self.cache.mark_covered_start(start_ms)
 
         self._events = events
+        self._loaded = True
         # Retain proof only after all ordinary persistence/checkpoint work succeeds.
         # Losing this cache (including restart) merely performs another full replay.
         if unchanged:
