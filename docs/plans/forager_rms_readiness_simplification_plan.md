@@ -9,7 +9,9 @@ path so a complete window is easier to obtain and keep.
 
 ## Problem Statement
 
-On `v9`, four mechanisms combine:
+This plan records the baseline before [PR #2343](https://github.com/enarjord/passivbot/pull/2343),
+which shipped per-candidate exclusion and the RMS data-path changes on `v9`. The five
+mechanisms below describe that earlier baseline.
 
 1. **Whole-side kill switch (the failure class).**
    In `passivbot-rust/src/orchestrator.rs::build_forager_candidates_into()`, a missing
@@ -38,7 +40,7 @@ On `v9`, four mechanisms combine:
    zero-trade minute inside the window keeps the symbol unavailable until the minute ages out.
 
 4. **Slow repair.**
-   The `"rms"` pseudo-timeframe repair in `src/passivbot.py::refresh_forager_candles()` pages
+   The `"rms"` pseudo-timeframe repair in `src/passivbot.py::_refresh_forager_candidate_candles()` pages
    100 bars at a time (`page_end - 99 * ONE_MIN_MS`) under the shared
    `max_ohlcv_fetches_per_minute` budget. The exchange-side page limit is often 1,000 one-minute
    bars.
@@ -104,9 +106,11 @@ state is kept between cycles.
 **Rust (`passivbot-rust/src/orchestrator.rs`)**
 
 - In `build_forager_candidates_into()`, replace `ranking_unavailable = true` / `out.clear()` with
-  `out[pos] = unavailable_forager_candidate(out[pos].index)`, after the existing
-  `handle_strategy_input_error(...)` classification. Unmarked missing inputs and non-finite or
-  out-of-range scores stay fatal.
+  `out[pos] = unavailable_forager_candidate(out[pos].index)` only for
+  `RmsDirectionalityUnavailable` after the existing `handle_strategy_input_error(...)`
+  classification. Propagate every other error from the RMS lookup, including an unmarked
+  `MissingEma` even if `allow_missing_strategy_inputs` is true. Non-finite and out-of-range
+  scores stay fatal.
 - Backtests share this path. A coin inside `rms_directionality_warmup_spans` is then excluded
   individually instead of deferring the side. With the default `minimum_coin_age_days = 60`,
   which is longer than the default 30.3-day window, age admission already removes such coins.
@@ -130,20 +134,26 @@ state is kept between cycles.
 
 **Docs**
 
-- Replace the "never select from a history-ready subset" text in
-  `docs/ai/features/strategy_runtime.md`, and the matching text in `docs/ai/error_contract.md`,
-  with the target rule above.
+- Replace the historical whole-ranking deferral clause in
+  `docs/ai/features/strategy_runtime.md` with the per-candidate rule. Document startup
+  fairness as a distinct rule. In `docs/ai/error_contract.md`, record both rules and preserve
+  the existing behavior when eligible candidates fit the free slots. In that case, unused
+  ranking inputs may be absent without a ranking warning.
 - Add a `CHANGELOG.md` `Unreleased` entry.
 
 **Tests**
 
 - Rust: one candidate without RMS among several healthy candidates is excluded, and the others
-  rank; a malformed or non-finite score stays fatal; an unmarked missing score stays fatal; the
-  side defers while `forager_ranking_ready` is false; when the remaining eligible candidates fit
-  the free slots, behaviour matches the case where ranking is not required.
-- Update existing Rust and Python tests that assert whole-side deferral on
-  `rms_directionality_warmup_spans`, for example in `tests/test_adaptive_entry_cooldown.py`,
-  `orchestrator.rs`, and `backtest.rs`, so they expect single-candidate exclusion.
+  rank; a malformed or non-finite score stays fatal; an unmarked missing score on a symbol
+  with another scoped input marked unavailable still raises `MissingEma`. The side defers
+  while `forager_ranking_ready` is false. When the eligible candidates fit the free slots,
+  selection follows the case where ranking is unnecessary.
+- Update the historical whole-side readiness assertions in `tests/test_adaptive_entry_cooldown.py`
+  for per-candidate exclusion. The baseline test names were
+  `test_mixed_rms_readiness_defers_entire_ranking`,
+  `test_cpu_rms_warmup_defer_is_span_specific_and_never_masks_invalid_scores`, and
+  `test_low_volume_candidates_still_require_complete_rms_scoring`. Add native coverage for the
+  changed behavior in the shared Rust candidate builder.
 - Reproducibility: an uninterrupted run and a restarted run with the same candle store and
   cutoff produce the same eligible set and selection once the readiness bit is set.
 - Multi-symbol outage: when several symbols are missing RMS at once, only those are excluded.
@@ -193,7 +203,7 @@ checkpoint layout revision if one is adopted.
 
 ### PR-D: Consolidate RMS acquisition into `CandlestickManager` (cleanup)
 
-- Remove the `"rms"` pseudo-timeframe surface from `refresh_forager_candles()`, and retire
+- Remove the `"rms"` pseudo-timeframe surface from `_refresh_forager_candidate_candles()`, and retire
   `src/live/rms_directionality.py::load()`. Keep `scoring_enabled` and `adverse_enabled` if they
   are still useful.
 - Read RMS windows through the canonical one-minute metric path, so they share the gap evidence
@@ -217,8 +227,10 @@ This is a simplification of code paths, not a liveness fix. PR-A and PR-B do not
 
 - Eligibility is evidence-based at the cutoff. The plan uses no grace timers and no
   retry-exhaustion classification.
-- The startup readiness bit is the only side-wide deferral, and it is set once every candidate
-  has been attempted, not once every candidate has succeeded.
+- The startup readiness bit is the only side-wide deferral. It opens once the first pass has
+  attempted every candidate. After a cold or budget-limited pass, candidates whose repair
+  finished first may enter the first ranking while others are still ineligible. Track eligible
+  and excluded counts by side through startup to see how long that imbalance lasts.
 - The window stays at 20 spans in this work.
 - Unverified internal gaps are never synthesized for RMS.
 - Backtest per-coin exclusion comes from the shared Rust path. There is no separate backtest
