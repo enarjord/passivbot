@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
-from live import executor as executor_module
+from live import executor as executor_module, hsl_live
 from live.executor import (
     _apply_creation_batch_capacity,
     _apply_order_churn_admission,
@@ -339,6 +341,102 @@ def test_binance_uncovered_closes_preserve_risk_critical_order():
     )
 
     assert admitted == [panic, *limits[:2]]
+
+
+def _mixed_creation_plan(exchange):
+    bot = _Bot()
+    bot.exchange = exchange
+    bot.hedge_mode = bot._config_hedge_mode = True
+    bot._account_invalidation_generation = 3
+    bot._authoritative_pending_confirmations = {}
+    bot.fetched_open_orders = []
+    entry = _order("same_market_entry", churn=False)
+    other_entry = dict(_order("other_market_entry", churn=False), symbol="ETH/USDT:USDT")
+    close = dict(
+        _order("replacement", churn=False), side="sell", reduce_only=True,
+        pb_order_type="close_ema_anchor_long", price=101.0,
+    )
+    bot.positions = {close["symbol"]: {"long": {"size": 1.0}}}
+    return bot, _stamp_account(bot), [entry, other_entry, close]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cap", [1, 3, 4])
+@pytest.mark.parametrize("exchange", ["binance", "bitunix", "okx"])
+async def test_uncovered_close_takes_first_serial_write(exchange, cap):
+    bot, snapshot, orders = _mixed_creation_plan(exchange)
+    bot.values["max_n_creations_per_batch"] = cap
+    admitted = _apply_order_churn_admission(bot, orders, planning_snapshot=snapshot)
+    assert [order["_churn_gate_reason"] for order in admitted] == ["no_churn_evidence"] * 3
+    selected = _apply_creation_batch_capacity(
+        bot, admitted, planning_snapshot=snapshot,
+    )
+
+    confirmations = []
+    sent = []
+    bot._hsl_live = SimpleNamespace(
+        _write_lock=asyncio.Lock(), admit=lambda _order: not confirmations,
+    )
+    bot._orchestrator_uses_realized_pnl = lambda: False
+    bot._request_authoritative_confirmation = confirmations.append
+
+    @hsl_live.connector_write("create")
+    async def submit(_bot, order):
+        sent.append(order["name"])
+        return {"id": "working-close"}
+
+    results = await asyncio.gather(*(submit(bot, order) for order in selected))
+    assert sent == ["replacement"]
+    assert confirmations == [{"balance", "positions", "open_orders"}]
+    assert results[0] == {"id": "working-close"}
+    assert len(results) == min(len(orders), cap)
+    assert all(isinstance(result, executor_module.DeferredOrderCreation) for result in results[1:])
+
+
+@pytest.mark.parametrize(
+    "state", ["covered", "pending", "invalidated", "loss_gate", "second_close_filtered"]
+)
+def test_bitunix_close_priority_requires_confirmed_sole_uncovered_scope(state):
+    bot, snapshot, orders = _mixed_creation_plan("bitunix")
+    close = orders[-1]
+    full_plan = orders
+    if state == "covered":
+        bot.fetched_open_orders = [
+            {"symbol": close["symbol"], "position_side": "long", "side": "sell"}
+        ]
+    elif state == "pending":
+        bot._authoritative_pending_confirmations["open_orders"] = snapshot.epoch + 1
+    elif state == "invalidated":
+        bot._account_invalidation_generation += 1
+    elif state == "loss_gate":
+        bot._loss_gate_enabled = lambda: True
+    elif state == "second_close_filtered":
+        full_plan = [*orders, dict(close, name="excluded_close", price=102.0)]
+
+    assert _apply_creation_batch_capacity(
+        bot, orders, planning_snapshot=snapshot, planned_creations=full_plan,
+    ) == orders
+
+
+@pytest.mark.parametrize(
+    "exchange, churn_exempt",
+    [("binance", False), ("bitunix", False), ("bitunix", True), ("okx", False)],
+)
+def test_uncovered_close_priority_does_not_promote_a_fill_settling_scope(
+    exchange, churn_exempt,
+):
+    bot, snapshot, orders = _mixed_creation_plan(exchange)
+    close = orders[-1]
+    bot.config = {"bot": {"portfolio": {"risk": {"hsl": {"scope": "coin"}}}}}
+    bot._position_fill_sync = SimpleNamespace(
+        blocked=lambda scope: scope == (close["symbol"], close["position_side"]),
+    )
+    if churn_exempt:
+        close["_churn_gate_reason"] = "uncovered_close_exempt"
+
+    assert _apply_creation_batch_capacity(
+        bot, orders, planning_snapshot=snapshot, planned_creations=orders,
+    ) == orders
 
 
 def test_capacity_after_admission_does_not_starve_later_admissible_order():
