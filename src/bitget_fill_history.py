@@ -1,11 +1,27 @@
 """Traverse Bitget's Classic and UTA private fill-history pages."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 
 
 BITGET_UTA_RETENTION_MS = 90 * 86_400_000
+BITGET_UTA_WINDOW_MS = 30 * 86_400_000
+
+
+def _uta_windows(start: int, end: int, observed_at: int) -> Iterator[tuple[int, int]]:
+    if start == end:
+        # The venue rejects equal timestamps. Widen by one millisecond on
+        # the side that stays inside the observed retention window.
+        yield (start, end + 1) if end < observed_at else (start - 1, end)
+        return
+    while start <= end:
+        stop = min(start + BITGET_UTA_WINDOW_MS - 1, end)
+        if stop == end - 1:
+            # Leave two timestamps for the final request, not a singleton.
+            stop -= 1
+        yield start, stop
+        start = stop + 1
 
 
 async def bitget_fill_pages(
@@ -35,7 +51,6 @@ async def bitget_fill_pages(
             "cursor",
             "cursor",
         )
-        window_ms = 30 * 86_400_000
     else:
         fetch = api.private_mix_get_v2_mix_order_fill_history
         params = {"productType": product_type, "limit": limit}
@@ -50,17 +65,22 @@ async def bitget_fill_pages(
     if since_ms is not None and since_ms > until_ms:
         raise ValueError("Bitget fill-history start exceeds end")
     timestamp_key = "createdTime" if uta else "cTime"
+    padded_singleton = uta and since_ms == until_ms
     if since_ms is None:
-        window_ends = (until_ms,)
+        windows = ((None, until_ms),)
+    elif uta:
+        # Read the oldest interval first before later pages consume retention.
+        windows = _uta_windows(since_ms, until_ms, observed_at_ms)
     else:
-        newest_first = range(until_ms, since_ms - 1, -window_ms)
-        # Read UTA's oldest window first, before later pages consume retention.
-        window_ends = reversed(newest_first) if uta else newest_first
+        windows = (
+            (max(since_ms, end - window_ms + 1), end)
+            for end in range(until_ms, since_ms - 1, -window_ms)
+        )
     fetch_count = 0
-    for end in window_ends:
+    for start, end in windows:
         window = {**params, "endTime": end}
-        if since_ms is not None:
-            window["startTime"] = max(since_ms, end - window_ms + 1)
+        if start is not None:
+            window["startTime"] = start
         cursors = set()
         seen_ids = set()
         while True:
@@ -71,17 +91,27 @@ async def bitget_fill_pages(
                 )
             fetch_count += 1
             payload = await fetch(dict(window))
-            data = payload.get("data") if isinstance(payload, dict) else None
-            if not isinstance(data, dict) or not isinstance(data.get(rows_key), list):
-                raise AuthoritativeSurfaceUnavailable(
-                    "fills", f"Bitget expected data.{rows_key} list"
-                )
-            if payload.get("code") != "00000":
+            if not isinstance(payload, dict) or payload.get("code") != "00000":
                 raise AuthoritativeSurfaceUnavailable(
                     "fills", "Bitget fill history returned an unsuccessful response"
                 )
-            rows = data[rows_key]
+            data = payload.get("data")
+            if not isinstance(data, dict):
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills", f"Bitget expected data.{rows_key} list"
+                )
+            rows = data.get(rows_key)
+            cursor = data.get(cursor_key)
+            # UTA returns explicit nulls both for an empty query and after
+            # following a cursor past the last fill.
+            if uta and rows is None and cursor is None and {rows_key, cursor_key} <= data.keys():
+                break
+            if not isinstance(rows, list):
+                raise AuthoritativeSurfaceUnavailable(
+                    "fills", f"Bitget expected data.{rows_key} list"
+                )
             page_ids = set()
+            requested_rows = []
             for row in rows:
                 row_id = row.get(id_key) if isinstance(row, dict) else None
                 if not isinstance(row_id, str) or not row_id.strip():
@@ -100,6 +130,9 @@ async def bitget_fill_pages(
                         "fills", "Bitget fill outside requested window"
                     )
                 page_ids.add(row_id)
+                # Do not leak the extra timestamp used to query a singleton.
+                if not padded_singleton or int(timestamp) == since_ms:
+                    requested_rows.append(row)
             if rows and not page_ids.difference(seen_ids):
                 raise AuthoritativeSurfaceUnavailable(
                     "fills", "Bitget fill-history page made no progress"
@@ -108,7 +141,6 @@ async def bitget_fill_pages(
                 raise AuthoritativeSurfaceUnavailable(
                     "fills", "Bitget fill-history page exceeds requested limit"
                 )
-            cursor = data.get(cursor_key)
             if not rows:
                 if cursor not in (None, ""):
                     raise AuthoritativeSurfaceUnavailable(
@@ -117,7 +149,8 @@ async def bitget_fill_pages(
                     )
                 break
             if len(rows) < limit and cursor in (None, ""):
-                yield rows
+                if requested_rows:
+                    yield requested_rows
                 break
             if (
                 not isinstance(cursor, str)
@@ -141,5 +174,6 @@ async def bitget_fill_pages(
                 )
             cursors.add(cursor)
             seen_ids.update(page_ids)
-            yield rows
+            if requested_rows:
+                yield requested_rows
             window[request_cursor] = cursor

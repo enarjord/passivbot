@@ -22,6 +22,8 @@ so a pathname replacement cannot reuse the preceding file's offset.
 Register the bounded live queue before sending snapshots and replay. Buffer new publications during
 those sends and release the subscription on every exit. Replay and queued live delivery may overlap.
 Queue overflow retains the existing resync-required signal during connection setup.
+The request handler consumes WebSocket control frames while a separate sender publishes messages.
+A disconnected client releases its subscription even if no new rows are available.
 
 Warn and skip invalid JSON lines. Log relay poll failures and continue because the monitor root on
 disk remains authoritative.

@@ -5,6 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Fix Bitget UTA fill-history traversal at the 90-day boundary and accept the
+  exchange's successful empty-page response with explicit null fills and cursor.
+
 - Seed a cold OKX hourly candle cache with one finalized tail request when its
   first live history page is empty. Required hourly EMAs still need complete
   coverage.
@@ -127,6 +130,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Verify KuCoin Futures hedge mode with a read before changing it. Skip the
   configuration write when hedge mode is already active and verify any switch.
+
+- Answer WebSocket heartbeats while monitor streams are idle and release subscriptions
+  when their clients disconnect.
 
 - Buffer live monitor messages during connection replay so events published while
   initial data is being sent reach the connected client.
