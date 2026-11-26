@@ -20,6 +20,9 @@ since the latest release tag; these features may already be available when insta
   trailing confirmation follow the affected position. Reconstruct cached fills from retained
   exchange executions on startup.
 
+- Answer WebSocket heartbeats while monitor streams are idle and release subscriptions
+  when their clients disconnect. Buffer live publications during snapshot and replay sends.
+
 - Label pre-submit live order summaries as create candidates, including market orders.
   Use execution outcomes to see which orders were acknowledged, skipped, or deferred.
 
