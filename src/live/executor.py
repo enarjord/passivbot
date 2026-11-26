@@ -191,7 +191,73 @@ def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[d
     return removed
 
 
-def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
+def _confirmed_hyperliquid_uncovered_closes(bot, orders, snapshot) -> set[int]:
+    """Find admitted limit closes without resting coverage in committed account state."""
+    if snapshot is None or snapshot.account_invalidation_generation != getattr(
+        bot, "_account_invalidation_generation", 0
+    ):
+        return set()
+
+    surfaces = {"positions", "open_orders"}
+    stamps = {stamp.name: stamp for stamp in snapshot.surfaces if stamp.name in surfaces}
+    ledger = bot._ensure_freshness_ledger()
+    pending = getattr(bot, "_authoritative_pending_confirmations", {})
+    if (
+        stamps.keys() != surfaces
+        or ledger.epoch != snapshot.epoch
+        or any(ledger.surface_epoch(name) < epoch for name, epoch in pending.items())
+        or any(
+            stamp.updated_ms <= 0
+            or stamp.epoch < max(1, stamp.min_epoch)
+            or ledger.surface_epoch(name) != stamp.epoch
+            or ledger.surface_signature(name) != stamp.signature
+            for name, stamp in stamps.items()
+        )
+    ):
+        return set()
+
+    # Optimistic cancel/create responses may already have changed bot.open_orders.
+    resting_orders = getattr(bot, "fetched_open_orders", None)
+    if not isinstance(resting_orders, list):
+        return set()
+    close_sides = {"long": "sell", "short": "buy"}
+    covered = set()
+    ambiguous = set()
+    for order in resting_orders:
+        if not isinstance(order, dict) or not (symbol := order.get("symbol")):
+            return set()
+        pside, side = order.get("position_side"), order.get("side")
+        if pside not in close_sides or side not in {"buy", "sell"}:
+            ambiguous.add(symbol)
+        elif side == close_sides[pside]:
+            covered.add((symbol, pside))
+
+    uncovered = set()
+    for order in orders:
+        pside, symbol = order["position_side"], order["symbol"]
+        if (
+            order.get("reduce_only") is True
+            and order.get("type") == "limit"
+            and not _order_is_risk_critical(order)
+            and pside in close_sides
+            and order["side"] == close_sides[pside]
+            and symbol not in ambiguous
+            and (symbol, pside) not in covered
+        ):
+            size = bot.positions.get(symbol, {}).get(pside, {}).get("size")
+            if (
+                size is not None
+                and math.isfinite(size)
+                and size != 0.0
+                and position_fill_sync.permits(bot, order)
+            ):
+                uncovered.add(id(order))
+    return uncovered
+
+
+def _apply_creation_batch_capacity(
+    bot, orders: list[dict], *, planning_snapshot=None
+) -> list[dict]:
     """Apply stable risk-first capacity after all local creation admission."""
     if not orders:
         return []
@@ -201,13 +267,24 @@ def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
         if callable(live_value)
         else len(orders)
     )
-    prioritized_orders = [
-        order
-        for _index, order in sorted(
-            enumerate(orders),
-            key=lambda item: (0 if _order_is_risk_critical(item[1]) else 1, item[0]),
+    uncovered = set()
+    if (
+        len(orders) > max_batch
+        and getattr(bot, "exchange", None) == "hyperliquid"
+        and planning_snapshot is not None
+        # Keep the Rust close order when it allocated the realized-loss budget.
+        and bot._live_max_realized_loss_pct() >= 1.0
+    ):
+        uncovered = _confirmed_hyperliquid_uncovered_closes(
+            bot, orders, planning_snapshot
         )
-    ]
+
+    def priority(order):
+        if _order_is_risk_critical(order):
+            return 0
+        return 1 if id(order) in uncovered else 2
+
+    prioritized_orders = sorted(orders, key=priority)
     selected = prioritized_orders[:max_batch]
     deferred = prioritized_orders[max_batch:]
     for order in deferred:
@@ -941,7 +1018,9 @@ async def execute_order_plan(
                 len(before_churn_admission) - len(to_create_mod),
             )
         before_capacity = len(to_create_mod)
-        to_create_mod = _apply_creation_batch_capacity(bot, to_create_mod)
+        to_create_mod = _apply_creation_batch_capacity(
+            bot, to_create_mod, planning_snapshot=snapshot
+        )
         if order_wave is not None:
             order_wave["deferred_create"] += max(
                 0, before_capacity - len(to_create_mod)
