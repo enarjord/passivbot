@@ -5,6 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Give admitted Binance limit closes for a confirmed uncovered position priority over
+  ordinary entries at the creation batch limit. Keep risk-critical and native loss-gate
+  allocation priority.
+
 - Fix Bitget UTA fill-history traversal at the 90-day boundary and accept the
   exchange's successful empty-page response with explicit null fills and cursor.
 
