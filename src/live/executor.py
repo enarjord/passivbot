@@ -279,7 +279,7 @@ def _apply_creation_batch_capacity(
     }
     exchange = getattr(bot, "exchange", None)
     mixed_close_and_entry = (
-        exchange in {"binance", "bitunix"}
+        exchange in {"binance", "bitunix", "okx"}
         and any(order.get("reduce_only") is False for order in orders)
         and any(
             order.get("reduce_only") is True and order.get("type") == "limit"
@@ -288,7 +288,9 @@ def _apply_creation_batch_capacity(
     )
     # A serial create can request confirmation before its ordinary siblings submit,
     # so the configured batch cap is not the only limit on useful create slots.
-    if exchange == "binance" and (len(orders) > max_batch or mixed_close_and_entry):
+    if exchange in {"binance", "okx"} and (
+        mixed_close_and_entry or (exchange == "binance" and len(orders) > max_batch)
+    ):
         groups = _confirmed_uncovered_close_groups(bot, orders, planning_snapshot)
         uncovered.update(
             id(order) for closes in groups.values() for order in closes
@@ -302,8 +304,16 @@ def _apply_creation_batch_capacity(
             planning_snapshot,
         )
         uncovered.update(id(order) for order in orders if id(order) in candidates)
-    if uncovered and bot._loss_gate_enabled():
-        uncovered.clear()
+    if uncovered:
+        if bot._loss_gate_enabled():
+            uncovered.clear()
+        else:
+            uncovered = {
+                id(order)
+                for order in orders
+                if id(order) in uncovered
+                and position_fill_sync.permits(bot, order, "create")
+            }
 
     def creation_priority(order):
         if _order_is_risk_critical(order):

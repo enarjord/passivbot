@@ -5,7 +5,7 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- On Binance and Bitunix, prioritize eligible limit closes for confirmed
+- On Binance, Bitunix, and OKX, prioritize eligible limit closes for confirmed
   uncovered positions ahead of ordinary entries even when the plan fits the
   creation cap. Bitunix requires a sole close in the original plan. Serial
   confirmation, risk-critical priority, and native loss allocation still apply.

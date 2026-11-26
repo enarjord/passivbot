@@ -362,7 +362,7 @@ def _mixed_creation_plan(exchange):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cap", [1, 3, 4])
-@pytest.mark.parametrize("exchange", ["binance", "bitunix"])
+@pytest.mark.parametrize("exchange", ["binance", "bitunix", "okx"])
 async def test_uncovered_close_takes_first_serial_write(exchange, cap):
     bot, snapshot, orders = _mixed_creation_plan(exchange)
     bot.values["max_n_creations_per_batch"] = cap
@@ -415,6 +415,27 @@ def test_bitunix_close_priority_requires_confirmed_sole_uncovered_scope(state):
 
     assert _apply_creation_batch_capacity(
         bot, orders, planning_snapshot=snapshot, planned_creations=full_plan,
+    ) == orders
+
+
+@pytest.mark.parametrize(
+    "exchange, churn_exempt",
+    [("binance", False), ("bitunix", False), ("bitunix", True), ("okx", False)],
+)
+def test_uncovered_close_priority_does_not_promote_a_fill_settling_scope(
+    exchange, churn_exempt,
+):
+    bot, snapshot, orders = _mixed_creation_plan(exchange)
+    close = orders[-1]
+    bot.config = {"bot": {"portfolio": {"risk": {"hsl": {"scope": "coin"}}}}}
+    bot._position_fill_sync = SimpleNamespace(
+        blocked=lambda scope: scope == (close["symbol"], close["position_side"]),
+    )
+    if churn_exempt:
+        close["_churn_gate_reason"] = "uncovered_close_exempt"
+
+    assert _apply_creation_batch_capacity(
+        bot, orders, planning_snapshot=snapshot, planned_creations=orders,
     ) == orders
 
 
