@@ -171,6 +171,46 @@ def test_source_cause_survives_console_fallback(observed, monkeypatch, caplog, f
     assert len(messages[0]) <= 240
 
 
+def test_generation_changed_replacement_stays_warning_when_console_sink_fails(
+    observed, caplog
+):
+    import logging
+    from live.event_bus import LiveEvent, LiveEventPipeline, ListEventSink
+
+    class FailingConsole:
+        def write(self, event):
+            raise OSError("console unavailable")
+
+    bot, owner, _, _ = observed()
+    bot.positions[SYMBOL]["long"].update(size=0.0, price=0.0)
+    capture_report(owner, quotes())
+    durable = ListEventSink()
+    pipeline = LiveEventPipeline(
+        console_sink=FailingConsole(), structured_sinks=[durable]
+    )
+    bot._live_event_pipeline = pipeline
+    bot._emit_live_event = lambda kind, **kwargs: pipeline.emit(LiveEvent(kind, **kwargs))
+    try:
+        bot._account_invalidation_generation = 1
+        with caplog.at_level(logging.DEBUG):
+            capture_report(owner, quotes())
+        assert pipeline.flush()
+        stale = next(
+            event for event in durable.events
+            if event.data["observation_status"] == "stale"
+        )
+        assert stale.data["console_replaced_observation"] is True
+        assert stale.data["stale_reasons"] == ["account_generation_changed"]
+        assert stale.level == "warning"
+        fallback = [
+            record for record in caplog.records
+            if "[risk] HSL |" in record.message and "observation=stale" in record.message
+        ]
+        assert [r.levelno for r in fallback] == [logging.WARNING]
+    finally:
+        pipeline.close()
+
+
 @pytest.mark.parametrize("failure_path", ["no_pipeline", "console_sink_failure"])
 def test_unavailable_scope_has_priority_on_both_console_paths(observed, monkeypatch, caplog, failure_path):
     import logging

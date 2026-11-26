@@ -3395,7 +3395,7 @@ def _format_hsl_console(event: LiveEvent) -> str:
         value = _data_int(counts, key)
         return "?" if value is None or value < 0 else str(min(value, 999_999))
 
-    if _hsl_observation_only_expired(event):
+    if _hsl_observation_only_expired(data, level=event.level, status=event.status):
         return " ".join(
             (
                 "[risk] HSL stale",
@@ -3527,14 +3527,18 @@ def _hsl_console_state(event: LiveEvent) -> tuple | None:
     return (token, observation, tuple(sorted(missing)), event.level, event.status)
 
 
-def _hsl_observation_only_expired(event: LiveEvent) -> bool:
+def _hsl_observation_only_expired(
+    data: Mapping[str, Any],
+    *,
+    level: str,
+    status: str,
+) -> bool:
     """Recognize an expired diagnostic with no observed input or scope outage."""
-    data = event.data
     counts = data.get("counts")
     sources = data.get("candle_sources")
     return (
-        event.level == "warning"
-        and event.status == "degraded"
+        level == "warning"
+        and status == "degraded"
         and data.get("observation_status") == "stale"
         and data.get("stale_reasons") == ["input_expired"]
         and data.get("account_unavailable") == []
@@ -3565,7 +3569,9 @@ class ConsoleSummarySink:
         key = (event.exchange, event.user, event.bot_id, event.event_type)
         expiry_key = (*key, "hsl_observation_expiry")
         state = _hsl_console_state(event)
-        expiry_only = state is not None and _hsl_observation_only_expired(event)
+        expiry_only = state is not None and _hsl_observation_only_expired(
+            event.data, level=event.level, status=event.status
+        )
         if expiry_only and event.data.get("console_replaced_observation") is True:
             count, age = self._replaced_hsl.get(key, (0, 0))
             self._replaced_hsl[key] = (
