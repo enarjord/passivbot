@@ -5,8 +5,8 @@ import subprocess
 import sys
 
 import pytest
-from aiohttp import web
-from aiohttp.test_utils import make_mocked_request
+from aiohttp import ClientWSTimeout, WSMsgType, web
+from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
 import monitor_relay
 from monitor_relay import (
@@ -71,6 +71,14 @@ class FakeWebSocket:
         self.close_after_messages = close_after_messages
         self.closed = False
         self.messages = []
+        self.close_event = asyncio.Event()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await self.close_event.wait()
+        raise StopAsyncIteration
 
     async def prepare(self, request):
         return self
@@ -82,6 +90,7 @@ class FakeWebSocket:
 
     async def close(self):
         self.closed = True
+        self.close_event.set()
 
 
 @pytest.mark.asyncio
@@ -301,6 +310,115 @@ async def test_monitor_relay_publishes_first_entries_for_new_current_files_after
     finally:
         relay.unsubscribe(key, queue)
         await relay.stop()
+
+
+@pytest.mark.asyncio
+async def test_monitor_relay_responds_to_ping_and_releases_idle_subscription(tmp_path, monkeypatch):
+    monitor_root = _make_monitor_root(tmp_path)
+    app = create_monitor_relay_app(monitor_root=str(monitor_root))
+    relay = app[RELAY_APP_KEY]
+    unsubscribe = relay.unsubscribe
+    unsubscribed = asyncio.Event()
+
+    def notify_unsubscribed(queue):
+        unsubscribe(queue)
+        unsubscribed.set()
+
+    monkeypatch.setattr(relay, "unsubscribe", notify_unsubscribed)
+    async with TestClient(TestServer(app, shutdown_timeout=0.5)) as client:
+        ws = await client.ws_connect(
+            "/ws",
+            headers={"Host": "localhost:8765"},
+            autoping=False,
+            timeout=ClientWSTimeout(ws_close=0.5),
+        )
+        assert (await ws.receive_json(timeout=1.0))["type"] == "snapshot"
+        await ws.ping(b"probe")
+        pong = await ws.receive(timeout=1.0)
+        assert pong.type is WSMsgType.PONG
+        assert pong.data == b"probe"
+        assert len(relay._subscribers) == 1
+
+        await ws.close()
+        await asyncio.wait_for(unsubscribed.wait(), timeout=1.0)
+        assert not relay._subscribers
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filtered", [False, True])
+@pytest.mark.parametrize("queue_size", [1, 1000])
+async def test_monitor_relay_keeps_live_events_published_during_replay(
+    tmp_path, monkeypatch, filtered, queue_size
+):
+    monitor_root = _make_monitor_root(tmp_path)
+    _make_monitor_root(tmp_path, exchange="bitget", user="user02")
+    path = monitor_root / "bybit" / "user01" / "events" / "current.ndjson"
+    event = {
+        "ts": 2000,
+        "seq": 6,
+        "kind": "bot.ready",
+        "exchange": "bybit",
+        "user": "user01",
+        "payload": {},
+    }
+    _append_json_line(path, event)
+    app = create_monitor_relay_app(
+        monitor_root=str(monitor_root), subscriber_queue_size=queue_size
+    )
+    relay = app[RELAY_APP_KEY]
+    snapshots = 1 if filtered else 2
+    fake_ws = FakeWebSocket(close_after_messages=snapshots + 2)
+    original_send = fake_ws.send_json
+
+    async def send_json(message):
+        await original_send(message)
+        if message.get("type") == "event" and message.get("seq") == 6:
+            last = 8 if queue_size == 1 else 7
+            for seq in range(7, last + 1):
+                _append_json_line(path, {**event, "seq": seq, "ts": seq * 1000})
+                await relay.poll_once()
+
+    fake_ws.send_json = send_json
+    monkeypatch.setattr(monitor_relay.web, "WebSocketResponse", lambda **_: fake_ws)
+    await relay.start()
+    try:
+        url = "/ws?exchange=bybit&user=user01" if filtered else "/ws"
+        await asyncio.wait_for(_handle_ws(_make_request(app, url)), timeout=1.0)
+        assert [message["type"] for message in fake_ws.messages[:snapshots]] == ["snapshot"] * snapshots
+        assert fake_ws.messages[snapshots]["seq"] == 6
+        if queue_size == 1:
+            assert fake_ws.messages[-1] == {
+                "type": "resync_required", "reason": "subscriber_queue_overflow"
+            }
+        else:
+            assert fake_ws.messages[-1]["seq"] == 7
+        assert not relay._subscribers
+    finally:
+        await relay.stop()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [ConnectionResetError, asyncio.CancelledError])
+async def test_monitor_relay_unsubscribes_after_initial_send_failure(tmp_path, monkeypatch, failure):
+    monitor_root = _make_monitor_root(tmp_path)
+    app = create_monitor_relay_app(monitor_root=str(monitor_root))
+    relay = app[RELAY_APP_KEY]
+    fake_ws = FakeWebSocket(close_after_messages=1)
+
+    async def send_json(message):
+        raise failure()
+
+    fake_ws.send_json = send_json
+    monkeypatch.setattr(monitor_relay.web, "WebSocketResponse", lambda **_: fake_ws)
+    if failure is asyncio.CancelledError:
+        with pytest.raises(asyncio.CancelledError):
+            await _handle_ws(_make_request(app, "/ws"))
+    else:
+        assert await _handle_ws(_make_request(app, "/ws")) is fake_ws
+    assert not relay._subscribers
+    assert fake_ws.closed
 
 
 @pytest.mark.asyncio

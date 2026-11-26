@@ -9,6 +9,12 @@ since the latest release tag; these features may already be available when insta
 - Preserve the entry price of a Hyperliquid position opened from a raw flat boundary when
   later additions are proven by covered fill history and matching exchange position sizes.
 
+- Normalize derived Hyperliquid balances to eight decimals so rounding noise
+  does not invalidate otherwise unchanged ordinary plans.
+
+- Keep the last valid HSL quote after a transient refresh failure until its
+  original freshness deadline.
+
 - Service completed ordinary plans before the live loop sleeps and recheck plans blocked only
   by account age after the scheduled refresh. Console health reports slow preparation,
   reconciliation stalls and recovery.
@@ -16,6 +22,9 @@ since the latest release tag; these features may already be available when insta
 - Correct Bitget Classic hedge closes and one-way forced closes so position sizes and
   trailing confirmation follow the affected position. Reconstruct cached fills from retained
   exchange executions on startup.
+
+- Answer WebSocket heartbeats while monitor streams are idle and release subscriptions
+  when their clients disconnect. Buffer live publications during snapshot and replay sends.
 
 - Label pre-submit live order summaries as create candidates, including market orders.
   Use execution outcomes to see which orders were acknowledged, skipped, or deferred.
