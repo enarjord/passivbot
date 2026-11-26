@@ -6,8 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Answer WebSocket heartbeats while monitor streams are idle and release subscriptions
-  when their clients disconnect. Buffer live publications during snapshot and replay sends.
+- Normalize derived Hyperliquid balances to eight decimals so rounding noise
+  does not invalidate otherwise unchanged ordinary plans.
 
 - Service completed ordinary plans before the live loop sleeps and recheck plans blocked only
   by account age after the scheduled refresh. Console health reports slow preparation,
@@ -16,6 +16,9 @@ since the latest release tag; these features may already be available when insta
 - Correct Bitget Classic hedge closes and one-way forced closes so position sizes and
   trailing confirmation follow the affected position. Reconstruct cached fills from retained
   exchange executions on startup.
+
+- Answer WebSocket heartbeats while monitor streams are idle and release subscriptions
+  when their clients disconnect. Buffer live publications during snapshot and replay sends.
 
 - Label pre-submit live order summaries as create candidates, including market orders.
   Use execution outcomes to see which orders were acknowledged, skipped, or deferred.
