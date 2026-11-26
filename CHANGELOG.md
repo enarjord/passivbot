@@ -127,6 +127,9 @@ its own version heading. See [release status](docs/releases.md).
 - Verify KuCoin Futures hedge mode with a read before changing it. Skip the
   configuration write when hedge mode is already active and verify any switch.
 
+- Answer WebSocket heartbeats while monitor streams are idle and release subscriptions
+  when their clients disconnect.
+
 - Buffer live monitor messages during connection replay so events published while
   initial data is being sent reach the connected client.
 
