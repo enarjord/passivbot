@@ -312,6 +312,66 @@ async def test_monitor_relay_publishes_first_entries_for_new_current_files_after
         await relay.stop()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_size", [1, 4])
+async def test_monitor_relay_mixed_burst_yields_to_ready_subscriber(tmp_path, queue_size):
+    keys = [("bitget", "user01"), ("bybit", "user02")]
+    monitor_root = _make_monitor_root(tmp_path, *keys[0])
+    _make_monitor_root(tmp_path, *keys[1])
+    relay = create_monitor_relay_app(
+        monitor_root=str(monitor_root), subscriber_queue_size=queue_size
+    )[RELAY_APP_KEY]
+    relay._prime_offsets()
+    relay._initial_prime_completed = True
+    fast = relay.subscribe()
+    stalled = relay.subscribe()
+    expected = []
+    for exchange, user in keys:
+        bot = monitor_root / exchange / user
+        for kind, path in [
+            ("event", bot / "events/current.ndjson"),
+            ("history", bot / "history/price_ticks.current.ndjson"),
+        ]:
+            for number in range(7):
+                _append_json_line(
+                    path,
+                    {
+                        "exchange": exchange,
+                        "user": user,
+                        "seq": number,
+                        "ts": number,
+                        "payload": {"number": number},
+                    },
+                )
+                expected.append((kind, exchange, user, number))
+
+    received = []
+
+    async def consume():
+        while True:
+            received.append(await fast.get())
+
+    consumer = asyncio.create_task(consume())
+    try:
+        await relay.poll_once()
+        await asyncio.sleep(0)
+    finally:
+        consumer.cancel()
+        await asyncio.gather(consumer, return_exceptions=True)
+        relay.unsubscribe(fast)
+        relay.unsubscribe(stalled)
+
+    assert [row["type"] for row in received].count("resync_required") == 0
+    assert [
+        (row["type"], row["exchange"], row["user"], row["payload"]["number"])
+        for row in received
+    ] == expected
+    assert stalled.get_nowait() == {
+        "type": "resync_required",
+        "reason": "subscriber_queue_overflow",
+    }
+
+
 @pytest.mark.parametrize("stream", ["events", "history"])
 @pytest.mark.parametrize("split_at", ["json", "utf8", "newline"])
 def test_monitor_relay_retries_unfinished_current_rows(tmp_path, stream, split_at, caplog):

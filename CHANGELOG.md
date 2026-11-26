@@ -17,6 +17,9 @@ its own version heading. See [release status](docs/releases.md).
   subtraction previously made an unchanged balance differ between reads by about
   1e-11, which discarded otherwise valid ordinary plans as `raw_balance_changed`.
 
+- Let monitor WebSocket writers drain between live poll batches so a ready client
+  can receive event and history bursts without a spurious resync.
+
 - Preserve `CloseAutoReduceWelLong` and `CloseAutoReduceWelShort` order types when
   a Trailing Martingale grid close merges at the same price as a WEL auto-reduce
   close (in both CPU Rust and GPU replay), so merged WEL reductions retain
