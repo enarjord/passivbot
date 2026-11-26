@@ -850,14 +850,20 @@ def compute_psize_pprice(
     return final_state
 
 
-def apply_exchange_raw_position_overrides(events: List[Dict[str, object]]) -> None:
-    apply_hyperliquid_raw_psize_overrides(events)
+def apply_exchange_raw_position_overrides(
+    events: List[Dict[str, object]], *, hyperliquid_flat_replay_start_ms: int = 0
+) -> None:
+    apply_hyperliquid_raw_psize_overrides(
+        events, flat_replay_start_ms=hyperliquid_flat_replay_start_ms
+    )
     from exchanges.lighter_fill_events import apply_lighter_raw_position_overrides
 
     apply_lighter_raw_position_overrides(events)
 
 
-def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> None:
+def apply_hyperliquid_raw_psize_overrides(
+    events: List[Dict[str, object]], *, flat_replay_start_ms: int = 0
+) -> None:
     """
     Improve Hyperliquid psize/pprice annotations from raw fill startPosition data.
 
@@ -865,8 +871,10 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
     window, which is necessarily best-effort when the cache starts mid-position.
     Hyperliquid raw fills include the position size before each component fill;
     when present, use that exchange-provided state for the after-fill size.
+    A caller-proven covered suffix also allows strictly additive chains to
+    carry their basis forward from a raw flat opening across timestamps.
     """
-    recovered_state: Dict[Tuple[str, str], Tuple[float, Optional[float], int]] = {}
+    recovered_state: Dict[Tuple[str, str], Tuple[float, Optional[float], int, bool]] = {}
     for ev in events:
         components = _hyperliquid_raw_position_components(ev)
         candidates = [
@@ -941,14 +949,37 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
         first_before = ordered_components[0][0]
         previous = recovered_state.get(key)
         event_timestamp = int(ev.get("timestamp") or 0)
+        raw_components = _normalize_raw_field(ev.get("raw")) if flat_replay_start_ms else []
+        covered_adds = (
+            0 < flat_replay_start_ms <= event_timestamp
+            and len(components) == len(raw_components)
+            and all(
+                row["data"]["info"]["startPosition"] not in (None, "")
+                and not isinstance(row["data"]["info"]["startPosition"], bool)
+                for row in raw_components
+            )
+            and all(
+                not reducing and all(math.isfinite(x) for x in (before, after, qty, price))
+                and price > 0.0
+                for before, after, qty, price, _entry, reducing in components
+            )
+            and _is_same_position_size(
+                sum(component[2] for component in components),
+                abs(float(ev.get("qty") or ev.get("amount") or 0.0))
+                * float(ev.get("c_mult", 1.0) or 1.0),
+            )
+        )
+        from_flat = covered_adds and first_before <= 1e-12
         basis: Optional[float] = None
         if (
             previous is not None
             and event_timestamp > 0
-            and previous[2] == event_timestamp
             and _is_same_position_size(previous[0], first_before)
         ):
-            basis = previous[1]
+            carries_flat = covered_adds and previous[3] and previous[2] <= event_timestamp
+            if previous[2] == event_timestamp or carries_flat:
+                basis = previous[1]
+            from_flat = from_flat or carries_flat
         position_size = first_before
         for (
             before_size,
@@ -960,6 +991,7 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
         ) in ordered_components:
             if not _is_same_position_size(position_size, before_size):
                 basis = None
+                from_flat = False
             if reducing:
                 if entry_price > 0.0:
                     basis = entry_price
@@ -981,7 +1013,7 @@ def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> No
             ev["pprice"] = 0.0
         elif basis is not None and basis > 0.0:
             ev["pprice"] = basis
-        recovered_state[key] = (position_size, basis, event_timestamp)
+        recovered_state[key] = (position_size, basis, event_timestamp, from_flat)
 
 
 def _is_same_position_size(lhs: float, rhs: float) -> bool:
@@ -2163,18 +2195,18 @@ class FillEventCache:
 
     def save_metadata(self, metadata: Optional[CacheMetadata] = None) -> None:
         """Save cache metadata to disk atomically."""
-        if metadata is not None:
-            self._metadata = metadata
-
-        if self._metadata is None:
+        if metadata is None:
+            metadata = self._metadata
+        if metadata is None:
             return
 
-        self._metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
+        metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
         tmp_path = self.metadata_path.with_suffix(".tmp")
         try:
             with tmp_path.open("w", encoding="utf-8") as fh:
-                json.dump(self._metadata, fh, indent=2)
+                json.dump(metadata, fh, indent=2)
             os.replace(tmp_path, self.metadata_path)
+            self._metadata = metadata
             logger.debug("FillEventCache.save_metadata: wrote to %s", self.metadata_path)
         except Exception as exc:
             if _is_disk_full_error(exc):
@@ -2239,7 +2271,7 @@ class FillEventCache:
 
     def mark_covered_start(self, start_ts: int) -> None:
         """Persist earliest open-ended lookback start confirmed against exchange."""
-        metadata = self.load_metadata()
+        metadata = self.load_metadata().copy()
         start_ts = int(start_ts)
         current = _cache_metadata_timestamp(metadata, "covered_start_ms")
         if current == 0 or start_ts < current:
@@ -2318,24 +2350,33 @@ class FillEventCache:
 
     def clear_gap(self, start_ts: int, end_ts: int) -> bool:
         """Remove a filled interval from known gaps and persist any mutation."""
-        metadata = self.load_metadata()
+        metadata = self.load_metadata().copy()
         gaps = metadata.get("known_gaps", [])
-        changed = False
+        remaining = self._gaps_after_clear(gaps, start_ts, end_ts, log_changes=True)
+        if remaining == gaps:
+            return False
+        metadata["known_gaps"] = remaining
+        self.save_metadata(metadata)
+        return True
 
-        remaining = []
+    @staticmethod
+    def _gaps_after_clear(
+        gaps: List[KnownGap], start_ts: int, end_ts: int, *, log_changes: bool = False
+    ) -> List[KnownGap]:
+        remaining: List[KnownGap] = []
         for gap in gaps:
             gap_start = int(gap["start_ts"])
             gap_end = int(gap["end_ts"])
             if gap_end <= start_ts or gap_start >= end_ts:
                 remaining.append(gap)
                 continue
-            changed = True
             if gap_start >= start_ts and gap_end <= end_ts:
-                logger.info(
-                    "FillEventCache.clear_gap: removed gap %s → %s",
-                    _format_ms(gap_start),
-                    _format_ms(gap_end),
-                )
+                if log_changes:
+                    logger.info(
+                        "FillEventCache.clear_gap: removed gap %s → %s",
+                        _format_ms(gap_start),
+                        _format_ms(gap_end),
+                    )
                 continue
 
             if gap_start < start_ts:
@@ -2348,19 +2389,15 @@ class FillEventCache:
                 right["start_ts"] = end_ts
                 if int(right["start_ts"]) < int(right["end_ts"]):
                     remaining.append(right)
-            logger.info(
-                "FillEventCache.clear_gap: trimmed gap %s → %s by filled range %s → %s",
-                _format_ms(gap_start),
-                _format_ms(gap_end),
-                _format_ms(start_ts),
-                _format_ms(end_ts),
-            )
-
-        if changed:
-            metadata["known_gaps"] = remaining
-            self.save_metadata(metadata)
-            return True
-        return False
+            if log_changes:
+                logger.info(
+                    "FillEventCache.clear_gap: trimmed gap %s → %s by filled range %s → %s",
+                    _format_ms(gap_start),
+                    _format_ms(gap_end),
+                    _format_ms(start_ts),
+                    _format_ms(end_ts),
+                )
+        return remaining
 
     def get_coverage_summary(self) -> Dict[str, object]:
         """Return a summary of cache coverage for debugging."""
@@ -3738,7 +3775,7 @@ class FillEventsManager:
         self._events: List[FillEvent] = []
         # A disposable proof that replay left this exact history unchanged.
         # Own nested data too: frozen FillEvents still contain mutable raw/fee data.
-        self._empty_refresh_proof: Optional[Tuple[Tuple[float, float], List[FillEvent]]] = None
+        self._empty_refresh_proof: Optional[Tuple[Tuple[float, float, int], List[FillEvent]]] = None
         self._loaded = False
         self._lock = asyncio.Lock()
         self._degraded_pnl_repair_attempted_keys: set[str] = set()
@@ -4004,7 +4041,12 @@ class FillEventsManager:
                 ensure_qty_signage(payload)
                 order_same_timestamp_fills(payload)
                 compute_psize_pprice(payload)
-                apply_exchange_raw_position_overrides(payload)
+                apply_exchange_raw_position_overrides(
+                    payload,
+                    hyperliquid_flat_replay_start_ms=(
+                        self._hyperliquid_flat_replay_start_ms() if not dropped else 0
+                    ),
+                )
                 synthesized_days = self._synthesize_missing_pnls(payload)
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
                 normalized_days = {_day_key(ev.timestamp) for ev in self._events}
@@ -5046,7 +5088,10 @@ class FillEventsManager:
         end_ms: Optional[int] = None,
         mark_refreshed: bool = True,
         degraded_pnl_aux_range: Optional[Tuple[int, int]] = None,
+        prove_lookback: bool = False,
     ) -> None:
+        if prove_lookback and (start_ms is None or end_ms is not None):
+            raise ValueError("lookback coverage requires an open-ended refresh with a start")
         await self.ensure_loaded()
         logger.debug(
             "[fills] refresh: start=%s end=%s current_cache=%d",
@@ -5277,63 +5322,87 @@ class FillEventsManager:
             await self._apply_fee_policy_to_batch(batch)
             handle_batch(batch)
 
-        self._events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
+        events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
+        # Keep durable fills if replay or its checkpoint fails. In that case,
+        # the next load replays them against the coverage actually on disk.
+        self._events = events
+        self._loaded = False
+        proof = self._empty_refresh_proof
+        self._empty_refresh_proof = None
         pnl_observations = list(getattr(self.fetcher, "pnl_observations", []) or [])
+        fetched_range = (start_ms, end_ms) if start_ms is not None and end_ms is not None else None
+
+        # The completed traversal can prove continuity for this replay. Publish
+        # that proof only after the resulting annotations have been saved.
+        previous_replay_start_ms = self._hyperliquid_flat_replay_start_ms()
+        flat_replay_start_ms = previous_replay_start_ms
+        if prove_lookback or fetched_range is not None:
+            flat_replay_start_ms = self._hyperliquid_flat_replay_start_ms(
+                covered_by_lookback=start_ms if prove_lookback else None,
+                repaired_range=fetched_range,
+            )
 
         # Empty successful fetches need not replay history once a full replay
         # has demonstrated a fixed point. New rows (including duplicate fetches),
         # PnL observations, policy changes and nested-data changes use the full path.
         empty_refresh = not fetched_batches and not fetched_events and not pnl_observations
-        fee_policy = (self.fee_pct_fallback, self.fee_pct_sanity_abs_max)
-        proof = self._empty_refresh_proof
-        self._empty_refresh_proof = None
+        fee_policy = (
+            self.fee_pct_fallback,
+            self.fee_pct_sanity_abs_max,
+            flat_replay_start_ms,
+        )
         unchanged = bool(
             empty_refresh
             and proof is not None
             and fee_policy == proof[0]
-            and self._events == proof[1]
+            and events == proof[1]
         )
-        before_replay = (
-            deepcopy(self._events) if empty_refresh and self._events and not unchanged else None
-        )
+        before_replay = deepcopy(events) if empty_refresh and events and not unchanged else None
 
         # Annotate psize/pprice for all events unless replay is proven redundant.
-        if self._events and not unchanged:
-            payload = [ev.to_dict() for ev in self._events]
+        if events and not unchanged:
+            payload = [ev.to_dict() for ev in events]
             for raw in payload:
                 self._apply_fee_policy(raw)
             ensure_qty_signage(payload)
             order_same_timestamp_fills(payload)
             compute_psize_pprice(payload)
-            apply_exchange_raw_position_overrides(payload)
+            apply_exchange_raw_position_overrides(
+                payload, hyperliquid_flat_replay_start_ms=flat_replay_start_ms
+            )
             synthesized_days = self._synthesize_missing_pnls(payload)
             cycle_reconciled_days = self._reconcile_pnl_observations(payload, pnl_observations)
-            self._events = [FillEvent.from_dict(ev) for ev in payload]
+            events = [FillEvent.from_dict(ev) for ev in payload]
             all_days_persisted.update(synthesized_days)
             all_days_persisted.update(cycle_reconciled_days)
+            if flat_replay_start_ms != previous_replay_start_ms:
+                # Earlier coverage can change the basis of a later cached fill
+                # even when this fetch left that day's rows untouched.
+                for event in events:
+                    prior = updated_map.get(event.id)
+                    if prior is not None and (event.psize, event.pprice) != (prior.psize, prior.pprice):
+                        all_days_persisted.add(_day_key(event.timestamp))
 
-            # Re-persist touched days with annotated psize/pprice values
             if all_days_persisted:
-                day_payload = self._events_for_days(self._events, all_days_persisted)
-                self.cache.save_days(day_payload)
-
-        fetched_bounded_range = start_ms is not None and end_ms is not None
+                self.cache.save_days(self._events_for_days(events, all_days_persisted))
 
         # Update cache metadata with timestamps
-        if self._events:
-            self.cache.update_metadata_from_events(
-                self._events, mark_refreshed=mark_refreshed
-            )
+        if events:
+            self.cache.update_metadata_from_events(events, mark_refreshed=mark_refreshed)
         elif mark_refreshed:
             # A successful empty fetch proves that metadata-only event bounds
             # are stale. Keeping them would leave coverage permanently blocked
             # by a cache_metadata_event_mismatch verdict.
             self.cache.mark_refreshed(reset_event_bounds=True)
-        if fetched_bounded_range:
+        if fetched_range is not None:
             # A successful bounded fetch proves the retried range even when the
             # exchange returns no new fills or only duplicates.
-            self.cache.clear_gap(start_ms, end_ms)
+            self.cache.clear_gap(*fetched_range)
+        if prove_lookback:
+            self.cache.mark_covered_start(start_ms)
 
+        self._events = events
+        self._loaded = True
         # Retain proof only after all ordinary persistence/checkpoint work succeeds.
         # Losing this cache (including restart) merely performs another full replay.
         if unchanged:
@@ -5728,9 +5797,7 @@ class FillEventsManager:
             "[fills] lookback coverage unproven from %s; traversing the full requested window",
             _format_ms(start_ms),
         )
-        await self.refresh(start_ms=start_ms, end_ms=None)
-
-        self.cache.mark_covered_start(start_ms)
+        await self.refresh(start_ms=start_ms, prove_lookback=True)
         return True
 
     @staticmethod
@@ -5780,6 +5847,36 @@ class FillEventsManager:
             if gap_start < window_end and gap_end > window_start:
                 blocking.append(gap)
         return blocking
+
+    def _hyperliquid_flat_replay_start_ms(
+        self,
+        *,
+        covered_by_lookback: Optional[int] = None,
+        repaired_range: Optional[Tuple[int, int]] = None,
+    ) -> int:
+        """Earliest usable start in the covered suffix after unresolved gaps."""
+        if self.exchange.lower() != "hyperliquid":
+            return 0
+        metadata = self.cache.load_metadata()
+        try:
+            covered_start = _cache_metadata_timestamp(metadata, "covered_start_ms")
+        except FillEventCacheContractError:
+            return 0
+        if covered_by_lookback is not None and (
+            covered_start == 0 or covered_by_lookback < covered_start
+        ):
+            covered_start = covered_by_lookback
+        gaps = metadata.get("known_gaps", [])
+        if covered_start <= 0 or not isinstance(gaps, list):
+            return 0
+        if any(self._known_gap_bounds(gap) is None for gap in gaps):
+            return 0
+        if repaired_range is not None:
+            gaps = FillEventCache._gaps_after_clear(gaps, *repaired_range)
+        for gap in gaps:
+            if not self._known_gap_confirmed_legitimate(gap):
+                covered_start = max(covered_start, int(gap["end_ts"]) + 1)
+        return covered_start
 
     def get_coverage_status(
         self,

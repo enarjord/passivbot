@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve the entry price of a Hyperliquid position opened from a raw flat boundary when
+  later additions are proven by covered fill history and matching exchange position sizes.
+
 - Normalize derived Hyperliquid balances to eight decimals so rounding noise
   does not invalidate otherwise unchanged ordinary plans.
 

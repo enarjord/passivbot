@@ -8806,6 +8806,176 @@ def test_hyperliquid_raw_basis_does_not_propagate_across_timestamps():
     assert events[-1]["pprice"] != pytest.approx(expected_stale_pprice)
 
 
+@pytest.mark.parametrize(
+    "replay_start,corrupt_middle,expected_price",
+    [(2_000, False, 112.0), (2_001, False, 104.0), (2_000, True, 104.0)],
+)
+def test_hyperliquid_covered_raw_flat_basis_survives_later_add(
+    replay_start, corrupt_middle, expected_price
+):
+    def buy(timestamp, before, qty, price):
+        return {
+            "symbol": "TEST/USDC:USDC",
+            "position_side": "long",
+            "side": "buy",
+            "timestamp": timestamp,
+            "qty": qty,
+            "price": price,
+            "raw": [
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "side": "buy",
+                        "amount": qty,
+                        "price": price,
+                        "info": {"startPosition": str(before)},
+                    },
+                }
+            ],
+        }
+
+    events = [
+        buy(1_000, 0, 10.0, 100.0),  # Older generic replay residue.
+        buy(2_000, 0, 2.0, 100.0),
+        buy(3_000, 2.0, 3.0, 120.0),
+    ]
+    if corrupt_middle:
+        events[1]["raw"].append({"data": {}})
+
+    compute_psize_pprice(events)
+    apply_hyperliquid_raw_psize_overrides(events, flat_replay_start_ms=replay_start)
+
+    assert events[-1]["psize"] == pytest.approx(5.0)
+    assert events[-1]["pprice"] == pytest.approx(expected_price)
+
+
+
+def _hyperliquid_raw_opening_fill(fill_id, timestamp, before, qty, price):
+    return {
+        "id": fill_id, "symbol": "TEST/USDC:USDC", "position_side": "long",
+        "side": "buy", "timestamp": timestamp, "qty": qty, "price": price,
+        "pnl": 0.0, "pb_order_type": "entry", "client_order_id": "",
+        "raw": [{
+            "source": "fetch_my_trades",
+            "data": {
+                "side": "buy", "amount": qty, "price": price,
+                "info": {"startPosition": str(before)},
+            },
+        }],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("coverage_change", ["bootstrap", "widen", "repair_gap"])
+async def test_hyperliquid_refresh_replays_with_new_coverage(tmp_path, coverage_change):
+    day_ms = 86_400_000
+    opening_ms = 2 * day_ms
+    add_ms = 3 * day_ms
+
+    old = _hyperliquid_raw_opening_fill("old", day_ms, 0, 10.0, 100.0)
+    opening = _hyperliquid_raw_opening_fill("opening", opening_ms, 0, 2.0, 100.0)
+    add = _hyperliquid_raw_opening_fill("add", add_ms, 2.0, 3.0, 120.0)
+    repairing_gap = coverage_change == "repair_gap"
+    cache = FillEventCache(tmp_path)
+    cached = [old, opening, add] if repairing_gap else [old, add]
+    cache.save([FillEvent.from_dict(fill) for fill in cached])
+    if coverage_change == "widen":
+        cache.mark_covered_start(opening_ms + 1)
+    if repairing_gap:
+        cache.mark_covered_start(opening_ms)
+        cache.add_known_gap(opening_ms, opening_ms + 1, reason=GAP_REASON_FETCH_FAILED)
+
+    fetcher = _StaticFetcher([] if repairing_gap else [opening])
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="default", fetcher=fetcher, cache_path=tmp_path,
+    )
+    await manager.ensure_loaded()
+    assert manager.get_events()[-1].pprice != pytest.approx(112.0)
+
+    if repairing_gap:
+        await manager.refresh_for_lookback(opening_ms, end_ms=opening_ms + 1)
+        assert fetcher.calls == [(opening_ms, opening_ms + 1)]
+        assert manager.cache.get_known_gaps() == []
+    else:
+        await manager.refresh_for_lookback(opening_ms)
+        assert fetcher.calls == [(opening_ms, None)]
+    assert manager.cache.get_covered_start_ms() == opening_ms
+    assert manager.get_events()[-1].pprice == pytest.approx(112.0)
+    assert FillEventCache(tmp_path).load()[-1].pprice == pytest.approx(112.0)
+
+    restarted = FillEventsManager(
+        exchange="hyperliquid", user="default", fetcher=_StaticFetcher([]), cache_path=tmp_path,
+    )
+    await restarted.ensure_loaded()
+    assert restarted.get_events()[-1].pprice == pytest.approx(112.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_phase", ["annotation", "coverage_write"])
+async def test_failed_lookback_retains_saved_fills_without_proving_coverage(
+    tmp_path, monkeypatch, failure_phase
+):
+    cached = _hyperliquid_raw_opening_fill("old", 1_000, 0, 10.0, 100.0)
+    opening = _hyperliquid_raw_opening_fill("opening", 2_000, 0, 2.0, 100.0)
+    add = _hyperliquid_raw_opening_fill("add", 3_000, 2.0, 3.0, 120.0)
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(fill) for fill in (cached, add)])
+    fetcher = _StaticFetcher([opening])
+    manager = FillEventsManager(
+        exchange="hyperliquid", user="default", fetcher=fetcher, cache_path=tmp_path,
+    )
+    await manager.ensure_loaded()
+    replace_file = fem.os.replace
+
+    def fail_coverage_write(src, dst):
+        if dst == manager.cache.metadata_path and json.loads(src.read_text()).get("covered_start_ms"):
+            raise OSError("coverage write failed")
+        return replace_file(src, dst)
+
+    def fail_annotation(_payload):
+        raise OSError("annotation failed")
+
+    with monkeypatch.context() as patch:
+        if failure_phase == "annotation":
+            patch.setattr(fem, "compute_psize_pprice", fail_annotation)
+        else:
+            patch.setattr(fem.os, "replace", fail_coverage_write)
+        with pytest.raises(OSError, match="(annotation|coverage write) failed"):
+            await manager.refresh_for_lookback(2_000)
+
+    assert [fill.id for fill in FillEventCache(tmp_path).load()] == ["old", "opening", "add"]
+    assert [fill.id for fill in manager.get_events()] == ["old", "opening", "add"]
+    assert manager.cache.get_covered_start_ms() == 0
+    assert FillEventCache(tmp_path).get_covered_start_ms() == 0
+    assert not manager.get_coverage_status(start_ms=2_000)["ready"]
+    assert manager.get_events()[-1].pprice != pytest.approx(112.0)
+    assert manager._empty_refresh_proof is None
+
+    fetcher.events.clear()
+    await manager.refresh_latest()
+    assert [fill.id for fill in manager.get_events()] == ["old", "opening", "add"]
+    assert manager.get_events()[-1].pprice == pytest.approx(104.0)
+    await manager.refresh_for_lookback(2_000)
+    assert manager.get_coverage_status(start_ms=2_000)["ready"]
+    assert manager.get_events()[-1].pprice == pytest.approx(112.0)
+
+
+def test_hyperliquid_raw_flat_basis_coverage_starts_after_unresolved_gap():
+    manager = FillEventsManager.__new__(FillEventsManager)
+    manager.exchange = "hyperliquid"
+    manager.cache = types.SimpleNamespace(
+        load_metadata=lambda: {
+            "covered_start_ms": 1_000,
+            "known_gaps": [
+                {"start_ts": 1_200, "end_ts": 1_500, "reason": GAP_REASON_FETCH_FAILED},
+                {"start_ts": 2_100, "end_ts": 2_300, "reason": fem.GAP_REASON_CONFIRMED},
+            ],
+        }
+    )
+
+    assert manager._hyperliquid_flat_replay_start_ms() == 1_501
+
+
 def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
     buy_1, sell_1 = _hyperliquid_same_millisecond_events()
     buy_1["id"] = "buy-1"
