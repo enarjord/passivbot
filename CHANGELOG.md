@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Normalize derived Hyperliquid balances to eight decimals so rounding noise
+  does not invalidate otherwise unchanged ordinary plans.
+
 - Keep the last valid HSL quote after a transient refresh failure until its
   original freshness deadline.
 
