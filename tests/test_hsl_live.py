@@ -774,6 +774,65 @@ async def test_quote_read_can_finish_after_the_wave_time_slice():
     assert SYMBOL in result and started == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("network_error", [False, True], ids=["unavailable", "network"])
+async def test_hsl_quote_refresh_failure_keeps_original_expiry(monkeypatch, network_error):
+    from dataclasses import replace
+    from ccxt.base.errors import NetworkError
+    from live.market_snapshot import MarketSnapshotUnavailable
+    from test_hsl_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    import utils
+
+    max_age_ms = 10_000
+    now = NOW
+    refresh_failed = False
+    failure = NetworkError if network_error else MarketSnapshotUnavailable
+    sample = quotes()[SYMBOL]
+
+    async def read(symbols):
+        assert symbols == [SYMBOL]
+        if refresh_failed:
+            raise failure("offline quote outage")
+        return {SYMBOL: replace(sample, fetched_ms=now - 100)}
+
+    monkeypatch.setattr(utils, "utc_ms", lambda: now)
+    bot = make_bot()
+    bot.get_exchange_time = lambda: now
+    bot.approved_coins_minus_ignored_coins = {"long": {SYMBOL}, "short": set()}
+    bot._live_market_snapshot_max_age_ms = lambda: max_age_ms
+    bot._get_orchestrator_market_snapshots = read
+    ledger = bot._ensure_freshness_ledger()
+    owner = hsl_live.owner(bot)
+
+    async def capture():
+        for surface in ("balance", "positions", "open_orders"):
+            ledger.stamp(surface, now_ms=now - 200)
+        return owner.capture(await owner.acquire_quotes({SYMBOL}))
+
+    assert (await capture()).permission(SYMBOL, "long")[0] == "panic"
+    old_quote = owner.quotes[SYMBOL]
+
+    refresh_failed = True
+    now = old_quote.fetched_ms + max_age_ms
+    wave = await capture()
+    assert owner.quotes[SYMBOL] is old_quote
+    assert wave.permission(SYMBOL, "long")[0] == "panic"
+    order = {"symbol": SYMBOL, "position_side": "long"}
+    owner.bind(wave, (), (order,))
+    assert owner.admit(order)
+
+    now += 1
+    assert not owner.admit(order)
+    wave = await capture()
+    assert wave.permission(SYMBOL, "long")[0] == "unavailable"
+    assert [item.reason for item in wave.unavailable] == ["current_mark_unavailable"]
+
+    refresh_failed = False
+    wave = await capture()
+    assert owner.quotes[SYMBOL].fetched_ms > old_quote.fetched_ms
+    assert wave.permission(SYMBOL, "long")[0] == "panic"
+
+
 def test_planner_flat_padding_does_not_invalidate_an_unchanged_protective_position(
     monkeypatch,
 ):
