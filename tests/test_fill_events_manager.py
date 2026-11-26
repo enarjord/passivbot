@@ -3076,9 +3076,9 @@ async def test_bitget_uta_fetcher_splits_long_lookback_into_30_day_windows(monke
         ],
         options={"uta": True},
     )
-    # UTA requests the oldest inclusive singleton first, followed by the
-    # two 30-day windows.
-    api._batches = [[], *reversed(api._batches)]
+    # UTA requests the oldest window first and keeps the final window
+    # wide enough for the venue to accept.
+    api._batches = [*reversed(api._batches), []]
     resolver = lambda s: f"{s[:-4]}/USDT:USDT" if s and s.endswith("USDT") else s
     monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: value)
 
@@ -3098,9 +3098,9 @@ async def test_bitget_uta_fetcher_splits_long_lookback_into_30_day_windows(monke
 
     assert [event["id"] for event in events] == ["exec-old", "exec-new"]
     assert len(api.history_calls) == 3
-    assert api.history_calls[0]["startTime"] == api.history_calls[0]["endTime"] == 0
+    assert api.history_calls[0]["startTime"] == 0
     for call in api.history_calls:
-        assert int(call["endTime"]) - int(call["startTime"]) < 30 * day_ms
+        assert 0 < int(call["endTime"]) - int(call["startTime"]) < 30 * day_ms
 
 
 @pytest.mark.asyncio
