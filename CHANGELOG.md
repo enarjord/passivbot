@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Bound repeated HSL observation-expiry warnings when scope and input status are unchanged.
+  Preserve actual input warnings, visible recovery and the full structured event history.
+
 - Preserve the entry price of a Hyperliquid position opened from a raw flat boundary when
   later additions are proven by covered fill history and matching exchange position sizes.
 

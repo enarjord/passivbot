@@ -26,6 +26,11 @@ class ConsoleAdmission:
         self._states: OrderedDict[Hashable, _State] = OrderedDict()
         self._lock = threading.RLock()
 
+    def forget(self, key: Hashable) -> None:
+        """Make the next observation visible after an independently reported transition."""
+        with self._lock:
+            self._states.pop(key, None)
+
     def write(self, key: Hashable, fingerprint: Hashable, message: str,
               emit: Callable[[str], None], *, reminder_seconds: float | None) -> str | None:
         with self._lock:

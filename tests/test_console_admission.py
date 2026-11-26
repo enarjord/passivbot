@@ -236,6 +236,8 @@ def test_replaced_observation_is_durable_and_does_not_fake_current_outage():
                     level="warning",
                     data=dict(
                         observation_status="stale",
+                        stale_reasons=["input_expired"],
+                        candle_sources={"failure_count": 0},
                         console_replaced_observation=True,
                         age_ms=12000,
                     ),
@@ -275,6 +277,100 @@ def test_replacement_marker_cannot_hide_red_or_unavailable(counts):
         )
     )
     assert logger.lines[0][0] == 30
+
+
+def expiry_event(**data):
+    return event(
+        level="warning",
+        data={
+            "observation_status": "stale",
+            "stale_reasons": ["input_expired"],
+            "candle_sources": {"failure_count": 0},
+            **data,
+        },
+    )
+
+
+def test_repeated_expiry_flaps_keep_durable_events_and_bound_console_repeats():
+    clock, logger, durable = Clock(), Logger(), ListEventSink()
+    sink = ConsoleSummarySink(logger, admission=ConsoleAdmission(clock=clock))
+    pipeline = LiveEventPipeline(console_sink=sink, structured_sinks=[durable])
+    try:
+        pipeline.emit(event())
+        for timestamp in (0, 10, 20, 299.999, 300):
+            clock.now = timestamp
+            pipeline.emit(expiry_event())
+            pipeline.emit(event())
+            assert pipeline.flush()
+        warnings = [line for level, line in logger.lines if level == 30]
+        current = [line for level, line in logger.lines if level == 20]
+        assert len(durable.events) == 11
+        assert len(warnings) == 2
+        assert all("stale_reason=input_expired" in line for line in warnings)
+        assert "repeats=4 over=300s" in warnings[1]
+        assert len(current) == 3
+        assert "HSL current" in logger.lines[-1][1]
+    finally:
+        pipeline.close()
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"counts": {"red": 1, "unavailable": 0}},
+        {"counts": {"red": 0, "unavailable": 1}},
+        {"account_unavailable": ["positions"]},
+        {"candle_sources": {"failure_count": 1}},
+        {"candle_sources": {}},
+        {"stale_reasons": ["input_expired", "account_generation_changed"]},
+    ],
+)
+def test_expiry_reminder_never_hides_other_hsl_warning(data):
+    clock, logger = Clock(), Logger()
+    sink = ConsoleSummarySink(logger, admission=ConsoleAdmission(clock=clock))
+    assert sink.write(expiry_event())
+    assert sink.write(event())
+    clock.now = 1
+    assert sink.write(expiry_event(console_replaced_observation=True, **data))
+    assert logger.lines[-1][0] == 30
+    assert sink.write(event())
+
+
+def test_expiry_lane_resets_for_a_visible_substantive_warning():
+    clock, logger = Clock(), Logger()
+    sink = ConsoleSummarySink(logger, admission=ConsoleAdmission(clock=clock))
+    missing_positions = expiry_event(account_unavailable=["positions"])
+    assert sink.write(expiry_event())
+    assert sink.write(event())
+    clock.now = 1
+    logger.fail = True
+    with pytest.raises(OSError):
+        sink.write(missing_positions)
+    logger.fail = False
+    assert sink.write(expiry_event()) is None
+    assert sink.write(missing_positions)
+    assert sink.write(expiry_event())
+    clock.now = 2
+    assert sink.write(missing_positions)
+    assert sink.write(event())
+
+
+def test_expiry_reminder_preserves_material_scope_transition_and_failed_delivery():
+    clock, logger = Clock(), Logger()
+    sink = ConsoleSummarySink(logger, admission=ConsoleAdmission(clock=clock))
+    sink.write(event())
+    logger.fail = True
+    with pytest.raises(OSError):
+        sink.write(expiry_event())
+    logger.fail = False
+    assert sink.write(event()) is None
+    assert sink.write(expiry_event())
+    assert sink.write(event())
+    clock.now = 1
+    assert sink.write(expiry_event()) is None
+    assert sink.write(event(data={"console_state": "b" * 64}))
+    assert sink.write(expiry_event(console_state="b" * 64))
+    assert sink.write(event(data={"console_state": "b" * 64}))
 
 
 def test_routine_refresh_summary_moves_only_console_to_debug():
