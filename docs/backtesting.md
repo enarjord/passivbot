@@ -325,7 +325,7 @@ passivbot backtest CONFIG --plots all --equity-csv
 passivbot backtest CONFIG --plots none
 ```
 
-Plot groups are `equity`, `hsl`, `hsl_episodes`, `coin_fills` and `twe`; `all` and
+Plot groups are `equity`, `hsl`, `hsl_episodes`, `coin_fills`, `twe` and `fills`; `all` and
 `none` select the complete set or disable rendering.
 BTC-denominated views, full-history fill plots, stop zooms and dense equity CSV are
 optional. The `twe` plot shows the long and short entry-price notionals separately
@@ -339,6 +339,43 @@ results need the per-side fill snapshots to generate this plot.
 
 Fill reports align cached candles and position-price observations by saved UTC
 execution clocks, including when a suite scenario starts inside a master dataset.
+
+The `fills` group writes `reports/fills.html`, a self-contained interactive page that
+works offline. It reads saved fills, equity and the cached 1m candles referenced by
+`dataset.json`, and replays no strategy logic. It contains:
+
+- run KPIs and the equity curve, which switches to log scale when equity spans more
+  than 10×;
+- a position-episode map. An episode runs from a coin/side's first entry until its
+  position size falls to the market minimum quantity. The map plots hold time
+  against realized PnL as a percentage of the balance before the episode opened;
+- exit anatomy: closes grouped by mechanism and side, with gains and losses summed
+  as percentages of the balance before each fill;
+- per-coin swimlanes. A run with at most 2,000 fills draws every fill. Larger runs draw
+  weekly (or daily) cells of realized PnL. A single-coin run gets one lane per side;
+- a coin view with candles, fills, position-price lines and wallet exposure. Drag to
+  zoom. A fill type with more than 150 marks in view collapses into a notional flow
+  panel unless "All marks" is on;
+- a fill ledger that groups consecutive fills of one order type, and a sortable
+  episode table that opens any episode in the coin view.
+
+Fill marks use shape for intent: triangles are entries (colored by side), circles are
+grid, trailing and EMA-anchor closes, and diamonds are unstuck, auto-reduce and HSL
+panic closes. Closes are colored by PnL sign.
+
+Candles are embedded at three resolutions: an overview of at most 4,000 bars per coin,
+a full-span tier bounded across all coins, and fine windows around the largest-PnL,
+longest and highest-exposure episodes. For finer candles elsewhere, narrow the report:
+
+```bash
+passivbot tool backtest-report RUN --plots fills
+passivbot tool backtest-report RUN --plots fills --fills-coins ENA --fills-start 2024-08-01 --fills-end 2024-08-10
+```
+
+`--fills-start` and `--fills-end` accept UTC dates or datetimes. Episodes come from
+the whole ledger, so a position that opened before the window keeps its full entry
+count and PnL. It appears when at least one of its fills is inside the window. `disable_plotting: coin_fills` also disables
+this report.
 
 Reports can be regenerated without running the strategy or contacting an exchange:
 

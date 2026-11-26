@@ -12,7 +12,7 @@ import pandas as pd
 
 from backtest_results import ResultStore, extrema_indices, write_json
 
-PLOTS = {"equity", "hsl", "hsl_episodes", "coin_fills", "twe"}
+PLOTS = {"equity", "hsl", "hsl_episodes", "coin_fills", "twe", "fills"}
 DEFAULT_PLOTS = ("equity", "hsl", "twe")
 
 
@@ -23,10 +23,19 @@ class ReportOptions:
     btc: bool = False
     equity_csv: bool = False
     scope: str | None = None
+    fills_coins: tuple[str, ...] = ()
+    fills_start_ms: int | None = None
+    fills_end_ms: int | None = None
 
     def __post_init__(self):
         if set(self.plots) - PLOTS or self.equity_scale not in {"log", "linear"}:
             raise ValueError("Invalid backtest report options")
+        if (
+            self.fills_start_ms is not None
+            and self.fills_end_ms is not None
+            and self.fills_start_ms > self.fills_end_ms
+        ):
+            raise ValueError("Fills report start must not be after its end")
 
 
 def parse_plots(text):
@@ -39,8 +48,23 @@ def parse_plots(text):
     )
     if not values or set(values) - PLOTS:
         raise ValueError(
-            "Plots must be equity,hsl,hsl_episodes,coin_fills,twe,all or none"
+            "Plots must be equity,hsl,hsl_episodes,coin_fills,twe,fills,all or none"
         )
+    return values
+
+
+def parse_utc_ms(text):
+    """Parse a date or datetime (UTC when no offset is given) to epoch ms."""
+    stamp = pd.Timestamp(text)
+    if stamp.tzinfo is None:
+        stamp = stamp.tz_localize("UTC")
+    return int(stamp.value // 1_000_000)
+
+
+def parse_coins(text):
+    values = tuple(dict.fromkeys(part.strip() for part in text.split(",") if part.strip()))
+    if not values:
+        raise ValueError("Expected a comma-separated coin list")
     return values
 
 
@@ -49,7 +73,10 @@ def add_report_arguments(parser):
         "--plots",
         type=parse_plots,
         default=DEFAULT_PLOTS,
-        help="Plot groups: equity,hsl,hsl_episodes,coin_fills,twe,all,none (default: equity,hsl,twe).",
+        help=(
+            "Plot groups: equity,hsl,hsl_episodes,coin_fills,twe,fills,all,none "
+            "(default: equity,hsl,twe). fills writes an interactive reports/fills.html."
+        ),
     )
     parser.add_argument("--equity-scale", choices=("log", "linear"), default="log")
     parser.add_argument(
@@ -62,11 +89,33 @@ def add_report_arguments(parser):
         action="store_true",
         help="Also export full-resolution equity as gzip CSV.",
     )
+    parser.add_argument(
+        "--fills-coins",
+        type=parse_coins,
+        default=(),
+        help="Limit the fills report to these comma-separated coins.",
+    )
+    parser.add_argument(
+        "--fills-start",
+        type=parse_utc_ms,
+        help="Fills report window start (UTC date or datetime); finer candles for focused windows.",
+    )
+    parser.add_argument(
+        "--fills-end",
+        type=parse_utc_ms,
+        help="Fills report window end (UTC date or datetime).",
+    )
 
 
 def options_from_args(args):
     return ReportOptions(
-        args.plots, args.equity_scale, args.report_btc, args.equity_csv
+        args.plots,
+        args.equity_scale,
+        args.report_btc,
+        args.equity_csv,
+        fills_coins=tuple(getattr(args, "fills_coins", ()) or ()),
+        fills_start_ms=getattr(args, "fills_start", None),
+        fills_end_ms=getattr(args, "fills_end", None),
     )
 
 
@@ -581,7 +630,7 @@ def episode_frame(report, *, scope=None):
     return pd.DataFrame(records, columns=columns)
 
 
-def render_reports(store, directory=None, *, options=None, disabled=()):
+def render_reports(store, directory=None, *, options=None, disabled=(), candles=None):
     import matplotlib.pyplot as plt
 
     options = options or ReportOptions()
@@ -597,7 +646,12 @@ def render_reports(store, directory=None, *, options=None, disabled=()):
         "timings_seconds": {},
     }
     write_json(directory / "report.json", status)
-    aliases = {"equity": "balance", "hsl": "hard_stop", "hsl_episodes": "hard_stop"}
+    aliases = {
+        "equity": "balance",
+        "hsl": "hard_stop",
+        "hsl_episodes": "hard_stop",
+        "fills": "coin_fills",
+    }
 
     def save(name, figure):
         if figure is None:
@@ -655,6 +709,18 @@ def render_reports(store, directory=None, *, options=None, disabled=()):
                                 title=f"HSL execution episode {i + 1} — {name}",
                             ),
                         )
+            elif group == "fills":
+                from fills_report import write_fills_report
+
+                write_fills_report(
+                    store,
+                    directory / "fills.html",
+                    candles=candles,
+                    coins=options.fills_coins,
+                    start_ms=options.fills_start_ms,
+                    end_ms=options.fills_end_ms,
+                )
+                status["artifacts"].append("fills.html")
             elif group == "twe":
                 save("total_wallet_exposure", create_wallet_exposure_overview(store))
             elif group == "coin_fills":

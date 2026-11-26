@@ -5,6 +5,13 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Add the `fills` backtest report group (`--plots fills`). It writes
+  `reports/fills.html`, a self-contained interactive page showing candles, fills,
+  position prices, wallet exposure, position episodes, exit anatomy and a grouped fill
+  ledger. It adapts to dense, multi-coin and hedge-mode runs. Regenerate it for saved
+  results with `passivbot tool backtest-report RUN --plots fills`, and narrow it with
+  `--fills-coins`, `--fills-start` and `--fills-end`.
+
 - Give admitted Binance limit closes for a confirmed uncovered position priority over
   ordinary entries at the creation batch limit. Keep risk-critical and native loss-gate
   allocation priority.

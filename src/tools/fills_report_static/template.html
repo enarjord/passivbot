@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fills · __TITLE__</title>
+<style>
+:root{
+  --bg:#f7f7f5;--card:#ffffff;--fg:#1c1c1a;--muted:#6b6b66;--border:#e4e3de;--grid:#eeede8;--hover:#f0efea;--ring:#9a9a92;
+  --long:#2563eb;--short:#d97706;--win:#15803d;--loss:#dc2626;--note:#b45309;
+  --radius:10px;--sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#121212;--card:#191919;--fg:#ececea;--muted:#9a9a94;--border:#2c2c2a;--grid:#242422;--hover:#232321;--ring:#6a6a66;
+  --long:#4f8ff0;--short:#d07c10;--win:#22a35a;--loss:#ef5a5a;--note:#e0a040;}}
+:root[data-theme="dark"]{
+  --bg:#121212;--card:#191919;--fg:#ececea;--muted:#9a9a94;--border:#2c2c2a;--grid:#242422;--hover:#232321;--ring:#6a6a66;
+  --long:#4f8ff0;--short:#d07c10;--win:#22a35a;--loss:#ef5a5a;--note:#e0a040;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:13px}
+main{max-width:1280px;margin:0 auto;padding:20px 16px 48px;display:flex;flex-direction:column;gap:22px}
+header h1{font-size:18px;margin:0 0 2px;font-weight:600;word-break:break-all}
+header p{margin:0;color:var(--muted)}
+h2{font-size:14px;font-weight:600;margin:0}
+.sub{font-size:12px;color:var(--muted);margin:2px 0 10px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.kpi{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:9px 11px}
+.kpi b{display:block;font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.kpi span{font-size:11px;color:var(--muted)}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.row .sp{flex:1}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}}
+button.chip,select{font:inherit;font-size:12px;border:1px solid var(--border);border-radius:999px;padding:3px 10px;background:transparent;color:var(--muted);cursor:pointer}
+select{border-radius:6px;color:var(--fg);background:var(--card)}
+button.chip[aria-pressed="true"]{background:var(--hover);color:var(--fg);border-color:var(--ring)}
+button.chip:focus-visible,select:focus-visible{outline:2px solid var(--ring);outline-offset:1px}
+.mono{font-family:var(--mono);font-size:11px;color:var(--muted)}
+svg{display:block;width:100%;overflow:visible;user-select:none}
+svg text{font-family:var(--sans);font-size:10px;fill:var(--muted)}
+svg .title{fill:var(--fg);font-weight:500;font-size:10.5px}
+svg .gl{stroke:var(--grid);stroke-width:1}
+svg .zero{stroke:var(--ring);stroke-width:1}
+.clickable{cursor:pointer}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:var(--muted);margin-top:8px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend span{white-space:nowrap}
+.legend svg,td svg,.kpi svg{display:inline-block;width:auto;vertical-align:middle}
+.table-wrap{max-height:520px;overflow:auto;border-top:1px solid var(--border)}
+table{border-collapse:collapse;width:100%;font-size:12px;font-variant-numeric:tabular-nums}
+th{position:sticky;top:0;background:var(--card);text-align:left;font-weight:500;color:var(--muted);border-bottom:1px solid var(--border);padding:5px 7px;white-space:nowrap}
+td{padding:4px 7px;border-bottom:1px solid var(--border);white-space:nowrap}
+td.n,th.n{text-align:right}
+tbody tr.clickable:hover td{background:var(--hover)}
+tr.sel td{background:var(--hover)}
+.pos{color:var(--win)}.neg{color:var(--loss)}
+.empty{color:var(--muted);padding:12px 0}
+.note{font-size:11.5px;color:var(--muted);border-left:2px solid var(--note);padding-left:8px;margin-top:10px}
+#tip{position:fixed;pointer-events:none;background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:7px 9px;font-size:11.5px;line-height:1.45;box-shadow:0 6px 20px rgba(0,0,0,.18);opacity:0;z-index:10;font-variant-numeric:tabular-nums;max-width:280px}
+#tip b{font-weight:600}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1 id="title"></h1>
+  <p id="period"></p>
+</header>
+<div class="kpis" id="kpis"></div>
+
+<section class="card">
+  <h2>Equity</h2>
+  <p class="sub" id="equity-sub">Strategy equity. Log scale is used automatically when equity spans more than 10×.</p>
+  <svg id="equity" height="150" role="img" aria-label="Equity curve"></svg>
+</section>
+
+<div class="grid2">
+<section class="card">
+  <h2>Position episodes</h2>
+  <p class="sub">Each dot is one position from first entry until flat. x = hold time (log), y = realized PnL as % of balance at open. Click a dot to inspect it.</p>
+  <svg id="fingerprint" height="260" role="img" aria-label="Episode hold time versus PnL"></svg>
+  <div class="legend" id="fp-legend"></div>
+</section>
+<section class="card">
+  <h2>Exit anatomy</h2>
+  <p class="sub">Closes grouped by mechanism and side. Gains and losses are summed as % of balance at fill time, so compounding runs aren't dominated by their final months.</p>
+  <div id="exits"></div>
+</section>
+</div>
+
+<section class="card">
+  <h2 id="lanes-title">Where and when the bot traded</h2>
+  <p class="sub" id="lanes-sub"></p>
+  <svg id="lanes" role="img" aria-label="Fills by coin over time"></svg>
+  <div class="legend" id="lanes-legend"></div>
+</section>
+
+<section class="card" id="coin-card">
+  <div class="row">
+    <h2 id="coin-title">Coin view</h2>
+    <span class="sp"></span>
+    <select id="coin-select" aria-label="Coin"></select>
+    <button class="chip" id="side-long" aria-pressed="true">Long</button>
+    <button class="chip" id="side-short" aria-pressed="true">Short</button>
+    <button class="chip" id="detail-all" aria-pressed="false" title="Draw every fill instead of collapsing dense fill types">All marks</button>
+    <button class="chip" id="reset" aria-pressed="false">Full range</button>
+    <span class="mono" id="interval"></span>
+  </div>
+  <p class="sub">Drag across the price chart to zoom; double-click to reset. Fill types with more than 150 marks in view collapse into the flow panel unless "All marks" is on.</p>
+  <svg id="price" height="320" role="img" aria-label="Candles with fills"></svg>
+  <svg id="flow" height="80" style="margin-top:8px" role="img" aria-label="Aggregated fill flow"></svg>
+  <svg id="exposure" height="100" style="margin-top:8px" role="img" aria-label="Wallet exposure"></svg>
+  <div class="legend" id="glyph-legend"></div>
+  <div class="note" id="episode-note" hidden></div>
+</section>
+
+<section class="card">
+  <div class="row"><h2>Fill ledger</h2><span class="sp"></span><span class="mono" id="ledger-count"></span></div>
+  <p class="sub">Fills of the coin view's coin and range. Consecutive fills of the same order type are grouped into one row.</p>
+  <div class="table-wrap"><table id="ledger"></table></div>
+</section>
+
+<section class="card">
+  <div class="row"><h2>Episodes</h2><span class="sp"></span><span id="ep-sorts"></span></div>
+  <p class="sub">Click a row to open the position in the coin view.</p>
+  <div class="table-wrap"><table id="episodes"></table></div>
+</section>
+
+<section class="card">
+  <h2>Glyph key</h2>
+  <p class="sub">Shape = intent. Entries are colored by side; closes are colored by PnL sign. The exact order type is in tooltips and the ledger.</p>
+  <table id="taxonomy"></table>
+</section>
+</main>
+<div id="tip" role="tooltip"></div>
+<script>
+/*__DATA__*/
+/*__APP__*/
+</script>
+</body>
+</html>
