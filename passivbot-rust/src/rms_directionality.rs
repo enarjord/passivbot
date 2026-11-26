@@ -44,11 +44,13 @@ pub fn backtest_enabled_sides(
         .collect()
 }
 
+pub const RMS_WARMUP_SPAN_MULTIPLIER: f64 = 20.0;
+
 pub fn warmup_returns(span: f64) -> Result<usize, String> {
     if !span.is_finite() || !(1.0..=100_000.0).contains(&span) {
         return Err("RMS directionality span must be finite and between 1 and 100000".into());
     }
-    Ok((span * 20.0).ceil() as usize)
+    Ok((span * RMS_WARMUP_SPAN_MULTIPLIER).ceil() as usize)
 }
 
 pub fn signed_rms(closes: &[f64], span: f64) -> Result<f64, String> {
@@ -170,6 +172,11 @@ impl RollingRms {
             (mean / square.sqrt()).clamp(-1.0, 1.0)
         })
     }
+}
+
+#[pyo3::prelude::pyfunction]
+pub fn rms_directionality_warmup_returns(span: f64) -> pyo3::PyResult<usize> {
+    warmup_returns(span).map_err(pyo3::exceptions::PyValueError::new_err)
 }
 
 #[pyo3::prelude::pyfunction]

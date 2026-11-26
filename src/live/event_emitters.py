@@ -3038,6 +3038,12 @@ def _emit_forager_selection_event_unchecked(
     volatility_dropped_count: int = 0,
     reason_code: str = "selected",
     status: str = "succeeded",
+    ranking_required: bool | None = None,
+    excluded_candidates: list[dict[str, str]] | None = None,
+    deferral_reason: str | None = None,
+    persistent_exclusions: list[dict[str, str]] | None = None,
+    entry_stall_ms: int = 0,
+    level: str = "info",
 ) -> None:
     selected = [str(symbol) for symbol in selected_symbols or []]
     incumbent = [str(symbol) for symbol in incumbent_symbols or []]
@@ -3067,13 +3073,21 @@ def _emit_forager_selection_event_unchecked(
         "hysteresis_event_count": int(hysteresis_event_count),
         "top_scores": _forager_top_score_sample(top_scores),
     }
+    if ranking_required is not None:
+        data.update(
+            ranking_required=ranking_required,
+            excluded_candidates=(excluded_candidates or [])[:12],
+            deferral_reason=deferral_reason,
+            persistent_exclusions=(persistent_exclusions or [])[:12],
+            entry_stall_ms=entry_stall_ms,
+        )
     if live_event_debug_profile_enabled(bot, "forager"):
         data["debug"] = _forager_debug_payload(data)
         data["debug_profile"] = "forager"
     _safe_emit(
         bot,
         EventTypes.FORAGER_SELECTION,
-        level="info",
+        level=level,
         component="forager.selection",
         tags=(EventTags.FORAGER, EventTags.SELECTION),
         cycle_id=current_live_event_cycle_id(bot),

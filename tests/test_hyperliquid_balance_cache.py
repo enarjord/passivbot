@@ -1763,6 +1763,93 @@ async def test_hyperliquid_fetch_positions_balance_handles_missing_asset_positio
     assert balance == pytest.approx(123.45)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unified", [True, False], ids=["unified", "perp_account_value"])
+async def test_hyperliquid_unchanged_decimal_balance_is_exact_across_upnl_moves(
+    stubbed_modules, unified
+):
+    """Equity and uPNL can move together while the exact decimal balance is unchanged."""
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+
+    import asyncio
+
+    expected = 203108.994347
+    # Each pair is an exchange equity and uPNL whose exact decimal difference is
+    # `expected`. Binary subtraction of the second pair leaves 1-ULP residue.
+    reads = [("203108.99434700", "0"), ("202907.33276700", "-201.66158")]
+    assert float(reads[1][0]) - (0.0 + float(reads[1][1])) - 0.0 != expected
+
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.quote = "USDC"
+    bot.positions = {}
+    bot.active_symbols = []
+    bot.fetched_positions = []
+    bot.coin_to_symbol = lambda c: f"{c}/USDC:USDC"
+    bot.cm = types.SimpleNamespace(get_current_close=lambda *args, **kwargs: 1.0)
+    bot._hl_fetch_lock = asyncio.Lock()
+    bot._hl_cache_generation = 0
+    bot._hl_unified_enabled = unified
+    bot._get_hl_dex_for_symbol = lambda _symbol: None
+    bot._fetch_hip3_positions = lambda include_raw=False: _return_async(
+        ([], []), include_raw
+    )
+    bot._record_hl_live_margin_mode = lambda *args, **kwargs: None
+    bot._hl_last_dex_scope_summary = (
+        lambda surface: f"{surface}_scope=active {surface}_dexes=0"
+    )
+    current = {}
+
+    class _MovingUpnlCCA:
+        async def fetch_balance(self):
+            equity, upnl = current["read"]
+            if unified:
+                return {
+                    "total": {"USDC": float(equity)},
+                    "info": {"balances": [{"coin": "USDC", "total": equity}]},
+                }
+            return {
+                "info": {
+                    "marginSummary": {"accountValue": equity},
+                    "assetPositions": [
+                        {
+                            "position": {
+                                "coin": "BTC",
+                                "szi": "0.01",
+                                "entryPx": "70000.0",
+                                "unrealizedPnl": upnl,
+                                "leverage": {"type": "cross"},
+                            }
+                        }
+                    ],
+                }
+            }
+
+        async def fetch_positions(self, **kwargs):
+            _, upnl = current["read"]
+            return [
+                {
+                    "symbol": "BTC/USDC:USDC",
+                    "side": "long",
+                    "contracts": 0.01,
+                    "entryPrice": 70000.0,
+                    "marginMode": "cross",
+                    "info": {"position": {"coin": "BTC", "unrealizedPnl": upnl}},
+                }
+            ]
+
+    bot.cca = _MovingUpnlCCA()
+    balances = []
+    for read in reads:
+        current["read"] = read
+        raw_snapshot, _positions, balance = await bot._fetch_positions_and_balance()
+        assert raw_snapshot["balance_mode"] == (
+            "unified_total" if unified else "perp_account_value"
+        )
+        balances.append(balance)
+
+    assert balances == [expected, expected]
+
+
 def test_hyperliquid_unified_balance_missing_quote_total_raises(stubbed_modules):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
 

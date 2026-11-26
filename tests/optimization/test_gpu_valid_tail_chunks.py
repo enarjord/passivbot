@@ -92,6 +92,21 @@ def test_strided_windows_and_empty_coin_sentinels_ignore_outside_values(monkeypa
     service._require_supported_multicoin_valid_tails(values, starts, tails)
 
 
+def test_subnormal_packed_close_is_rejected_inside_valid_window():
+    close_floor = np.finfo(np.float32).tiny
+    subnormal = np.nextafter(close_floor, np.float32(0.0))
+    values = np.ones((10, 2, 4))
+    values[0, 1, 2] = subnormal  # Outside declared coverage.
+    values[3, 1, 2] = close_floor
+    service._require_supported_multicoin_valid_tails(values, [0, 1], [9, 9])
+
+    values[3, 1, 2] = subnormal
+    assert _error(values, [0, 1], [9, 9]) == (
+        "GPU multicoin proxy received a subnormal packed float32 close; "
+        "coin index 1, candle_index=3"
+    )
+
+
 def test_conversions_masks_and_indices_are_bounded_and_chunks_do_not_overlap(monkeypatch):
     candles, coins, chunk_rows = 97, 5, 3
     values = np.ones((candles, coins, 4), dtype=np.float64)

@@ -529,6 +529,135 @@ async def test_hsl_green_can_plan_entries_without_hsl_history(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "expired",
+        "during_refresh",
+        "balance_changed",
+        "position_changed",
+        "refresh_failed",
+        "pending_before_refresh",
+        "expired_again",
+    ],
+)
+async def test_disabled_hsl_ordinary_plan_handoff(tmp_path, monkeypatch, case):
+    """A plan whose account receipts age out between cycles survives one refresh.
+
+    With HSL disabled the owner prepares ordinary plans ahead of the cycle that
+    submits them. A ready plan that waited longer than the account freshness bound
+    must be rechecked after the scheduled refresh instead of being discarded, while
+    any changed or unconfirmed account fact still rejects it.
+    """
+    import asyncio
+
+    user = f"fake_disabled_hsl_{tmp_path.name}"
+    _cleanup_fake_user_state(user)
+    legacy = prepare_config(
+        load_fake_hsl_config(), target="canonical", runtime=None, verbose=False
+    )
+    cfg = generated_template(mutable_runtime_fixture(legacy), "coin")
+    for side in ("long", "short"):
+        cfg["bot"][side]["risk"]["unstuck"]["enabled"] = False
+        cfg["bot"][side]["entry_cooldown"]["base_duration_minutes"] = 0.0
+        cfg["bot"][side]["risk"]["hsl"]["enabled"] = False
+    cfg["bot"]["portfolio"]["risk"]["loss_realization"]["loss_gate"]["enabled"] = False
+    cfg["bot"]["long"]["universe"]["approved_coins"] = ["BTC"]
+    set_risk_memory_spans(cfg, 288.0)
+    cfg = {key: value for key, value in cfg.items() if not key.startswith("_")}
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(cfg))
+    scenario = hjson.loads(
+        (REPO_ROOT / "scenarios/fake_live/hsl_long_red_restart.hjson").read_text()
+    )
+    scenario.pop("assertions", None)
+    scenario["account"].update(positions=[], fills=[])
+    scenario["run_initial_cycle"] = True
+    scenario_path = tmp_path / "scenario.hjson"
+    scenario_path.write_text(hjson.dumps(scenario))
+    observed = []
+
+    async def exercise(bot):
+        instance = hsl_live.owner(bot)
+        assert not hsl_live.runtime.enabled(bot)
+        instance.poll_inputs()
+        assert await bot.refresh_protective_authoritative_state(require_balance=True)
+        plan = await instance._ordinary_plan()
+        assert plan is not None and plan[1], "expected ordinary entries to submit"
+        ledger = bot._ensure_freshness_ledger()
+        max_age = bot._live_market_snapshot_max_age_ms()
+        for surface in ("balance", "positions", "open_orders"):
+            ledger.surfaces[surface].updated_ms -= max_age + 14_000
+        pending = instance._ordinary = asyncio.get_running_loop().create_future()
+        if case != "during_refresh":
+            pending.set_result(plan)
+        if case == "pending_before_refresh":
+            bot._request_authoritative_confirmation({"open_orders"})
+        refresh = bot.refresh_protective_authoritative_state
+
+        async def confirm(**kwargs):
+            if case == "refresh_failed":
+                return False
+            if case == "balance_changed":
+                bot.cca.balance_total += 0.001
+            updated = await refresh(**kwargs)
+            if case == "position_changed":
+                bot.positions[bot.active_symbols[0]]["long"]["size"] = 1.0
+            if case == "expired_again":
+                ledger.surfaces["balance"].updated_ms -= max_age + 14_000
+            if case == "during_refresh":
+                pending.set_result(plan)
+            return updated
+
+        monkeypatch.setattr(bot, "refresh_protective_authoritative_state", confirm)
+        result = await instance.cycle()
+        expected_write = case in {"expired", "during_refresh"}
+        assert result["ordinary_completed"]
+        assert result["ordinary_executed"] is expected_write
+        writes = [
+            call
+            for call in bot.cca.export_request_log()
+            if call["method"] == "create_order"
+        ]
+        assert len(writes) == int(expected_write)
+        observed.append(result)
+        return {"disabled_hsl_handoff": case}
+
+    monkeypatch.setattr(runner, "_run_fake_cycle", exercise)
+    try:
+        args = argparse.Namespace(
+            config=str(config_path),
+            scenario=str(scenario_path),
+            user=user,
+            max_steps=1,
+            output_dir=str(tmp_path),
+            log_level=1,
+            snapshot_each_step=False,
+        )
+        assert await runner._async_main(args) == 0
+    finally:
+        _cleanup_fake_user_state(user)
+    assert len(observed) == 1
+    if observed[0]["ordinary_executed"]:
+        return
+    expected_reason = {
+        "balance_changed": "raw_balance_changed",
+        "position_changed": "account_facts_changed",
+        "refresh_failed": "current_account_inputs_unavailable",
+        "pending_before_refresh": "current_account_inputs_unavailable",
+        "expired_again": "current_account_inputs_unavailable",
+    }[case]
+    events = json.loads(next(tmp_path.rglob("live_events.json")).read_text())
+    discards = [
+        row["data"]
+        for row in events
+        if row["event_type"] == "planning.unavailable"
+        and row["data"].get("context") == f"ordinary after_protection: {expected_reason}"
+    ]
+    assert len(discards) == 1, [row["data"] for row in events if row["event_type"] == "planning.unavailable"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("obstacle", ["unfilled_limit", "missing_quote"])
 async def test_hsl_other_coin_closes_while_first_coin_is_pending(
     tmp_path, monkeypatch, obstacle

@@ -71,7 +71,7 @@ from live import (
 )
 from live.create_failure_guard import CreateFailureGuard
 from live.diagnostic_safety import bounded_traceback_detail as _bounded_traceback_detail
-from live import balance_validation, hsl_live
+from live import balance_validation, forager_health, hsl_live
 from live.order_churn_gate import (
     ORDER_CHURN_GATE_SUPPORTED_EXCHANGES,
     OrderChurnGateState,
@@ -217,6 +217,7 @@ class _OrchestratorPreparation:
     signed_rms_directionality: dict
     forager_signed_rms_directionality: dict
     rms_directionality_unavailable: dict
+    forager_ranking_ready: dict[str, bool]
 
 
 @dataclass(frozen=True)
@@ -13510,14 +13511,41 @@ class Passivbot:
         return append_samples(message, "top", top_samples, len(top_scores))
 
     def _log_forager_selection_diagnostics(
-        self, out: dict, idx_to_symbol: dict[int, str]
+        self, out: dict, idx_to_symbol: dict[int, str],
+        *,
+        active_entry_cooldowns: set[tuple[int, str]] | None = None,
     ) -> None:
         """Emit throttled Rust-owned forager score and hysteresis diagnostics."""
         diagnostics = out.get("diagnostics", {}) if isinstance(out, dict) else {}
         selections = diagnostics.get("forager_selections", [])
         self._forager_ranking_required_by_side = {"long": False, "short": False}
         if not isinstance(selections, list) or not selections:
+            self._forager_health_state = {}
             return
+        health_inputs = {
+            selection["pside"]: {
+                **selection,
+                "forager_mode": selection["ranking_required"] or (
+                    hasattr(self, "approved_coins_minus_ignored_coins")
+                    and self.is_forager_mode(selection["pside"])
+                ),
+                "excluded_candidates": [
+                    {
+                        "symbol": idx_to_symbol[row["symbol_idx"]],
+                        "feature": row["feature"],
+                        "reason": row["reason"],
+                    }
+                    for row in selection["excluded_candidates"]
+                ],
+            }
+            for selection in selections
+        }
+        health = forager_health.observe(
+            self,
+            health_inputs,
+            now_ms=time.monotonic_ns() // 1_000_000,
+            active_entry_cooldowns=active_entry_cooldowns,
+        )
         if not hasattr(self, "_forager_selection_log_state"):
             self._forager_selection_log_state = {}
         if not hasattr(self, "_forager_selection_info_interval_ms"):
@@ -13656,11 +13684,32 @@ class Passivbot:
                         "incumbent": bool(item.get("incumbent")),
                     }
                 )
+            entry_health = health[pside]
+            persistent = entry_health["persistent_exclusions"]
+            deferral_reason = selection["deferral_reason"]
+            reason_code = "rust_orchestrator_selection"
+            if entry_health["stall_warning_due"]:
+                reason_code = ReasonCodes.NO_ENTRIES_WITH_FREE_SLOTS
+            elif persistent:
+                reason_code = ReasonCodes.PERSISTENT_FEATURE_EXCLUSION
+            elif deferral_reason:
+                reason_code = deferral_reason
+            exclusions = health_inputs[pside]["excluded_candidates"]
+            status = "succeeded" if selected_symbols else "skipped"
+            if deferral_reason:
+                status = "deferred"
             Passivbot._emit_forager_selection_event(
                 self,
                 pside=pside,
-                candidate_count=len(top_scores),
-                eligible_count=len(top_scores),
+                candidate_count=selection["candidate_count"],
+                eligible_count=selection["eligible_count"],
+                ranking_required=selection["ranking_required"],
+                excluded_candidates=exclusions,
+                feature_unavailable_count=len(exclusions),
+                deferral_reason=deferral_reason,
+                persistent_exclusions=persistent,
+                entry_stall_ms=entry_health["stall_ms"],
+                level="warning" if entry_health["stall_warning_due"] or persistent else "info",
                 selected_symbols=tuple(
                     _event_symbol(idx)
                     for idx in (selection.get("selected_symbol_indices") or [])
@@ -13681,8 +13730,8 @@ class Passivbot:
                 top_scores=top_score_payload,
                 hysteresis_event_count=len(events),
                 source="rust_orchestrator",
-                status="succeeded" if selected_symbols else "skipped",
-                reason_code="rust_orchestrator_selection",
+                status=status,
+                reason_code=reason_code,
             )
             # Empty eligibility has no selection to change when only capacity
             # changes. Retain the real slot count in the durable/debug payload.
@@ -15751,6 +15800,7 @@ class Passivbot:
 
         forager_cached_metric_max_age_by_symbol: dict[str, int] = {}
         forager_projection_max_age_by_symbol: dict[str, int] = {}
+        max_calls_i = 0
         if is_forager_mode():
             priority_symbols = []
             secondary_symbols = []
@@ -17334,8 +17384,28 @@ class Passivbot:
             if self.is_pside_enabled(side)
         )
         if directional_enabled:
-            directional, ranking_directional, missing_directional = await rms_directionality.load(
-                self, symbols, cache_only_symbols, forager_cached_metric_max_age_by_symbol
+            # The candidate maintainer owns deep RMS repair for these symbols.
+            # Ordinary 1m acquisition already owns the latest completed tail.
+            unmanaged_ranking_span = max(
+                (
+                    float(self.bot_value(side, "rms_directionality_ema_span_minutes"))
+                    for side in directional_scoring_sides
+                    if not is_forager_mode(side)
+                ),
+                default=0.0,
+            )
+            history_managed_symbols = {
+                symbol
+                for side in directional_scoring_sides
+                if max_calls_i > 0
+                and is_forager_mode(side)
+                and float(self.bot_value(side, "rms_directionality_ema_span_minutes"))
+                >= unmanaged_ranking_span
+                for symbol in self.approved_coins_minus_ignored_coins[side]
+            }
+            directional, ranking_directional, missing_directional = await rms_directionality.read_required(
+                self, symbols, cache_only_symbols | history_managed_symbols,
+                forager_cached_metric_max_age_by_symbol,
             )
             self._orchestrator_signed_rms_directionality = directional
             self._orchestrator_forager_signed_rms_directionality = ranking_directional
@@ -17584,6 +17654,27 @@ class Passivbot:
         )
         return modes == preparation.mode_overrides and unavailable == preparation.exchange_unavailable_symbols
 
+    def _record_forager_startup_refresh(
+        self,
+        required_by_side: dict[str, set[tuple[str, str]]],
+        attempted_surfaces: set[tuple[str, str]],
+    ) -> None:
+        """Latch each side once its initial sweep has reached all candidate surfaces."""
+        ready = getattr(self, "_forager_startup_ready_sides", set())
+        pending_requirements = {
+            side: required for side, required in required_by_side.items() if side not in ready
+        }
+        if not pending_requirements:
+            return
+        required = set().union(*pending_requirements.values())
+        attempted = getattr(self, "_forager_startup_attempted_surfaces", set())
+        attempted = (attempted | attempted_surfaces) & required
+        ready.update(
+            side for side, surfaces in pending_requirements.items() if surfaces <= attempted
+        )
+        self._forager_startup_ready_sides = ready
+        self._forager_startup_attempted_surfaces = attempted
+
     async def _prepare_orchestrator_inputs(self, symbols: list[str]) -> _OrchestratorPreparation:
         """Load candle and strategy features without acquiring an order permission."""
         inputs = Passivbot._orchestrator_preparation_inputs(self)
@@ -17651,6 +17742,18 @@ class Passivbot:
             signed_rms_directionality=getattr(self, "_orchestrator_signed_rms_directionality", {}),
             forager_signed_rms_directionality=getattr(self, "_orchestrator_forager_signed_rms_directionality", {}),
             rms_directionality_unavailable=getattr(self, "_orchestrator_rms_directionality_unavailable", {}),
+            # A disabled background budget leaves the completed local EMA sweep
+            # as the startup attempt. No remote work is required in this mode.
+            forager_ranking_ready={
+                side: (
+                    side in getattr(self, "_forager_startup_ready_sides", ())
+                    or not self.is_forager_mode(side)
+                    or get_optional_live_value(
+                        self.config, "max_ohlcv_fetches_per_minute", 0
+                    ) <= 0
+                )
+                for side in ("long", "short")
+            },
         )
 
     def _calculate_prepared_ideal_orders(
@@ -17738,6 +17841,7 @@ class Passivbot:
         )
         input_dict = {
             "timestamp_ms": now_ms,
+            "forager_ranking_ready": preparation.forager_ranking_ready,
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
             # Deliberately omit backtest.market_order_slippage_fraction in live.
@@ -17913,8 +18017,10 @@ class Passivbot:
         )
         try:
             out_json = pbr.compute_ideal_orders_json(input_json)
+            active_entry_cooldowns: set[tuple[int, str]] = set()
             out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
-                out_json, idx_to_symbol, input_dict
+                out_json, idx_to_symbol, input_dict,
+                active_entry_cooldowns=active_entry_cooldowns,
             )
             diagnostics = out["diagnostics"]
             from live import realized_close_admission
@@ -17975,10 +18081,9 @@ class Passivbot:
             self._log_min_effective_cost_blocks(out, idx_to_symbol)
         else:
             Passivbot._log_min_effective_cost_blocks(self, out, idx_to_symbol)
-        if hasattr(self, "_log_forager_selection_diagnostics"):
-            self._log_forager_selection_diagnostics(out, idx_to_symbol)
-        else:
-            Passivbot._log_forager_selection_diagnostics(self, out, idx_to_symbol)
+        Passivbot._log_forager_selection_diagnostics(
+            self, out, idx_to_symbol, active_entry_cooldowns=active_entry_cooldowns
+        )
         if hasattr(self, "_apply_orchestrator_symbol_states"):
             self._apply_orchestrator_symbol_states(
                 diagnostics,
@@ -18840,6 +18945,7 @@ class Passivbot:
         for sym in per_symbol_win:
             per_symbol_win[sym] = max(minimum_1m_window, int(per_symbol_win[sym]))
         now = utc_ms()
+        history_now = Passivbot._completed_candle_health_now_ms(self)
         max_refresh_s_raw = get_optional_live_value(
             self.config, "max_forager_candle_refresh_seconds", 45
         )
@@ -18885,12 +18991,18 @@ class Passivbot:
         # Historical repair shares the fetch budget without delaying tail refreshes.
         target_age_ms = self._forager_target_staleness_ms(len(surface_specs), max_calls)
 
-        from live.rms_directionality import RMS_CACHE_KIND, history_candle_count
-
-        # An RMS window can be much deeper than the ordinary EMA/WS tail.
-        # Give its historical repair the same budget and fairness as other
-        # surfaces, including for coins just promoted out of the WS universe.
+        # Historical repair uses 1m rows but has an independent scheduling key
+        # and shares the fetch budget without changing the tail-age allowance.
+        history_job = "1m_history"
         rms_spans: dict[str, float] = {}
+        required_by_side = {
+            side: {
+                (symbol, timeframe)
+                for timeframe, symbol, _ in surface_specs
+                if symbol in refreshable_by_side.get(side, ())
+            }
+            for side in candidates_by_side
+        }
         for side, symbols in candidates_by_side.items():
             weight = get_optional_config_value(
                 self.config, f"bot.{side}.forager.score_weights.rms_directionality"
@@ -18900,9 +19012,32 @@ class Passivbot:
             span = float(self.bot_value(side, "rms_directionality_ema_span_minutes"))
             for symbol in symbols:
                 rms_spans[symbol] = max(rms_spans.get(symbol, span), span)
+                required_by_side[side].add((symbol, history_job))
+        if rms_spans:
+            from live.rms_directionality import adverse_enabled
+
+            adverse_side_spans = {
+                side: float(self.bot_value(side, "rms_directionality_ema_span_minutes"))
+                for side in ("long", "short")
+                if self.is_pside_enabled(side)
+            }
+            for symbol, span in rms_spans.items():
+                # Planning reads these symbols cache-only. The same history
+                # job therefore covers a longer cooldown span on either side.
+                rms_spans[symbol] = max(
+                    [span]
+                    + [
+                        current_span
+                        for side, current_span in adverse_side_spans.items()
+                        if current_span > span and adverse_enabled(self, side, symbol)
+                    ]
+                )
         surface_specs.extend(
-            ("rms", symbol, history_candle_count(span)) for symbol, span in rms_spans.items()
+            (history_job, symbol, self.cm.rms_history_candle_count(span))
+            for symbol, span in rms_spans.items()
         )
+        attempted_surfaces: set[tuple[str, str]] = set()
+        Passivbot._record_forager_startup_refresh(self, required_by_side, attempted_surfaces)
         if not surface_specs:
             return
         required_surface_count = len(surface_specs)
@@ -18942,11 +19077,7 @@ class Passivbot:
         stale: List[
             Tuple[Tuple[int, int, int, int, str], str, str, int, Dict[str, Any]]
         ] = []
-        # A verified score for the newest historical minute already proves a
-        # dense window for its span. Avoid reloading that window for the scan.
-        latest_history = (now // ONE_MIN_MS - 2) * ONE_MIN_MS
-        candle_ema_cache = getattr(self.cm, "_ema_cache", {})
-        for scan_idx, (timeframe, sym, required_candles) in enumerate(
+        for scan_idx, (job_kind, sym, required_candles) in enumerate(
             surface_specs[:health_scan_budget]
         ):
             if (
@@ -18955,39 +19086,34 @@ class Passivbot:
                 and utc_ms() - refresh_started_ms >= max_refresh_ms
             ):
                 break
-            surface_key = (sym, timeframe)
+            surface_key = (sym, job_kind)
             retry_after_ms = int(surface_failure_retry_after.get(surface_key, 0) or 0)
             if retry_after_ms > now:
                 surface_checks[surface_key] = int(utc_ms())
+                attempted_surfaces.add(surface_key)
                 continue
-            if timeframe == "rms":
-                memo = candle_ema_cache.get(sym, {}).get((RMS_CACHE_KIND, rms_spans[sym], "60000"))
-                if memo is not None and latest_history <= memo[1] <= latest_history + ONE_MIN_MS:
-                    surface_checks[surface_key] = int(utc_ms())
-                    continue
+            if job_kind == history_job:
+                page = self.cm.plan_rms_history_repair(
+                    sym, rms_spans[sym], now_ms=history_now,
+                )
+                surface_checks[surface_key] = int(utc_ms())
+                if page is None:
+                    attempted_surfaces.add(surface_key)
+                else:
+                    priority = (
+                        int(surface_attempts.get(surface_key, 0)), 1, 2, 0, f"{sym}:{job_kind}"
+                    )
+                    stale.append((priority, sym, job_kind, required_candles, {"repair_page": page}))
+                continue
+            timeframe = job_kind
             surface_health = Passivbot._candidate_candle_surface_health(
                 self,
                 sym,
-                "1m" if timeframe == "rms" else timeframe,
+                timeframe,
                 required_candles,
                 now_ms=now,
             )
             checked_ms = int(utc_ms())
-            if timeframe == "rms":
-                # Leave the just-completed minute to the regular 1m refresh.
-                # Work toward a dense suffix, one bounded range at a time.
-                for gap_start, gap_end in reversed(surface_health.get("refreshable_missing_spans", [])):
-                    page_end = min(gap_end, latest_history)
-                    if gap_start <= page_end:
-                        page_start = max(gap_start, page_end - 99 * ONE_MIN_MS)
-                        priority = (
-                            int(surface_attempts.get(surface_key, 0)), 1, 2, 0, f"{sym}:rms"
-                        )
-                        surface_health["repair_page"] = (page_start, page_end)
-                        stale.append((priority, sym, timeframe, required_candles, surface_health))
-                        break
-                surface_checks[surface_key] = checked_ms
-                continue
             age_ms = int(surface_health.get("age_ms", 0) or 0)
             no_basis = bool(surface_health.get("no_basis"))
             tail_only = bool(surface_health.get("tail_only")) and not no_basis
@@ -19005,6 +19131,7 @@ class Passivbot:
             )
             if not refresh_needed and not ws_rest_audit_due:
                 surface_checks[surface_key] = checked_ms
+                attempted_surfaces.add(surface_key)
                 continue
             if (
                 age_ms <= target_age_ms
@@ -19012,6 +19139,7 @@ class Passivbot:
                 and not ws_rest_audit_due
             ):
                 surface_checks[surface_key] = checked_ms
+                attempted_surfaces.add(surface_key)
                 continue
             last_attempt_ms = int(surface_attempts.get(surface_key, 0) or 0)
             surface_success_key = (sym, timeframe, int(required_candles))
@@ -19027,6 +19155,7 @@ class Passivbot:
                 # window. Keep the candidate unavailable, but do not spend REST
                 # budget retrying that unchanged prefix every refresh cycle.
                 surface_checks[surface_key] = checked_ms
+                attempted_surfaces.add(surface_key)
                 continue
             priority = (
                 last_attempt_ms,
@@ -19036,6 +19165,7 @@ class Passivbot:
                 f"{sym}:{timeframe}",
             )
             stale.append((priority, sym, timeframe, required_candles, surface_health))
+        Passivbot._record_forager_startup_refresh(self, required_by_side, attempted_surfaces)
         self._forager_surface_attempt_ms = surface_attempts
         self._forager_surface_success_ms = surface_successes
         self._forager_surface_check_ms = surface_checks
@@ -19110,10 +19240,13 @@ class Passivbot:
         except Exception:
             pass
 
-        for idx, (_priority, sym, timeframe, required_candles, pre_health) in enumerate(
+        for idx, (_priority, sym, job_kind, required_candles, pre_health) in enumerate(
             to_refresh, start=1
         ):
             surface_time_slice_expired = False
+            repair_history = job_kind == history_job
+            timeframe = "1m" if repair_history else job_kind
+            surface_key = (sym, job_kind)
             if Passivbot._shutdown_requested(self):
                 logging.debug("[shutdown] aborting forager candle refresh")
                 return
@@ -19124,7 +19257,7 @@ class Passivbot:
                     self,
                     symbol=sym,
                     max_refresh_ms=int(max_refresh_ms),
-                    stale_age_ms=int(stale_by_surface.get((sym, timeframe), 0)),
+                    stale_age_ms=int(stale_by_surface.get(surface_key, 0)),
                     target_age_ms=int(target_age_ms),
                     refreshed_count=int(refreshed_count),
                     total_count=len(to_refresh),
@@ -19140,22 +19273,24 @@ class Passivbot:
                 break
             try:
                 period_ms = ONE_MIN_MS if timeframe != "1h" else 60 * ONE_MIN_MS
-                candle_timeframe = "1m" if timeframe == "rms" else timeframe
-                end_ts = int(end_ts_by_timeframe[candle_timeframe])
+                end_ts = int(end_ts_by_timeframe[timeframe])
                 start_ts = end_ts - period_ms * max(1, int(required_candles))
-                if timeframe == "rms":
+                if repair_history:
                     start_ts, end_ts = pre_health["repair_page"]
-                surface_checks[(sym, timeframe)] = int(utc_ms())
+                surface_checks[surface_key] = int(utc_ms())
                 self._forager_surface_check_ms = surface_checks
-                surface_attempts[(sym, timeframe)] = int(utc_ms())
+                surface_attempts[surface_key] = int(utc_ms())
                 self._forager_surface_attempt_ms = surface_attempts
-                ws_rest_audit_due = Passivbot._forager_ws_rest_audit_due(
+                attempted_surfaces.add(surface_key)
+                Passivbot._record_forager_startup_refresh(self, required_by_side, attempted_surfaces)
+                if repair_history:
+                    candle_task = self.cm.repair_completed_minute_page(sym, start_ts, end_ts)
+                elif Passivbot._forager_ws_rest_audit_due(
                     self,
                     timeframe,
                     pre_health,
                     now_ms=now,
-                )
-                if ws_rest_audit_due:
+                ):
                     # A canonical WS tail is already fresh, so the ordinary
                     # get_candles/refresh path would skip network I/O. Force a
                     # bounded overlap specifically for the REST integrity audit.
@@ -19163,11 +19298,6 @@ class Passivbot:
                         sym,
                         through_ts=end_ts,
                         force_overlap=True,
-                    )
-                elif timeframe == "rms":
-                    candle_task = self.cm.get_candles(
-                        sym, start_ts=start_ts, end_ts=end_ts, timeframe="1m",
-                        strict=False, standardize=False,
                     )
                 else:
                     candle_task = self.cm.get_candles(
@@ -19215,17 +19345,16 @@ class Passivbot:
                     refreshed = candle_fetch_task.result()
                 else:
                     refreshed = await candle_task
-                if timeframe == "rms":
-                    if not len(refreshed):
-                        surface_failure_retry_after[(sym, timeframe)] = (
+                if repair_history:
+                    if not refreshed:
+                        surface_failure_retry_after[surface_key] = (
                             int(utc_ms()) + _FORAGER_TERMINAL_EMPTY_RETRY_MS
                         )
                     else:
-                        surface_failure_retry_after.pop((sym, timeframe), None)
+                        surface_failure_retry_after.pop(surface_key, None)
                     logging.debug(
-                        "[candle] RMS history repair | symbol=%s start=%d end=%d rows=%d required=%d missing_before=%d",
-                        Passivbot._log_symbol(sym), start_ts, end_ts, len(refreshed),
-                        required_candles, pre_health["missing_candles"],
+                        "[candle] RMS history repair | symbol=%s start=%d end=%d rows=%d required=%d",
+                        Passivbot._log_symbol(sym), start_ts, end_ts, refreshed, required_candles,
                     )
                 else:
                     post_health = Passivbot._candidate_candle_surface_health(
@@ -19246,7 +19375,7 @@ class Passivbot:
                         and (post_health.get("no_basis") or post_health.get("tail_only"))
                     )
                     if empty_or_unchanged_tail:
-                        surface_failure_retry_after[(sym, timeframe)] = int(
+                        surface_failure_retry_after[surface_key] = int(
                             utc_ms() + _FORAGER_TERMINAL_EMPTY_RETRY_MS
                         )
                         logging.debug(
@@ -19256,7 +19385,7 @@ class Passivbot:
                             timeframe,
                         )
                     else:
-                        surface_failure_retry_after.pop((sym, timeframe), None)
+                        surface_failure_retry_after.pop(surface_key, None)
                     self._forager_surface_failure_retry_after_ms = (
                         surface_failure_retry_after
                     )
@@ -19304,7 +19433,7 @@ class Passivbot:
                     )
                     last_progress_ms = now_ms
             except TimeoutError as exc:
-                surface_failure_retry_after[(sym, timeframe)] = int(
+                surface_failure_retry_after[surface_key] = int(
                     utc_ms() + _FORAGER_TRANSIENT_FAILURE_RETRY_MS
                 )
                 self._forager_surface_failure_retry_after_ms = (
@@ -19319,7 +19448,7 @@ class Passivbot:
                         self,
                         symbol=sym,
                         max_refresh_ms=int(max_refresh_ms),
-                        stale_age_ms=int(stale_by_surface.get((sym, timeframe), 0)),
+                        stale_age_ms=int(stale_by_surface.get(surface_key, 0)),
                         target_age_ms=int(target_age_ms),
                         refreshed_count=int(refreshed_count),
                         total_count=len(to_refresh),
@@ -19342,7 +19471,7 @@ class Passivbot:
             except Exception as exc:
                 error_type = bounded_exception_type(exc)
                 if isinstance(exc, OhlcvTerminalEmptyPage):
-                    surface_failure_retry_after[(sym, timeframe)] = int(
+                    surface_failure_retry_after[surface_key] = int(
                         utc_ms() + _FORAGER_TERMINAL_EMPTY_RETRY_MS
                     )
                     self._forager_surface_failure_retry_after_ms = (

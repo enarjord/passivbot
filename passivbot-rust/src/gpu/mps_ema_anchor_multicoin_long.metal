@@ -911,7 +911,7 @@ inline bool update_ema_multicoin_dual_side_hsl(
         && valid_hsl_multicoin_hsl(short_side.hsl, short_side.coin_hsl, coin_count);
 }
 
-inline void update_ema_multicoin_side_selection(
+inline bool update_ema_multicoin_side_selection(
     thread EmaMulticoinSideState& side,
     thread const EmaMulticoinSideConfig& config,
     constant float* bars,
@@ -1032,19 +1032,24 @@ inline void update_ema_multicoin_side_selection(
         enabled_count -= 1;
         slots -= 1;
     }
+    if (enabled_count > slots && config.adaptive.score_weight > 0.0f) {
+        for (int c = 0; c < coin_count; ++c) {
+            if (!survivor[c]) continue;
+            int first_valid = int(coin_settings[c * COIN_COLS + 6]);
+            // Only an incomplete window is expected unavailability.
+            if (k - first_valid < side.adaptive[c].window) {
+                survivor[c] = false;
+                enabled_count -= 1;
+            } else if (!isfinite(side.adaptive[c].score)) {
+                return false;
+            }
+        }
+    }
     if (enabled_count <= slots) {
         for (int c = 0; c < coin_count; ++c) {
             if (survivor[c]) selected[c] = true;
         }
-        return;
-    }
-    if (config.adaptive.score_weight > 0.0f) {
-        for (int c = 0; c < coin_count; ++c) {
-            if (survivor[c] && !isfinite(side.adaptive[c].score)) {
-                // Retry next bar until all retained ranking scores are available.
-                return;
-            }
-        }
+        return true;
     }
     float rms_directionality_min = INFINITY;
     float rms_directionality_max = -INFINITY;
@@ -1166,6 +1171,7 @@ inline void update_ema_multicoin_side_selection(
             }
         }
     }
+    return true;
 }
 
 inline void generate_ema_multicoin_side_orders(
@@ -2944,14 +2950,17 @@ inline void passivbot_ema_anchor_multicoin_impl(
         }
         if (can_generate) {
             if (entries_enabled) {
-            update_ema_multicoin_side_selection(
-                side, config, bars, coin_settings ORGANILLO_PASS, coin_overrides,
-                k, C, short_side,
-                any_fill,
-                effective_n_positions,
-                score_hysteresis, 0ul,
-                filter_by_min_effective_cost, account.balance
-            );
+                if (!update_ema_multicoin_side_selection(
+                    side, config, bars, coin_settings ORGANILLO_PASS, coin_overrides,
+                    k, C, short_side,
+                    any_fill,
+                    effective_n_positions,
+                    score_hysteresis, 0ul,
+                    filter_by_min_effective_cost, account.balance
+                )) {
+                    scalars[int(b) * SCALAR_COLS + 9] = -9.0f;
+                    return;
+                }
             }
             generate_ema_multicoin_side_orders(
                 side, config, account,
@@ -3792,14 +3801,17 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         }
         if (long_can_generate) {
             if (long_entries_enabled) {
-            update_ema_multicoin_side_selection(
-                long_side, long_config, bars, coin_settings ORGANILLO_PASS,
-                long_coin_overrides, k, C, false,
-                any_fill,
-                long_effective_n_positions, long_score_hysteresis,
-                long_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost_long, account.balance
-            );
+                if (!update_ema_multicoin_side_selection(
+                    long_side, long_config, bars, coin_settings ORGANILLO_PASS,
+                    long_coin_overrides, k, C, false,
+                    any_fill,
+                    long_effective_n_positions, long_score_hysteresis,
+                    long_one_way_selection_blocked_mask,
+                    filter_by_min_effective_cost_long, account.balance
+                )) {
+                    scalars[int(b) * FUSED_SCALAR_COLS + 9] = -9.0f;
+                    return;
+                }
             }
             generate_ema_multicoin_side_orders(
                 long_side, long_config, account,
@@ -3812,14 +3824,17 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         }
         if (short_can_generate) {
             if (short_entries_enabled) {
-            update_ema_multicoin_side_selection(
-                short_side, short_config, bars, coin_settings ORGANILLO_PASS,
-                short_coin_overrides, k, C, true,
-                any_fill,
-                short_effective_n_positions, short_score_hysteresis,
-                short_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost_short, account.balance
-            );
+                if (!update_ema_multicoin_side_selection(
+                    short_side, short_config, bars, coin_settings ORGANILLO_PASS,
+                    short_coin_overrides, k, C, true,
+                    any_fill,
+                    short_effective_n_positions, short_score_hysteresis,
+                    short_one_way_selection_blocked_mask,
+                    filter_by_min_effective_cost_short, account.balance
+                )) {
+                    scalars[int(b) * FUSED_SCALAR_COLS + 9] = -9.0f;
+                    return;
+                }
             }
             generate_ema_multicoin_side_orders(
                 short_side, short_config, account,

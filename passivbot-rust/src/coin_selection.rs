@@ -89,7 +89,7 @@ pub struct ForagerHysteresisEvent {
     pub kept_incumbent: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ForagerSelectionResult {
     pub selected_indices: Vec<usize>,
     pub scored: Vec<ForagerScoredCandidate>,
@@ -295,6 +295,21 @@ pub fn select_forager_candidates_with_diagnostics(
     candidates: &[ForagerCandidate],
     cfg: &ForagerSelectionConfig,
 ) -> Result<ForagerSelectionResult, ForagerSelectionError> {
+    select_forager_candidates_impl(candidates, cfg, false)
+}
+
+pub(crate) fn select_eligible_forager_candidates(
+    candidates: &[ForagerCandidate],
+    cfg: &ForagerSelectionConfig,
+) -> Result<ForagerSelectionResult, ForagerSelectionError> {
+    select_forager_candidates_impl(candidates, cfg, true)
+}
+
+fn select_forager_candidates_impl(
+    candidates: &[ForagerCandidate],
+    cfg: &ForagerSelectionConfig,
+    skip_scoring_if_fit: bool,
+) -> Result<ForagerSelectionResult, ForagerSelectionError> {
     let normalized_weights = validate_forager_weights(&cfg.weights)?;
     let score_hysteresis_margin = cfg.score_hysteresis()?;
     let normalized_cfg = ForagerSelectionConfig {
@@ -309,7 +324,10 @@ pub fn select_forager_candidates_with_diagnostics(
     let selection_cfg = SelectionConfig {
         slots_to_fill: normalized_cfg.slots_to_fill,
         weights: normalized_cfg.weights,
-        require_forager: normalized_cfg.require_forager,
+        // Validate the features first even when exclusions remove the need to score.
+        require_forager: normalized_cfg.require_forager
+            && (!skip_scoring_if_fit
+                || features.iter().filter(|feature| feature.enabled).count() > cfg.slots_to_fill),
         score_hysteresis_margin: normalized_cfg.score_hysteresis_margin,
         incumbent_indices: normalized_cfg.incumbent_indices,
     };
@@ -349,19 +367,6 @@ pub fn select_coins_with_diagnostics(
 
     let slots_to_fill = cfg.slots_to_fill.max(1);
     score_forager_candidates(features, &enabled_pos, cfg, slots_to_fill)
-}
-
-/// Every enabled candidate participates in weighted ranking. Scoring readiness
-/// must use that same complete set; volume is a ranking feature, not a prefilter.
-pub(crate) fn forager_scoring_positions(
-    candidates: &[ForagerCandidate],
-    _cfg: &ForagerSelectionConfig,
-) -> Result<Vec<usize>, ForagerSelectionError> {
-    Ok(candidates
-        .iter()
-        .enumerate()
-        .filter_map(|(pos, candidate)| candidate.enabled.then_some(pos))
-        .collect())
 }
 
 fn score_forager_candidates(
@@ -805,21 +810,14 @@ mod tests {
                 slots_to_fill: slots,
                 ..default_forager_config(ForagerPositionSide::Long)
             };
-            let mut scoring: Vec<_> = forager_scoring_positions(&candidates, &cfg)
-                .unwrap()
-                .iter()
-                .map(|&pos| candidates[pos].index)
-                .collect();
             let mut ranked: Vec<_> = select_forager_candidates_with_diagnostics(&candidates, &cfg)
                 .unwrap()
                 .scored
                 .iter()
                 .map(|item| item.index)
                 .collect();
-            scoring.sort_unstable();
             ranked.sort_unstable();
-            assert_eq!(scoring, vec![3, 7, 9]);
-            assert_eq!(ranked, scoring);
+            assert_eq!(ranked, vec![3, 7, 9]);
         }
     }
 

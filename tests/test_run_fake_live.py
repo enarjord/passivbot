@@ -1050,6 +1050,93 @@ async def test_fake_live_gate_only_shared_memory_backfills_narrow_fill_cache_onc
 
 @pytest.mark.asyncio
 @pytest.mark.fake_live
+async def test_fake_live_forager_enters_healthy_coin_with_incomplete_rms_candidate(
+    tmp_path, monkeypatch
+):
+    import passivbot_rust as pbr
+    from candlestick_manager import CandlestickManager
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    scenario = _scenario()
+    scenario["name"] = "forager_partial_rms"
+    healthy = ("BTC/USDT:USDT", "ETH/USDT:USDT")
+    missing = "SOL/USDT:USDT"
+    symbols = (*healthy, missing)
+    symbol_spec = scenario["symbols"][healthy[0]]
+    scenario["symbols"] = {symbol: dict(symbol_spec) for symbol in symbols}
+    scenario["boot_index"] = 25
+    scenario["timeline"] = [
+        {"t": minute, "prices": {symbol: 100.0 for symbol in symbols}}
+        for minute in range(26)
+    ]
+    scenario_path = tmp_path / "forager.hjson"
+    scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
+
+    get_candles = CandlestickManager.get_candles
+
+    async def get_candles_with_one_unverified_gap(self, symbol, *args, **kwargs):
+        rows = await get_candles(self, symbol, *args, **kwargs)
+        # Simulate a missing interior candle in the raw cache-only read.
+        # The recent tail remains complete for ordinary strategy EMAs.
+        if symbol == missing and kwargs.get("standardize") is False and len(rows) >= 21:
+            return rows[rows["ts"] != rows[-18]["ts"]]
+        return rows
+
+    monkeypatch.setattr(CandlestickManager, "get_candles", get_candles_with_one_unverified_gap)
+    cfg = load_config(str(FAKE_HSL_CONFIG_PATH), verbose=False)
+    long = cfg["bot"]["long"]
+    long["risk"]["hsl"]["enabled"] = False
+    cfg["bot"]["short"]["risk"]["hsl"]["enabled"] = False
+    long["risk"]["max_positions"] = 1
+    long["risk"]["total_wallet_exposure_limit_ratio"] = 1.0
+    cfg["bot"]["short"]["risk"]["max_positions"] = 0
+    cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit_ratio"] = 0.0
+    long["universe"]["approved_coins"] = [symbol.split("/")[0] for symbol in symbols]
+    long["universe"]["ignored_coins"] = []
+    long["universe"]["minimum_coin_age_days"] = 0.0
+    long["forager"]["rms_directionality_ema_span_minutes"] = 1.0
+    long["forager"]["score_weights"] = {
+        "rms_directionality": 1.0, "volume": 0.0, "log_range": 0.0, "ema_readiness": 0.0,
+    }
+    cfg["live"]["candles"]["max_ohlcv_fetches_per_minute"] = 0
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    user = _isolated_fake_user("forager_partial_rms", tmp_path)
+    try:
+        run_dir = await run_fake_live_module._run_fake_case(
+            config_path=str(config_path),
+            scenario_path=str(scenario_path),
+            user=user,
+            max_steps=1,
+            output_dir=tmp_path / "run",
+            log_level=1,
+            snapshot_each_step=False,
+        )
+        artifacts = _load_run_artifacts(run_dir)
+        selections = [
+            event["data"] for event in artifacts["live_events"]
+            if event.get("event_type") == EventTypes.FORAGER_SELECTION
+            and event["data"].get("source") == "rust_orchestrator"
+            and event["data"].get("excluded_candidates")
+        ]
+        assert selections
+        assert selections[-1]["excluded_candidates"] == [{
+            "symbol": missing, "feature": "rms_directionality", "reason": "missing_rms",
+        }]
+        assert selections[-1]["candidate_count"] == 3
+        assert selections[-1]["eligible_count"] == 2
+        orders = json.loads((run_dir / "fake_exchange_state.json").read_text())["open_orders"]
+        assert orders
+        assert all(order["symbol"] in healthy for order in orders)
+    finally:
+        _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
 async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_symbol(
     tmp_path,
 ):

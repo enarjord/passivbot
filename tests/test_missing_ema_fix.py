@@ -23,6 +23,20 @@ def _make_cm(tmp_path):
     return CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
 
 
+@pytest.fixture
+def live_rms_candle_manager(tmp_path):
+    with _make_cm(tmp_path) as manager:
+        yield manager
+
+
+def _bind_live_rms_source(bot, manager, get_candles):
+    # Keep the real window, memo and scope logic while stubbing other indicators.
+    manager.get_candles = get_candles
+    bot.cm.get_rms_emas = manager.get_rms_emas
+    bot.cm.prune_rms_emas = manager.prune_rms_emas
+    bot.cm.cached_rms_ema = manager.cached_rms_ema
+
+
 # ---------------------------------------------------------------------------
 # get_latest_ema_close with leading gaps → finite result
 # ---------------------------------------------------------------------------
@@ -3481,16 +3495,16 @@ async def test_missing_live_rms_does_not_authorize_unrelated_ema_omissions(monke
         if key == "forager_score_weights" else original(side, key)
     )
     missing = {symbol: {"current": [60.0], "forager": []}}
-    async def load(*args):
+    async def missing_current(*args):
         return {symbol: {}}, {symbol: {60.0: 0.2}}, missing
-    monkeypatch.setattr(rms_directionality, "load", load)
+    monkeypatch.setattr(rms_directionality, "read_required", missing_current)
     await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
     assert bot._orchestrator_rms_directionality_unavailable == missing
     assert bot._orchestrator_allow_missing_strategy_inputs_symbols == set()
     # A subsequent complete bundle clears the RMS marker too.
     async def ready(*args):
         return {symbol: {60.0: 0.2}}, {symbol: {60.0: 0.2}}, {}
-    monkeypatch.setattr(rms_directionality, "load", ready)
+    monkeypatch.setattr(rms_directionality, "read_required", ready)
     await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
     assert bot._orchestrator_rms_directionality_unavailable == {}
 
@@ -3500,7 +3514,9 @@ async def test_missing_live_rms_does_not_authorize_unrelated_ema_omissions(monke
 @pytest.mark.parametrize("ranking", [False, True])
 @pytest.mark.parametrize("adverse", [False, True])
 @pytest.mark.parametrize("approved", [False, True])
-async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, side, ranking, adverse, approved):
+async def test_live_bundle_loads_rms_only_for_possible_consumers(
+    monkeypatch, live_rms_candle_manager, side, ranking, adverse, approved,
+):
     import numpy as np
     from candlestick_manager import CANDLE_DTYPE
     from live import rms_directionality
@@ -3548,24 +3564,32 @@ async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, si
         rows["c"] = 100.0
         return rows
 
-    bot.cm.get_candles = candles
+    _bind_live_rms_source(bot, live_rms_candle_manager, candles)
     if not ranking and not consumes_adverse:
-        async def unexpected_load(*args, **kwargs):
-            pytest.fail("unused score-only RMS must skip the loader entirely")
-        monkeypatch.setattr(rms_directionality, "load", unexpected_load)
+        async def unexpected_read(*args, **kwargs):
+            pytest.fail("unused score-only RMS must skip the reader entirely")
+        monkeypatch.setattr(rms_directionality, "read_required", unexpected_read)
     await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
     assert len(calls) == int(ranking or consumes_adverse)
     if ranking or consumes_adverse:
-        assert bot._orchestrator_signed_rms_directionality == {symbol: {1.0: 0.0}}
+        assert bot._orchestrator_signed_rms_directionality == {
+            symbol: {1.0: 0.0} if consumes_adverse else {}
+        }
+        assert bot._orchestrator_forager_signed_rms_directionality == {
+            symbol: {1.0: 0.0} if ranking else {}
+        }
     else:
         assert bot._orchestrator_signed_rms_directionality == {}
+        assert bot._orchestrator_forager_signed_rms_directionality == {}
     assert bot._orchestrator_rms_directionality_unavailable == {}
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("held_eligibility", ["outside", "approved", "age", "inactive", "zero_exposure"])
-async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slot(side, held_eligibility):
+async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slot(
+    live_rms_candle_manager, side, held_eligibility,
+):
     import numpy as np
     import passivbot_rust as pbr
     from candlestick_manager import CANDLE_DTYPE
@@ -3621,7 +3645,7 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
         rows["c"] = 100.0 if name == calm else 100 * np.exp(np.arange(21) * 0.001)
         return rows[:-1] if name == missing else rows
 
-    bot.cm.get_candles = candles
+    _bind_live_rms_source(bot, live_rms_candle_manager, candles)
     params = {"n_positions": slots, "total_wallet_exposure_limit_ratio": 1.0,
               "forager_score_weights": weights, "rms_directionality_ema_span_minutes": span}
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
@@ -3651,12 +3675,15 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
         return
     assert await selection() == [2]
     assert set(calls) == set(names)
-    # Every bundle must replay fresh scores, and missing data must not reuse a
-    # prior score or silently rank only the available competitor.
+    # Invalidate the memo when the fixture replaces its underlying rows.
+    # A missing competitor remains excluded while its peer can fill the slot.
     calm = names[1]
+    for name in names[1:]:
+        live_rms_candle_manager._invalidate_ema_cache(name)
     assert await selection() == [1]
     missing = names[1]
-    assert await selection() == []
+    live_rms_candle_manager._invalidate_ema_cache(missing)
+    assert await selection() == [2]
     assert bot._orchestrator_forager_signed_rms_directionality[names[1]] == {}
     assert bot._orchestrator_rms_directionality_unavailable[names[1]]["forager"] == [1.0]
     missing = None
@@ -3665,7 +3692,7 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
 
 @pytest.mark.asyncio
 async def test_shared_live_acquisition_budget_includes_rms_and_preserves_cached_inputs(
-    tmp_path, monkeypatch
+    live_rms_candle_manager, monkeypatch,
 ):
     import passivbot as pb_mod
     from live import rms_directionality
@@ -3692,7 +3719,7 @@ async def test_shared_live_acquisition_budget_includes_rms_and_preserves_cached_
         1.0 if key == "rms_directionality_ema_span_minutes" else original_bot_value(side, key)
     )
     monkeypatch.setattr(rms_directionality, "adverse_enabled", lambda bot, side, symbol: side == "long")
-    manager = _make_cm(tmp_path)
+    manager = live_rms_candle_manager
     budgets = []
 
     def budget(seconds):
@@ -3722,7 +3749,7 @@ async def test_shared_live_acquisition_budget_includes_rms_and_preserves_cached_
         return rows
 
     bot.cm.get_latest_ema_close = symbol_close
-    bot.cm.get_candles = rms_candles
+    _bind_live_rms_source(bot, manager, rms_candles)
     result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, symbols, bot.PB_modes)
     assert budgets == [10.0]
     assert attempted == set(symbols)

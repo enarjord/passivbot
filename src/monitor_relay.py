@@ -17,6 +17,7 @@ from aiohttp import web
 MonitorKey = tuple[str, str]
 DASHBOARD_STATIC_DIR = Path(__file__).resolve().parent / "monitor_dashboard_static"
 _PRIME_SCAN_BYTES = 64 * 1024
+_POLL_YIELD_MESSAGES = 32
 _DASHBOARD_ASSETS = {
     "dashboard.css": ("dashboard.css", "text/css"),
     "dashboard.js": ("dashboard.js", "application/javascript"),
@@ -455,11 +456,19 @@ class MonitorRelay:
     async def poll_once(self) -> None:
         now_ms = self._now_ms()
         self._refresh_presence(now_ms=now_ms)
+        batch_size = min(_POLL_YIELD_MESSAGES, self.subscriber_queue_size)
+        emitted = 0
         for key in self.discover_keys():
             for path in self._current_paths_for_key(key):
                 for message in self._read_updates(path):
                     self._note_message(key, message, now_ms=now_ms)
                     await self._broadcast(key, message)
+                    emitted += 1
+                    if emitted == batch_size:
+                        # Queue fan-out does not suspend. Let writers drain
+                        # between batches, even when a single file is busy.
+                        emitted = 0
+                        await asyncio.sleep(0)
 
     def _note_message(
         self,
@@ -755,14 +764,29 @@ async def _handle_ws(request: web.Request) -> web.StreamResponse:
     await ws.prepare(request)
     subscription = keys[0] if len(keys) == 1 else None
     queue = relay.subscribe(subscription)
+    sender_finishing = False
+
+    async def send_messages() -> None:
+        nonlocal sender_finishing
+        try:
+            for message in snapshot_messages:
+                await ws.send_json(message)
+            for message in relay.load_recent_messages(subscription):
+                await ws.send_json(message)
+            while not ws.closed:
+                await ws.send_json(await queue.get())
+        finally:
+            sender_finishing = True
+            await ws.close()
+
+    sender = asyncio.create_task(send_messages())
     try:
-        for message in snapshot_messages:
-            await ws.send_json(message)
-        for message in relay.load_recent_messages(subscription):
-            await ws.send_json(message)
-        while not ws.closed:
-            message = await queue.get()
-            await ws.send_json(message)
+        # Keep receive in the request task so aiohttp can service PING, PONG
+        # and CLOSE frames even when the outbound queue is empty.
+        async for _ in ws:
+            pass
+        if sender_finishing:
+            await sender
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -774,6 +798,8 @@ async def _handle_ws(request: web.Request) -> web.StreamResponse:
         logging.info("[monitor-relay] websocket closed for %s: %s", scope, exc)
     finally:
         relay.unsubscribe(queue)
+        sender.cancel()
+        await asyncio.gather(sender, return_exceptions=True)
         await ws.close()
     return ws
 

@@ -30,7 +30,7 @@ mod core {
     use crate::close_risk::{active_gate_cap, close_fill_priority, compare_close_fill_priority, project_close, size_to_loss_budget, CloseProjection};
     use crate::closes::{calc_wel_auto_reduce_long, calc_wel_auto_reduce_short};
     use crate::coin_selection::{
-        forager_scoring_positions, select_forager_candidates_with_diagnostics, ForagerCandidate,
+        select_eligible_forager_candidates, ForagerCandidate,
         ForagerPositionSide, ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
     };
     use crate::constants::{LONG, SHORT};
@@ -245,12 +245,64 @@ mod core {
         pub kept_incumbent: bool,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ForagerRankingFeature {
+        Volume,
+        LogRange,
+        EmaBands,
+        RmsDirectionality,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ForagerExclusionReason {
+        MissingVolume,
+        MissingLogRange,
+        MissingEmaBands,
+        InvalidEmaBands,
+        InvalidEntryOffset,
+        MissingRms,
+        RmsWarmup,
+    }
+
+    impl ForagerExclusionReason {
+        fn feature(self) -> ForagerRankingFeature {
+            match self {
+                Self::MissingVolume => ForagerRankingFeature::Volume,
+                Self::MissingLogRange => ForagerRankingFeature::LogRange,
+                Self::MissingEmaBands | Self::InvalidEmaBands | Self::InvalidEntryOffset => {
+                    ForagerRankingFeature::EmaBands
+                }
+                Self::MissingRms | Self::RmsWarmup => ForagerRankingFeature::RmsDirectionality,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ForagerExclusionDiagnostic {
+        pub symbol_idx: usize,
+        pub feature: ForagerRankingFeature,
+        pub reason: ForagerExclusionReason,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ForagerRankingDeferralReason {
+        StartupRefreshPending,
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct ForagerSelectionDiagnostic {
         pub pside: PositionSide,
         pub slots_to_fill: usize,
         pub ranking_required: bool,
+        pub candidate_count: usize,
+        pub eligible_count: usize,
+        pub excluded_candidates: Vec<ForagerExclusionDiagnostic>,
+        pub deferral_reason: Option<ForagerRankingDeferralReason>,
         pub score_hysteresis_margin: f64,
         pub selected_symbol_indices: Vec<usize>,
         pub incumbent_symbol_indices: Vec<usize>,
@@ -506,6 +558,22 @@ mod core {
         pub short: SymbolSideInput,
     }
 
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    #[serde(default, deny_unknown_fields)]
+    pub struct ForagerRankingReadiness {
+        pub long: bool,
+        pub short: bool,
+    }
+
+    impl Default for ForagerRankingReadiness {
+        fn default() -> Self {
+            Self {
+                long: true,
+                short: true,
+            }
+        }
+    }
+
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct OrchestratorInput {
@@ -524,6 +592,9 @@ mod core {
         /// Optional forager hysteresis input reconstructed from current open entry orders.
         #[serde(default)]
         pub forager_hysteresis: Option<super::ForagerHysteresisState>,
+        /// Live startup defers ranking while the first candidate sweep is incomplete.
+        #[serde(default)]
+        pub forager_ranking_ready: ForagerRankingReadiness,
     }
 
     fn input_balance_raw(input: &OrchestratorInput) -> f64 {
@@ -1078,6 +1149,10 @@ mod core {
         pside: PositionSide,
         cfg: &ForagerSelectionConfig,
         result: &ForagerSelectionResult,
+        candidate_count: usize,
+        eligible_count: usize,
+        excluded_candidates: Vec<ForagerExclusionDiagnostic>,
+        deferral_reason: Option<ForagerRankingDeferralReason>,
     ) {
         const TOP_SCORE_LIMIT: usize = 12;
         let mut incumbent_symbol_indices: Vec<usize> =
@@ -1089,6 +1164,10 @@ mod core {
                 pside,
                 slots_to_fill: cfg.slots_to_fill,
                 ranking_required: cfg.require_forager,
+                candidate_count,
+                eligible_count,
+                excluded_candidates,
+                deferral_reason,
                 score_hysteresis_margin: cfg.score_hysteresis_margin,
                 selected_symbol_indices: result.selected_indices.clone(),
                 incumbent_symbol_indices,
@@ -2283,7 +2362,18 @@ mod core {
         }
     }
 
-    fn unavailable_forager_candidate(index: usize) -> ForagerCandidate {
+    fn unavailable_forager_candidate(
+        index: usize,
+        reason: ForagerExclusionReason,
+        exclusions: &mut Option<&mut Vec<ForagerExclusionDiagnostic>>,
+    ) -> ForagerCandidate {
+        if let Some(exclusions) = exclusions {
+            exclusions.push(ForagerExclusionDiagnostic {
+                symbol_idx: index,
+                feature: reason.feature(),
+                reason,
+            });
+        }
         ForagerCandidate {
             index,
             enabled: false,
@@ -2375,6 +2465,7 @@ mod core {
         derived_cache: &mut [CachedSideDerived],
         out: &mut Vec<ForagerCandidate>,
         diagnostics: &mut OrchestratorDiagnostics,
+        mut exclusions: Option<&mut Vec<ForagerExclusionDiagnostic>>,
     ) -> Result<(), OrchestratorError> {
         let normalized_weights =
             cfg.weights
@@ -2421,7 +2512,11 @@ mod core {
                             StrategyInputScope::ForagerSelection,
                             diagnostics,
                         )?;
-                        out.push(unavailable_forager_candidate(s.symbol_idx));
+                        out.push(unavailable_forager_candidate(
+                            s.symbol_idx,
+                            ForagerExclusionReason::MissingVolume,
+                            &mut exclusions,
+                        ));
                         continue;
                     }
                 };
@@ -2445,7 +2540,11 @@ mod core {
                             StrategyInputScope::ForagerSelection,
                             diagnostics,
                         )?;
-                        out.push(unavailable_forager_candidate(s.symbol_idx));
+                        out.push(unavailable_forager_candidate(
+                            s.symbol_idx,
+                            ForagerExclusionReason::MissingLogRange,
+                            &mut exclusions,
+                        ));
                         continue;
                     }
                 };
@@ -2462,11 +2561,22 @@ mod core {
                     &strategy_params,
                 ) {
                     Ok(v) => v,
-                    Err(OrchestratorError::MissingEma { .. })
-                    | Err(OrchestratorError::NonFiniteInput {
+                    Err(OrchestratorError::MissingEma { .. }) => {
+                        out.push(unavailable_forager_candidate(
+                            s.symbol_idx,
+                            ForagerExclusionReason::MissingEmaBands,
+                            &mut exclusions,
+                        ));
+                        continue;
+                    }
+                    Err(OrchestratorError::NonFiniteInput {
                         field: "ema_bands", ..
                     }) => {
-                        out.push(unavailable_forager_candidate(s.symbol_idx));
+                        out.push(unavailable_forager_candidate(
+                            s.symbol_idx,
+                            ForagerExclusionReason::InvalidEmaBands,
+                            &mut exclusions,
+                        ));
                         continue;
                     }
                     Err(err) => return Err(err),
@@ -2479,7 +2589,11 @@ mod core {
                 ) {
                     Ok(v) => v,
                     Err(_) => {
-                        out.push(unavailable_forager_candidate(s.symbol_idx));
+                        out.push(unavailable_forager_candidate(
+                            s.symbol_idx,
+                            ForagerExclusionReason::InvalidEntryOffset,
+                            &mut exclusions,
+                        ));
                         continue;
                     }
                 };
@@ -2498,7 +2612,7 @@ mod core {
                 enabled: true,
                 volume_ema,
                 log_range_ema,
-                // Filled below only if this candidate survives volume pruning.
+                // Filled below for every candidate with the other required features.
                 rms_directionality_score: 0.0,
                 bid,
                 ask,
@@ -2508,15 +2622,12 @@ mod core {
             });
         }
         if cfg.require_forager && normalized_weights.rms_directionality > 0.0 {
-            let scoring_positions =
-                forager_scoring_positions(out, cfg).map_err(map_forager_selection_error)?;
-            let mut ranking_unavailable = false;
-            for pos in scoring_positions {
-                let s = &symbols[out[pos].index];
+            for candidate in out.iter_mut().filter(|candidate| candidate.enabled) {
+                let s = &symbols[candidate.index];
                 let side = symbol_side_input(s, pside);
                 match signed_rms_directionality(s, &side.bot_params, true) {
-                    Ok(value) => out[pos].rms_directionality_score = value.abs(),
-                    Err(err) => {
+                    Ok(value) => candidate.rms_directionality_score = value.abs(),
+                    Err(err @ OrchestratorError::RmsDirectionalityUnavailable { .. }) => {
                         handle_strategy_input_error(
                             err,
                             s,
@@ -2524,17 +2635,100 @@ mod core {
                             StrategyInputScope::ForagerSelection,
                             diagnostics,
                         )?;
-                        ranking_unavailable = true;
+                        let reason = if s
+                            .rms_directionality_warmup_spans
+                            .contains(&side.bot_params.rms_directionality_ema_span_minutes)
+                        {
+                            ForagerExclusionReason::RmsWarmup
+                        } else {
+                            ForagerExclusionReason::MissingRms
+                        };
+                        *candidate =
+                            unavailable_forager_candidate(s.symbol_idx, reason, &mut exclusions);
                     }
+                    Err(err) => return Err(err),
                 }
-            }
-            if ranking_unavailable {
-                // Never rank a ready subset of the retained scoring set.
-                // Keep scanning above so malformed supplied scores stay fatal.
-                out.clear();
             }
         }
         Ok(())
+    }
+
+    fn select_forager_for_side(
+        input: &OrchestratorInput,
+        candidate_indices: &[usize],
+        pside: PositionSide,
+        slots_to_fill: usize,
+        derived_cache: &mut [CachedSideDerived],
+        features: &mut Vec<ForagerCandidate>,
+        diagnostics: &mut OrchestratorDiagnostics,
+        collect_live_diagnostics: bool,
+    ) -> Result<Vec<usize>, OrchestratorError> {
+        let global = &input.global;
+        let (weights, position_side, score_hysteresis_margin, ranking_ready, incumbents) =
+            match pside {
+                PositionSide::Long => (
+                    &global.global_bot_params.long.forager_score_weights,
+                    ForagerPositionSide::Long,
+                    global.forager_score_hysteresis.long,
+                    input.forager_ranking_ready.long,
+                    input.forager_hysteresis.as_ref().map(|h| &h.incumbent_long),
+                ),
+                PositionSide::Short => (
+                    &global.global_bot_params.short.forager_score_weights,
+                    ForagerPositionSide::Short,
+                    global.forager_score_hysteresis.short,
+                    input.forager_ranking_ready.short,
+                    input.forager_hysteresis.as_ref().map(|h| &h.incumbent_short),
+                ),
+            };
+        let candidate_count = candidate_indices.len();
+        let cfg = ForagerSelectionConfig {
+            slots_to_fill,
+            weights: weights.clone(),
+            require_forager: candidate_count > slots_to_fill,
+            position_side,
+            score_hysteresis_margin,
+            incumbent_indices: incumbents.cloned().unwrap_or_default(),
+        };
+        let deferred = !ranking_ready && candidate_count != 0;
+        let mut exclusions = Vec::new();
+        // Even when the startup gate defers admission, validate submitted inputs
+        // that would be required for ranking this cohort.
+        build_forager_candidates_into(
+            &input.symbols,
+            candidate_indices,
+            pside,
+            global.strategy_kind,
+            &cfg,
+            derived_cache,
+            features,
+            diagnostics,
+            (collect_live_diagnostics && !deferred).then_some(&mut exclusions),
+        )?;
+        let (selection, eligible_count, deferral_reason) = if deferred {
+            (
+                ForagerSelectionResult::default(),
+                0,
+                Some(ForagerRankingDeferralReason::StartupRefreshPending),
+            )
+        } else {
+            let selection = select_eligible_forager_candidates(features, &cfg)
+                .map_err(map_forager_selection_error)?;
+            (selection, candidate_count - exclusions.len(), None)
+        };
+        if collect_live_diagnostics {
+            record_forager_selection_diagnostic(
+                diagnostics,
+                pside,
+                &cfg,
+                &selection,
+                candidate_count,
+                eligible_count,
+                exclusions,
+                deferral_reason,
+            );
+        }
+        Ok(selection.selected_indices)
     }
 
     /// Minimal contract for a committed full-position protective exit. No account
@@ -3518,7 +3712,7 @@ mod core {
         compute_ideal_orders_observed(input, &mut workspace, true)
     }
 
-    /// Repeated replay path: omit live-only unstuck observations and their allocations.
+    /// Repeated replay path: omit live-only observations and their allocations.
     pub fn compute_ideal_orders_with_workspace(
         input: &OrchestratorInput,
         workspace: &mut OrchestratorWorkspace,
@@ -3529,7 +3723,7 @@ mod core {
     fn compute_ideal_orders_observed(
         input: &OrchestratorInput,
         workspace: &mut OrchestratorWorkspace,
-        collect_unstuck_diagnostics: bool,
+        collect_live_diagnostics: bool,
     ) -> Result<OrchestratorOutput, OrchestratorError> {
         validate_account_risk_inputs(input)?;
         let mut diagnostics = OrchestratorDiagnostics::default();
@@ -3703,44 +3897,17 @@ mod core {
                     &mut workspace.eligible_forager_indices,
                     &mut diagnostics,
                 )?;
-                let remaining_candidate_count = workspace.eligible_forager_indices.len();
-                let cfg = ForagerSelectionConfig {
-                    slots_to_fill,
-                    weights: input
-                        .global
-                        .global_bot_params
-                        .long
-                        .forager_score_weights
-                        .clone(),
-                    require_forager: remaining_candidate_count > slots_to_fill,
-                    position_side: ForagerPositionSide::Long,
-                    score_hysteresis_margin: input.global.forager_score_hysteresis.long,
-                    incumbent_indices: input
-                        .forager_hysteresis
-                        .as_ref()
-                        .map(|h| h.incumbent_long.clone())
-                        .unwrap_or_default(),
-                };
-                build_forager_candidates_into(
-                    &input.symbols,
+                let selected_indices = select_forager_for_side(
+                    input,
                     &workspace.eligible_forager_indices,
                     PositionSide::Long,
-                    input.global.strategy_kind,
-                    &cfg,
+                    slots_to_fill,
                     &mut workspace.derived_long,
                     &mut workspace.features,
                     &mut diagnostics,
+                    collect_live_diagnostics,
                 )?;
-                let selection =
-                    select_forager_candidates_with_diagnostics(&workspace.features, &cfg)
-                        .map_err(map_forager_selection_error)?;
-                record_forager_selection_diagnostic(
-                    &mut diagnostics,
-                    PositionSide::Long,
-                    &cfg,
-                    &selection,
-                );
-                for idx in selection.selected_indices {
+                for idx in selected_indices {
                     if actives_long_count >= enp_long {
                         break;
                     }
@@ -3796,44 +3963,17 @@ mod core {
                     &mut workspace.eligible_forager_indices,
                     &mut diagnostics,
                 )?;
-                let remaining_candidate_count = workspace.eligible_forager_indices.len();
-                let cfg = ForagerSelectionConfig {
-                    slots_to_fill,
-                    weights: input
-                        .global
-                        .global_bot_params
-                        .short
-                        .forager_score_weights
-                        .clone(),
-                    require_forager: remaining_candidate_count > slots_to_fill,
-                    position_side: ForagerPositionSide::Short,
-                    score_hysteresis_margin: input.global.forager_score_hysteresis.short,
-                    incumbent_indices: input
-                        .forager_hysteresis
-                        .as_ref()
-                        .map(|h| h.incumbent_short.clone())
-                        .unwrap_or_default(),
-                };
-                build_forager_candidates_into(
-                    &input.symbols,
+                let selected_indices = select_forager_for_side(
+                    input,
                     &workspace.eligible_forager_indices,
                     PositionSide::Short,
-                    input.global.strategy_kind,
-                    &cfg,
+                    slots_to_fill,
                     &mut workspace.derived_short,
                     &mut workspace.features,
                     &mut diagnostics,
+                    collect_live_diagnostics,
                 )?;
-                let selection =
-                    select_forager_candidates_with_diagnostics(&workspace.features, &cfg)
-                        .map_err(map_forager_selection_error)?;
-                record_forager_selection_diagnostic(
-                    &mut diagnostics,
-                    PositionSide::Short,
-                    &cfg,
-                    &selection,
-                );
-                for idx in selection.selected_indices {
+                for idx in selected_indices {
                     if actives_short_count >= enp_short {
                         break;
                     }
@@ -4220,7 +4360,7 @@ mod core {
                 continue;
             }
             if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) {
-                if collect_unstuck_diagnostics {
+                if collect_live_diagnostics {
                     diagnostics.unstuck.push(UnstuckDiagnostic::new(
                         s.symbol_idx,
                         LONG,
@@ -4237,7 +4377,7 @@ mod core {
                 && bot.unstuck_exposure_trigger_ratio > 0.0
                 && bot.total_wallet_exposure_limit_ratio > 0.0;
             if !enabled {
-                if collect_unstuck_diagnostics {
+                if collect_live_diagnostics {
                     diagnostics.unstuck.push(UnstuckDiagnostic::new(
                         s.symbol_idx,
                         LONG,
@@ -4262,7 +4402,7 @@ mod core {
                             StrategyInputScope::Unstuck,
                             &mut diagnostics,
                         )?;
-                        if collect_unstuck_diagnostics {
+                        if collect_live_diagnostics {
                             let mut row =
                                 UnstuckDiagnostic::new(s.symbol_idx, LONG, "inputs_unavailable");
                             if auto_unstuck_allowed {
@@ -4311,7 +4451,7 @@ mod core {
                 continue;
             }
             if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) {
-                if collect_unstuck_diagnostics {
+                if collect_live_diagnostics {
                     diagnostics.unstuck.push(UnstuckDiagnostic::new(
                         s.symbol_idx,
                         SHORT,
@@ -4328,7 +4468,7 @@ mod core {
                 && bot.unstuck_exposure_trigger_ratio > 0.0
                 && bot.total_wallet_exposure_limit_ratio > 0.0;
             if !enabled {
-                if collect_unstuck_diagnostics {
+                if collect_live_diagnostics {
                     diagnostics.unstuck.push(UnstuckDiagnostic::new(
                         s.symbol_idx,
                         SHORT,
@@ -4353,7 +4493,7 @@ mod core {
                             StrategyInputScope::Unstuck,
                             &mut diagnostics,
                         )?;
-                        if collect_unstuck_diagnostics {
+                        if collect_live_diagnostics {
                             let mut row =
                                 UnstuckDiagnostic::new(s.symbol_idx, SHORT, "inputs_unavailable");
                             if auto_unstuck_allowed {
@@ -4403,7 +4543,7 @@ mod core {
                 input_balance_raw(input),
                 input.global.realized_pnl_drawdown,
                 &workspace.unstuck_inputs,
-                collect_unstuck_diagnostics.then_some(&mut diagnostics.unstuck),
+                collect_live_diagnostics.then_some(&mut diagnostics.unstuck),
             ).map_err(|_| OrchestratorError::NonFiniteInput {
                 field: "global.realized_pnl_drawdown_or_allowance",
                 symbol_idx: None,
@@ -4412,7 +4552,7 @@ mod core {
                 unstuck.insert((proposal.idx, pside), proposal);
             }
         }
-        if collect_unstuck_diagnostics && !auto_unstuck_allowed {
+        if collect_live_diagnostics && !auto_unstuck_allowed {
             for candidate in &workspace.unstuck_inputs {
                 diagnostics.unstuck.push(UnstuckDiagnostic::new(
                     candidate.idx,
@@ -4836,7 +4976,7 @@ mod core {
             .collect();
 
         // A held position omitted from ordinary generation still has an explicit unavailable observation.
-        if collect_unstuck_diagnostics {
+        if collect_live_diagnostics {
             for symbol in &input.symbols {
                 for (side, pside, position) in [
                     (LONG, "long", symbol.long.position),
@@ -5283,6 +5423,7 @@ mod core {
                 symbols: vec![symbol],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             }
         }
 
@@ -5390,7 +5531,7 @@ mod core {
         }
 
         #[test]
-        fn unstuck_diagnostics_observed_and_replay_paths_have_identical_orders() {
+        fn observed_and_replay_paths_have_identical_orders() {
             for case in 0..6 {
                 let mut input = unstuck_diagnostic_test_input();
                 match case {
@@ -5409,8 +5550,10 @@ mod core {
                 let replay =
                     super::compute_ideal_orders_with_workspace(&input, &mut workspace).unwrap();
                 assert!(replay.diagnostics.unstuck.is_empty());
+                assert!(replay.diagnostics.forager_selections.is_empty());
                 assert_eq!(observed.diagnostics.unstuck.len(), 1);
                 observed.diagnostics.unstuck.clear();
+                observed.diagnostics.forager_selections.clear();
                 assert_eq!(
                     serde_json::to_value(observed).unwrap(),
                     serde_json::to_value(replay).unwrap()
@@ -5926,6 +6069,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -5965,6 +6109,7 @@ mod core {
                 symbols: vec![symbol],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -5980,6 +6125,150 @@ mod core {
             assert_eq!(selection.selected_symbol_indices, vec![0]);
             assert!(!selection.ranking_required);
             assert!(selection.top_scores.is_empty());
+        }
+
+        fn forager_rms_input(scores: &[f64]) -> OrchestratorInput {
+            let mut global = make_basic_global();
+            global.global_bot_params.long.n_positions = 1;
+            global.global_bot_params.long.total_wallet_exposure_limit_ratio = 1.0;
+            global.global_bot_params.long.forager_score_weights = crate::types::ForagerScoreWeights {
+                volume: 0.0,
+                ema_readiness: 0.0,
+                log_range: 0.0,
+                rms_directionality: 1.0,
+            };
+            global.side_activation.short = false;
+            let symbols = scores
+                .iter()
+                .enumerate()
+                .map(|(i, &score)| {
+                    let mut symbol = make_basic_symbol(i);
+                    symbol.long.bot_params.rms_directionality_ema_span_minutes = 1.0;
+                    symbol.emas.m1.signed_rms_directionality = vec![(1.0, score)];
+                    sync_trailing_martingale_strategy_params(&mut symbol);
+                    symbol
+                })
+                .collect();
+            OrchestratorInput {
+                timestamp_ms: 60_000,
+                balance: 1_000.0,
+                balance_raw: 1_000.0,
+                global,
+                symbols,
+                peek_hints: None,
+                forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
+            }
+        }
+
+        #[test]
+        fn forager_rms_exclusions_are_individual_and_recomputed_at_each_cutoff() {
+            let mut input = forager_rms_input(&[0.2, 0.1, 0.5, -0.4]);
+            let mut workspace = OrchestratorWorkspace::default();
+            let before = compute_ideal_orders_observed(&input, &mut workspace, true).unwrap();
+            assert_eq!(before.diagnostics.forager_selections[0].selected_symbol_indices, [1]);
+
+            input.symbols[0].emas.m1.signed_rms_directionality.clear();
+            input.symbols[0].rms_directionality_warmup_spans.push(1.0);
+            input.symbols[1].emas.m1.signed_rms_directionality.clear();
+            input.symbols[1].rms_directionality_unavailable.forager.push(1.0);
+
+            let ongoing = compute_ideal_orders_observed(&input, &mut workspace, true).unwrap();
+            let restarted = super::compute_ideal_orders(&input).unwrap();
+            let selection = &ongoing.diagnostics.forager_selections[0];
+            assert_eq!(selection.selected_symbol_indices, [3]);
+            assert_eq!(selection.candidate_count, 4);
+            assert_eq!(selection.eligible_count, 2);
+            assert!(selection.ranking_required);
+            assert_eq!(selection.top_scores.len(), 2);
+            assert_eq!(
+                selection.excluded_candidates.iter().map(|x| (x.symbol_idx, x.reason))
+                    .collect::<Vec<_>>(),
+                [(0, ForagerExclusionReason::RmsWarmup), (1, ForagerExclusionReason::MissingRms)],
+            );
+            assert_eq!(
+                serde_json::to_value(selection).unwrap(),
+                serde_json::to_value(&restarted.diagnostics.forager_selections[0]).unwrap(),
+            );
+            assert!(ongoing.orders.iter().any(|order| order.symbol_idx == 3 && order.qty > 0.0));
+
+            input.symbols[1].rms_directionality_unavailable.forager.clear();
+            input.symbols[1].emas.m1.signed_rms_directionality = vec![(1.0, 0.05)];
+            let after = compute_ideal_orders_observed(&input, &mut workspace, true).unwrap();
+            assert_eq!(after.diagnostics.forager_selections[0].selected_symbol_indices, [1]);
+        }
+
+        #[test]
+        fn forager_rms_exclusion_with_survivors_fitting_slots_still_validates_inputs() {
+            let mut input = forager_rms_input(&[0.1, 0.2, 0.3]);
+            input.global.global_bot_params.long.n_positions = 2;
+            input.symbols[0].emas.m1.signed_rms_directionality.clear();
+            input.symbols[0].rms_directionality_unavailable.forager.push(1.0);
+
+            let output = super::compute_ideal_orders(&input).unwrap();
+            let selection = &output.diagnostics.forager_selections[0];
+            assert_eq!(selection.selected_symbol_indices, [1, 2]);
+            assert!(selection.ranking_required);
+            assert!(selection.top_scores.is_empty());
+
+            // A short survivor list or pending startup still requires valid ranking inputs.
+            for ranking_ready in [true, false] {
+                input.forager_ranking_ready.long = ranking_ready;
+                for score in [f64::NAN, 1.5] {
+                    input.symbols[2].emas.m1.signed_rms_directionality = vec![(1.0, score)];
+                    assert_eq!(
+                        super::compute_ideal_orders(&input).unwrap_err(),
+                        OrchestratorError::NonFiniteInput {
+                            field: "signed_rms_directionality",
+                            symbol_idx: Some(2),
+                        },
+                    );
+                }
+                input.symbols[2].emas.m1.signed_rms_directionality.clear();
+                input.symbols[2].allow_missing_strategy_inputs = true;
+                assert_eq!(
+                    super::compute_ideal_orders(&input).unwrap_err(),
+                    OrchestratorError::MissingEma { symbol_idx: 2 },
+                );
+            }
+        }
+
+        #[test]
+        fn forager_startup_defers_ranking_while_held_and_forced_orders_continue() {
+            let mut input = forager_rms_input(&[0.1, 0.2, 0.3, 0.4]);
+            input.global.global_bot_params.long.n_positions = 3;
+            input.global.global_bot_params.long.total_wallet_exposure_limit_ratio = 3.0;
+            input.symbols[0].long.position = Position { size: 1.0, price: 100.0 };
+            input.symbols[0].long.mode = Some(TradingMode::Panic);
+            input.symbols[1].long.mode = Some(TradingMode::Normal);
+            input.forager_ranking_ready.long = false;
+
+            let output = super::compute_ideal_orders(&input).unwrap();
+            let selection = &output.diagnostics.forager_selections[0];
+            assert_eq!(selection.candidate_count, 2);
+            assert_eq!(selection.eligible_count, 0);
+            assert_eq!(
+                selection.deferral_reason,
+                Some(ForagerRankingDeferralReason::StartupRefreshPending),
+            );
+            assert!(selection.selected_symbol_indices.is_empty());
+            assert!(output.orders.iter().all(|order| order.symbol_idx < 2));
+            assert!(output.orders.iter().any(|order| order.symbol_idx == 0 && order.qty < 0.0));
+            assert!(output.orders.iter().any(|order| order.symbol_idx == 1 && order.qty > 0.0));
+
+            // Startup must not let the first available subset take the slot.
+            input.symbols.pop();
+            let output = super::compute_ideal_orders(&input).unwrap();
+            let selection = &output.diagnostics.forager_selections[0];
+            assert!(!selection.ranking_required);
+            assert!(selection.deferral_reason.is_some());
+            assert!(selection.selected_symbol_indices.is_empty());
+
+            input.forager_ranking_ready.long = true;
+            let output = super::compute_ideal_orders(&input).unwrap();
+            let selection = &output.diagnostics.forager_selections[0];
+            assert_eq!(selection.deferral_reason, None);
+            assert_eq!(selection.selected_symbol_indices, [2]);
         }
 
         #[test]
@@ -6396,6 +6685,7 @@ mod core {
                 symbols: vec![sym.clone()],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             // Typed Rust callers must reject invalid hints too, including non-finite
@@ -6465,6 +6755,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -6534,6 +6825,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -6596,6 +6888,7 @@ mod core {
                 symbols: vec![sym.clone()],
                 peek_hints: Some(EntryPeekHints::default()),
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
                 timestamp_ms: 0,
             };
             let out_flat = compute_ideal_orders_for_test(&input_flat).unwrap();
@@ -6651,6 +6944,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
                 timestamp_ms: 0,
             };
 
@@ -6726,6 +7020,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let out = compute_ideal_orders_for_test(&input).unwrap();
             // With no position and GracefulStop, we should not emit any entries.
@@ -6786,6 +7081,7 @@ mod core {
                             symbols: vec![sym],
                             peek_hints: None,
                             forager_hysteresis: None,
+                            forager_ranking_ready: Default::default(),
                         };
                         let out = compute_ideal_orders_for_test(&input).unwrap();
                         let entries: Vec<_> = out
@@ -6861,6 +7157,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -6913,6 +7210,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -6975,6 +7273,7 @@ mod core {
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -7034,6 +7333,7 @@ mod core {
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -7093,6 +7393,7 @@ mod core {
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -7146,6 +7447,7 @@ mod core {
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -7200,6 +7502,7 @@ mod core {
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let err = compute_ideal_orders_for_test(&input).unwrap_err();
@@ -7421,6 +7724,7 @@ mod core {
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -7493,6 +7797,7 @@ mod core {
                 symbols: syms,
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -7549,6 +7854,7 @@ mod core {
                 symbols: syms,
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -8492,6 +8798,7 @@ mod core {
                 symbols: vec![],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             input.global.loss_gate_enabled = true;
             input.global.loss_gate_max_drawdown_fraction = Some(0.05);
@@ -8533,6 +8840,7 @@ mod core {
                 symbols: vec![],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             input.global.loss_gate_enabled = true;
             input.global.loss_gate_max_drawdown_fraction = Some(0.5);
@@ -8561,6 +8869,7 @@ mod core {
                 symbols: vec![],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             for retired in ["realized_pnl_cumsum_max", "realized_pnl_cumsum_last"] {
                 let mut payload = serde_json::to_value(&input).unwrap();
@@ -8616,6 +8925,7 @@ mod core {
                 symbols: vec![sym.clone()],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let out_open = compute_ideal_orders_for_test(&input_open).unwrap();
             assert!(
@@ -8708,6 +9018,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
@@ -8774,6 +9085,7 @@ mod core {
                 symbols: vec![sym0.clone(), sym1.clone()],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let mut per_long = vec![
                 Some(PerSymbolOrders {
@@ -8869,6 +9181,7 @@ mod core {
                 symbols: vec![sym0.clone(), sym1.clone()],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let mut per_long = vec![
                 Some(PerSymbolOrders {
@@ -8941,6 +9254,7 @@ mod core {
                 symbols: vec![sym.clone()],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let mut per_long = vec![Some(PerSymbolOrders {
                 symbol_idx: 0,
@@ -9012,6 +9326,7 @@ mod core {
                 symbols: vec![sym.clone()],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let mut per_long = vec![Some(PerSymbolOrders {
                 symbol_idx: 0,
@@ -9075,6 +9390,7 @@ mod core {
                     symbols: vec![sym.clone()],
                     peek_hints: None,
                     forager_hysteresis: None,
+                    forager_ranking_ready: Default::default(),
                 };
                 let mut per_long = vec![Some(PerSymbolOrders {
                     symbol_idx: 0,
@@ -9176,6 +9492,7 @@ mod core {
                                 ..make_basic_global()
                             },
                             symbols, peek_hints: None, forager_hysteresis: None,
+                            forager_ranking_ready: Default::default(),
                         };
                         let mut diagnostics = OrchestratorDiagnostics::default();
                         gate_lossy_closes_by_peak_balance(&input, &mut long, &mut short, &mut diagnostics).unwrap();
@@ -9240,6 +9557,7 @@ mod core {
                 symbols: vec![make_basic_symbol(0)],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             validate_account_risk_inputs(&input).unwrap();
             assert_eq!(input_balance_raw(&input), 900.0);
@@ -9311,6 +9629,7 @@ mod core {
                     symbols: vec![sym],
                     peek_hints: None,
                     forager_hysteresis: None,
+                    forager_ranking_ready: Default::default(),
                 };
                 assert_eq!(
                     compute_ideal_orders_for_test(&input).unwrap_err(),
@@ -9334,6 +9653,7 @@ mod core {
                         symbols: vec![make_basic_symbol(0)],
                         peek_hints: None,
                         forager_hysteresis: None,
+                        forager_ranking_ready: Default::default(),
                     };
                     let field = if unstuck {
                         input.global.realized_pnl_drawdown = drawdown;
@@ -9406,6 +9726,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let out = compute_ideal_orders_for_test(&input).unwrap();
             assert!(
@@ -9481,6 +9802,7 @@ mod core {
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let out = compute_ideal_orders_for_test(&input).unwrap();
             let twel_closes = out
@@ -9563,6 +9885,7 @@ mod core {
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let out = compute_ideal_orders_for_test(&input).unwrap();
             let twel_closes = out
@@ -9627,6 +9950,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let out = compute_ideal_orders_for_test(&input).unwrap();
             let entry_orders: Vec<_> = out
@@ -9702,6 +10026,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let out = compute_ideal_orders_for_test(&input).unwrap();
             assert_eq!(out.orders.len(), 1);
@@ -9756,6 +10081,7 @@ mod core {
                 symbols: vec![sym],
                 peek_hints: None,
                 forager_hysteresis: None,
+                forager_ranking_ready: Default::default(),
             };
             let out = compute_ideal_orders_for_test(&input).unwrap();
             assert_eq!(out.orders.len(), 1);

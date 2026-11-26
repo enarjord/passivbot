@@ -208,6 +208,7 @@ def test_format_config_adds_logging_defaults():
     assert out["logging"] == {
         "backup_count": 5,
         "dir": "logs",
+        "forager_no_entries_warning_minutes": 15.0,
         "level": 1,
         "live_event_debug_profiles": [],
         "max_bytes_mib": 10.0,

@@ -306,9 +306,12 @@ Bitget classic and UTA, Bybit executions, Hyperliquid, and OKX propagate paginat
 when another page would be required. A failed bounded traversal leaves the interval retryable
 and does not advance coverage or the refresh checkpoint.
 
-Bitget requires a successful envelope with an explicit fill list. Bounded Classic requests traverse
-contiguous seven-day windows using `endId`/`idLessThan`; UTA uses thirty-day windows and its
-opaque `cursor`. Saturated windows retain their bounds until the cursor is exhausted. A missing
+Bitget requires a successful envelope with an explicit fill list. UTA also accepts an explicit
+null list paired with an explicit null cursor as a terminal empty page. Bounded Classic requests
+traverse contiguous seven-day windows using `endId`/`idLessThan`. UTA uses windows up to thirty
+days and its opaque `cursor`. The UTA endpoint requires distinct start and end timestamps. The
+reader widens single-millisecond queries by one millisecond and excludes the extra timestamp
+from its result. Saturated windows retain their bounds until the cursor is exhausted. A missing
 or stalled continuation leaves coverage unproven, including at the inclusive start millisecond.
 Previously cached Bitget executions remain available, while their old traversal claims and
 incremental checkpoints are cleared before a new lookback can be certified. A request without a

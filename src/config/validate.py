@@ -110,6 +110,9 @@ def validate_config(
 
     normalize_control_values(config)
     validate_shared_bot_policy(config)
+    warning_minutes = config["logging"]["forager_no_entries_warning_minutes"]
+    if not math.isfinite(warning_minutes) or warning_minutes < 0.0:
+        raise ValueError("logging.forager_no_entries_warning_minutes must be finite and >= 0")
 
     backend = str(config["optimize"]["backend"] or "pymoo").strip().lower()
     if backend not in {"pymoo", "gpu"}:

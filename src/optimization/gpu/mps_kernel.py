@@ -13,6 +13,8 @@ import logging
 import numpy as np
 import torch
 
+from passivbot_rust import RMS_WARMUP_SPAN_MULTIPLIER
+
 from optimization.gpu.ema_bootstrap import (
     BOOTSTRAP_COUNT_COLS, effective_end_steps, pack_bootstrap_counts, validate_hourly_bootstrap_inputs,
 )
@@ -295,7 +297,9 @@ def _scale_directional_minute_parameters(
             raise ValueError(
                 "GPU RMS directionality spans must be finite and between 1 and 100000"
             )
-        scaled[:, offset + keys.index("rms_directionality_window")] = np.ceil(20.0 * spans)
+        scaled[:, offset + keys.index("rms_directionality_window")] = np.ceil(
+            RMS_WARMUP_SPAN_MULTIPLIER * spans
+        )
         for key in minute_keys:
             column = offset + keys.index(key)
             if key == "entry_cooldown_max_duration_minutes":
@@ -967,6 +971,8 @@ def _replay_launch_profile(kernel, name, threads, group_size, *, capabilities=No
 def _require_available_held_valuation(scalars):
     # Scalar 9 normally holds -1 (not liquidated) or a liquidation day >= 0.
     # Metal writes -2 and returns immediately if a held coin has no price.
+    if bool((scalars[:, 9] == -9.0).any()):
+        raise RuntimeError("GPU forager received a non-finite RMS score after warmup")
     if bool((scalars[:, 9] == -8.0).any()):
         raise ValueError("GPU v9 realized-loss memory or allowance received invalid risk inputs")
     if bool((scalars[:, 9] == -3.0).any()):

@@ -970,6 +970,12 @@ async def _build_monitor_forager_section(self) -> dict[str, dict]:
             "next_symbol": pending_symbols[0] if pending_symbols else None,
             "score_weights": dict(self.bot_value(pside, "forager_score_weights") or {}),
         }
+        health = getattr(self, "_forager_health_state", {}).get(pside, {})
+        if health.get("stall_warning"):
+            out[pside]["entry_stall"] = {
+                "reason": ReasonCodes.NO_ENTRIES_WITH_FREE_SLOTS,
+                "duration_ms": health["stall_ms"],
+            }
         if float(out[pside]["score_weights"].get("rms_directionality", 0.0)) > 0.0:
             # Enabled RMS totals come from the same Rust selection that placed
             # orders, including pruning, normalization and tie ordering. Never

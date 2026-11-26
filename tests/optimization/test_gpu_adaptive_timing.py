@@ -9,7 +9,11 @@ import pytest
 
 torch = pytest.importorskip("torch")
 from optimization.gpu.runtime import compile_shader, gpu_device, synchronize
-from optimization.gpu.model import ADAPTIVE_PARAM_KEYS, adaptive_params
+from optimization.gpu.model import (
+    ADAPTIVE_PARAM_KEYS,
+    EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
+    adaptive_params,
+)
 from optimization.gpu.service import _candidate_parameter_matrix
 
 GPU = pytest.mark.skipif(
@@ -19,7 +23,11 @@ GPU = pytest.mark.skipif(
 
 
 def test_candidate_fractional_span_window_and_cooldown_pins():
+    from optimization.gpu.mps_kernel import _scale_directional_minute_parameters
+    from passivbot_rust import rms_directionality_warmup_returns
+
     base = adaptive_params({"rms_directionality_ema_span_minutes": 4.25})
+    assert base["rms_directionality_window"] == rms_directionality_warmup_returns(4.25) == 85
     rows = _candidate_parameter_matrix(
         [
             {
@@ -31,7 +39,17 @@ def test_candidate_fractional_span_window_and_cooldown_pins():
         {"long": base},
         static_overrides={"long": {"entry_cooldown_exposure_weight": 3.0}},
     )
-    assert rows[0, ADAPTIVE_PARAM_KEYS.index("rms_directionality_window")] == 141
+    window = rms_directionality_warmup_returns(7.00000001)
+    assert rows[0, ADAPTIVE_PARAM_KEYS.index("rms_directionality_window")] == window == 141
+
+    keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    packed = np.zeros((1, len(keys)), dtype=np.float64)
+    packed[:, keys.index("entry_cooldown_max_duration_minutes")] = -1
+    packed[:, keys.index("rms_directionality_ema_span_minutes")] = 7.00000001
+    for key in ("unstuck_ema_span_0_minutes", "unstuck_ema_span_1_minutes"):
+        packed[:, keys.index(key)] = 1.0
+    scaled = _scale_directional_minute_parameters(packed, keys, sides=1, interval_minutes=1.0)
+    assert scaled[0, keys.index("rms_directionality_window")] == window
     assert rows[0, ADAPTIVE_PARAM_KEYS.index("entry_cooldown_exposure_weight")] == 3
     assert (
         rows[0, ADAPTIVE_PARAM_KEYS.index("entry_cooldown_max_duration_minutes")] == -1
@@ -216,6 +234,47 @@ def test_rms_directionality_ranking_selects_bouncy_coin(strategy, side):
     assert out[key].item() == pytest.approx(
         abs(sum(float(f[9]) for f in fills)), abs=1e-5
     )
+
+
+@GPU
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_nonfinite_rms_after_warmup_rejects_gpu_replay(strategy, monkeypatch):
+    from optimization.gpu import mps_kernel
+    from test_gpu_entry_sizing_parity import _evaluate, _fixture
+
+    cfg, _, mss, _, _ = _fixture("long", 2, "initial")
+    cfg["bot"]["portfolio"]["strategy_kind"] = strategy
+    bot = cfg["bot"]["long"]
+    bot["risk"].update(max_positions=1, total_wallet_exposure_limit_ratio=1.0)
+    bot["forager"].update(
+        rms_directionality_ema_span_minutes=1.0,
+        score_weights=dict(volume=0, log_range=0, ema_readiness=0, rms_directionality=1),
+    )
+    count = 25
+    candles = np.full((count, 2, 4), 100.4)
+    candles[:, :, 3] = 1.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    for coin in ("BTC", "ETH"):
+        mss[coin]["last_valid_index"] = count - 1
+
+    compile_shader = mps_kernel.compile_shader
+
+    def compile_with_invalid_score(source, **kwargs):
+        assignment = "if (isfinite(score)) a.score = clamp(score, -1.0f, 1.0f);"
+        assert source.count(assignment) == 1
+        source = source.replace(
+            assignment, assignment + "\n    if (n == a.window && close_offset == 2) a.score = NAN;"
+        )
+        return compile_shader(source, **kwargs)
+
+    library = getattr(mps_kernel, f"_{strategy}_multicoin_shader_library")
+    library.cache_clear()
+    monkeypatch.setattr(mps_kernel, "compile_shader", compile_with_invalid_score)
+    try:
+        with pytest.raises(RuntimeError, match="non-finite RMS score after warmup"):
+            _evaluate("long", (cfg, candles, mss, np.full(count, 50_000.0), timestamps))
+    finally:
+        library.cache_clear()
 
 
 @GPU
@@ -405,7 +464,8 @@ def test_multicoin_adaptive_checkpoint_preserves_every_output(side):
 @GPU
 @pytest.mark.parametrize("strategy,chunked", [("ema_anchor", False), ("trailing_martingale", False), ("trailing_martingale", True)])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, monkeypatch):
+@pytest.mark.parametrize("touch_bar,expected_coin", [(70, "ETH"), (90, "SOL")])
+def test_ranking_excludes_only_warming_coins(strategy, side, chunked, touch_bar, expected_coin, monkeypatch):
     from test_gpu_entry_sizing_parity import _fixture, _evaluate
     if chunked:
         from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
@@ -425,10 +485,12 @@ def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, m
     count = 101
     candles = np.full((count, 3, 4), 100.0)
     candles[:, :, 3] = [1.0, 2.0, 10.0]
-    # Initialize ranking with BTC/ETH; SOL becomes eligible while its RMS is pending.
-    # No price touch/fill changes selection until after SOL's complete window.
-    candles[90:, :, 0] = 110.0
-    candles[90:, :, 1] = 90.0
+    # SOL becomes otherwise eligible at 61 and gets a complete RMS window at 80.
+    # Touch only the expected winner, so a GPU replay that selects the wrong
+    # market or defers the whole side cannot match the exact fills.
+    expected_index = coins.index(expected_coin)
+    candles[touch_bar, expected_index, 0] = 110.0
+    candles[touch_bar, expected_index, 1] = 90.0
     for s in ("long", "short"):
         bot = cfg["bot"][s]
         bot["risk"].pop("entry_cooldown_minutes", None)
@@ -453,8 +515,8 @@ def test_ranking_retries_after_new_listing_rms_warmup(strategy, side, chunked, m
     ts = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60000
     out, fills = _evaluate(side, (cfg, candles, mss, np.full(count, 50000.0), ts))
     assert len(fills) > 0
-    assert fills[0][2] == "SOL"
-    assert int(fills[0][0]) == 90
+    assert fills[0][2] == expected_coin
+    assert int(fills[0][0]) == touch_bar
     assert out["fill_count"].item() == len(fills)
 
 

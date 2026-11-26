@@ -689,6 +689,14 @@ def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missi
     assert "base_qty_fraction" not in prepared["bot"]["long"]
 
 
+@pytest.mark.parametrize("minutes", [-1.0, float("inf"), float("nan")])
+def test_prepare_config_rejects_invalid_forager_warning_duration(minutes):
+    source = get_expanded_config_prototype()
+    source["logging"]["forager_no_entries_warning_minutes"] = minutes
+    with pytest.raises(ValueError, match="logging.forager_no_entries_warning_minutes"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_rejects_negative_entry_cooldown_minutes():
     source = get_expanded_config_prototype()
     source["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = -0.1

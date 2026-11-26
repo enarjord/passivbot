@@ -137,7 +137,22 @@ def test_adaptive_output_validator_checks_current_duration():
 
     inp = adaptive_input()
     raw = pbr.compute_ideal_orders_json(json.dumps(inp))
-    reconciler.parse_and_validate_rust_orchestrator_output(raw, {0: "BTC/USDT:USDT"}, inp)
+    actual_cooldowns = set()
+    reconciler.parse_and_validate_rust_orchestrator_output(
+        raw, {0: "BTC/USDT:USDT"}, inp, active_entry_cooldowns=actual_cooldowns
+    )
+    assert actual_cooldowns == {(0, "long")}
+
+    unavailable = copy.deepcopy(inp)
+    unavailable["symbols"][0]["emas"]["m1"]["signed_rms_directionality"] = []
+    unavailable["symbols"][0]["allow_missing_strategy_inputs"] = True
+    raw_unavailable = pbr.compute_ideal_orders_json(json.dumps(unavailable))
+    actual_cooldowns.clear()
+    reconciler.parse_and_validate_rust_orchestrator_output(
+        raw_unavailable, {0: "BTC/USDT:USDT"}, unavailable,
+        active_entry_cooldowns=actual_cooldowns,
+    )
+    assert actual_cooldowns == set()
     # An otherwise valid early entry is invalid under the submitted adverse score.
     relaxed = copy.deepcopy(inp)
     relaxed["symbols"][0]["emas"]["m1"]["signed_rms_directionality"] = [[60.0, 0.75]]
@@ -171,10 +186,23 @@ def test_rms_forager_prefers_lower_penalty_and_ignores_direction_sign():
     reconciler.validate_rust_orchestrator_output(result, {i: str(i) for i in range(3)}, inp)
 
 
+def _rms_source_fixture(get_candles):
+    from candlestick_manager import CandlestickManager
+
+    manager = CandlestickManager.__new__(CandlestickManager)
+    manager._ema_cache = {}
+    manager._ema_inputs = {}
+    manager._now_ms = lambda: 0
+    manager._get_known_gaps_enhanced = lambda symbol: []
+    manager._ensure_symbol_index = lambda symbol: {}
+    manager.get_candles = get_candles
+    return manager
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scoring_weight", [0.0, 1.0])
 async def test_live_rms_uses_completed_contiguous_rows_and_replays(monkeypatch, scoring_weight):
-    from live.rms_directionality import load
+    from live.rms_directionality import read_required
     from candlestick_manager import CANDLE_DTYPE
 
     span = 2.5
@@ -191,7 +219,7 @@ async def test_live_rms_uses_completed_contiguous_rows_and_replays(monkeypatch, 
             return rows.copy()
 
     bot = SimpleNamespace(
-        cm=CM(),
+        cm=_rms_source_fixture(CM().get_candles),
         is_forager_mode=lambda side: True,
         is_approved=lambda side, symbol: True,
         is_pside_enabled=lambda side: True,
@@ -205,16 +233,18 @@ async def test_live_rms_uses_completed_contiguous_rows_and_replays(monkeypatch, 
             {"rms_directionality": scoring_weight} if key == "forager_score_weights" else span
         ),
     )
-    first, ranking, missing = await load(bot, ["BTC"], {"BTC"})
+    first, ranking, missing = await read_required(bot, ["BTC"], {"BTC"})
     assert not missing
     assert first["BTC"][span] > 0.99
-    assert await load(bot, ["BTC"], {"BTC"}) == (first, ranking, missing)
+    assert await read_required(bot, ["BTC"], {"BTC"}) == (first, ranking, missing)
     bot.get_exchange_time = lambda: (n + 2) * 60000 + 30000
-    current, rank, missing = await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
-    assert current["BTC"] == {} and rank == first and missing == {"BTC": {"current": [span], "forager": []}}
+    current, rank, missing = await read_required(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
+    assert current["BTC"] == {} and rank == ranking
+    assert missing == {"BTC": {"current": [span], "forager": []}}
     bot.get_exchange_time = lambda: n * 60000 + 30000
     rows = rows[np.arange(n) != n // 2]
-    second, ranking, missing = await load(bot, ["BTC"], {"BTC"})
+    bot.cm._invalidate_ema_cache("BTC", timeframe="1m")
+    second, ranking, missing = await read_required(bot, ["BTC"], {"BTC"})
     assert missing == {"BTC": {"current": [span], "forager": [span] if scoring_weight else []}}
     assert second["BTC"] == {}
 
@@ -470,7 +500,7 @@ def test_invalid_submitted_adaptive_inputs_are_fatal():
 
 
 @pytest.mark.parametrize("pending_span,score,raises", [(60.0, None, False), (30.0, None, True), (60.0, 1.5, True)])
-def test_cpu_rms_warmup_defer_is_span_specific_and_never_masks_invalid_scores(pending_span, score, raises):
+def test_cpu_rms_warmup_exclusion_is_span_specific_and_never_masks_invalid_scores(pending_span, score, raises):
     import passivbot_rust as pbr
 
     bp = {"n_positions": 1, "forager_score_weights": {
@@ -490,8 +520,10 @@ def test_cpu_rms_warmup_defer_is_span_specific_and_never_masks_invalid_scores(pe
         selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == "long")
         assert selection["ranking_required"]
         assert selection["selected_symbol_indices"] == []
+        assert selection["eligible_count"] == 0
+        assert [item["reason"] for item in selection["excluded_candidates"]] == ["rms_warmup"] * 2
         assert result["diagnostics"]["warnings"]
-        # Once only one eligible candidate remains, no score is consumed.
+        # Once only one candidate is considered, no score is consumed.
         inp["symbols"].pop()
         result = compute(pbr, inp)
         selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == "long")
@@ -560,7 +592,7 @@ def test_cpu_rms_rejects_nonpositive_close_with_normal_backtest_error(bad_close,
 @pytest.mark.asyncio
 @pytest.mark.parametrize("active_side", [None, "long", "short"])
 async def test_live_rms_skips_dormant_side_spans(active_side):
-    from live.rms_directionality import load
+    from live.rms_directionality import read_required
     from candlestick_manager import CANDLE_DTYPE
 
     calls = []
@@ -574,7 +606,7 @@ async def test_live_rms_skips_dormant_side_spans(active_side):
         return rows
 
     bot = SimpleNamespace(
-        cm=SimpleNamespace(get_candles=candles),
+        cm=_rms_source_fixture(candles),
         get_exchange_time=lambda: 21 * 60000,
         is_forager_mode=lambda side: True,
         is_approved=lambda side, symbol: True,
@@ -589,7 +621,7 @@ async def test_live_rms_skips_dormant_side_spans(active_side):
             else (1.0 if side == active_side else 100000.0)
         ),
     )
-    result, ranking, missing = await load(bot, ["BTC"], {"BTC"})
+    result, ranking, missing = await read_required(bot, ["BTC"], {"BTC"})
     expected = {"BTC": {1.0: 0.0} if active_side else {}}
     assert result == ranking == expected
     assert not missing
@@ -904,7 +936,7 @@ def test_cpu_unused_forager_rms_preserves_aggregated_candle_results(side, interv
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("missing_idx", [0, 1])
 @pytest.mark.parametrize("marker", ["warmup", "live"])
-def test_mixed_rms_readiness_defers_entire_ranking(side, missing_idx, marker):
+def test_mixed_rms_readiness_excludes_only_the_incomplete_candidate(side, missing_idx, marker):
     import passivbot_rust as pbr
 
     bp = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0, "forager_score_weights": {
@@ -923,7 +955,15 @@ def test_mixed_rms_readiness_defers_entire_ranking(side, missing_idx, marker):
     result = compute(pbr, inp)
     selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == side)
     assert selection["ranking_required"]
-    assert selection["selected_symbol_indices"] == []
+    assert selection["candidate_count"] == 2
+    assert selection["eligible_count"] == 1
+    assert selection["selected_symbol_indices"] == [1 - missing_idx]
+    assert selection["top_scores"] == []
+    assert selection["excluded_candidates"] == [{
+        "symbol_idx": missing_idx,
+        "feature": "rms_directionality",
+        "reason": "rms_warmup" if marker == "warmup" else "missing_rms",
+    }]
     missing["emas"]["m1"]["signed_rms_directionality"] = [[60.0, 0.0]]
     result = compute(pbr, inp)
     selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == side)
@@ -936,7 +976,7 @@ def test_mixed_rms_readiness_defers_entire_ranking(side, missing_idx, marker):
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_cpu_staggered_listing_waits_for_every_compared_rms_window(side):
+def test_cpu_staggered_listing_ranks_mature_candidates_during_rms_warmup(side):
     from backtest import build_backtest_payload, execute_backtest
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
@@ -953,8 +993,12 @@ def test_cpu_staggered_listing_waits_for_every_compared_rms_window(side):
     # history and while the later listing is still building its RMS window.
     payload.backtest_params["trade_start_indices"] = [20, 20]
     fills, _, _ = execute_backtest(payload, cfg)
-    times = [int(row[0]) for row in fills if str(row[13]).startswith("entry_") and side in str(row[13])]
-    assert times and min(times) == 31
+    entries = [
+        (int(row[0]), row[2])
+        for row in fills
+        if str(row[13]).startswith("entry_") and side in str(row[13])
+    ]
+    assert entries and min(entries) == (21, "LONGCOIN")
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -1034,7 +1078,7 @@ def test_constant_clamp_cpu_needs_no_rms_history(side, interval, base, floor, ce
 @pytest.mark.asyncio
 @pytest.mark.parametrize("base,floor,ceiling", [(0, 0, 0), (0, 5, 5), (10, 0, 5)])
 async def test_live_constant_clamp_skips_rms_fetch(base, floor, ceiling):
-    from live.rms_directionality import load
+    from live.rms_directionality import read_required
     async def candles(*args, **kwargs):
         pytest.fail("constant cooldown must not request RMS candles")
     params = {
@@ -1044,12 +1088,12 @@ async def test_live_constant_clamp_skips_rms_fetch(base, floor, ceiling):
         "entry_cooldown_max_duration_minutes": ceiling,
     }
     bot = SimpleNamespace(
-        cm=SimpleNamespace(get_candles=candles), get_exchange_time=lambda: 60000,
+        cm=_rms_source_fixture(candles), get_exchange_time=lambda: 60000,
         is_approved=lambda side, symbol: True,
         is_pside_enabled=lambda side: True, bp=lambda side,key,symbol: params[key],
         bot_value=lambda side,key: {"rms_directionality": 0.0} if key=="forager_score_weights" else 60.0,
     )
-    assert await load(bot, ["BTC"], set()) == ({"BTC": {}}, {"BTC": {}}, {})
+    assert await read_required(bot, ["BTC"], set()) == ({"BTC": {}}, {"BTC": {}}, {})
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -1119,7 +1163,7 @@ def test_rms_history_never_erases_stamped_or_untyped_activation(source, expected
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("marker", ["live", "warmup", "unmarked"])
 @pytest.mark.parametrize("missing_idx", [1, 2])
-def test_low_volume_candidates_still_require_complete_rms_scoring(side, marker, missing_idx):
+def test_low_volume_candidates_are_also_checked_for_rms_eligibility(side, marker, missing_idx):
     import passivbot_rust as pbr
 
     bp = {"n_positions": 1, "total_wallet_exposure_limit_ratio": 1.0,
@@ -1144,9 +1188,11 @@ def test_low_volume_candidates_still_require_complete_rms_scoring(side, marker, 
         return
     out = compute(pbr, inp)
     selection = next(s for s in out["diagnostics"]["forager_selections"] if s["pside"] == side)
-    assert selection["selected_symbol_indices"] == []
-    # Low volume does not remove a candidate. Restoring its score completes the
-    # ranking, and malformed observations still fail before selecting a winner.
+    assert selection["selected_symbol_indices"] == [3 - missing_idx]
+    assert selection["eligible_count"] == 2
+    assert [item["symbol_idx"] for item in selection["excluded_candidates"]] == [missing_idx]
+    # Low volume does not remove a candidate. A restored score is immediately
+    # rankable, and malformed observations still fail before selecting a winner.
     symbols[missing_idx]["emas"]["m1"]["signed_rms_directionality"] = [[60.0, 0.0]]
     ready = compute(pbr, inp)
     assert next(s for s in ready["diagnostics"]["forager_selections"] if s["pside"] == side)["selected_symbol_indices"] == [missing_idx]
@@ -1240,7 +1286,7 @@ def test_unapproved_override_cooldown_does_not_extend_fill_coverage(side):
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("age_minutes", [0, 1, 2])
 async def test_rms_load_rollover_rechecks_all_symbols_and_recovers(side, age_minutes):
-    from live.rms_directionality import load
+    from live.rms_directionality import read_required
     from candlestick_manager import CANDLE_DTYPE
 
     now = 30 * 60000 + 59999
@@ -1258,7 +1304,7 @@ async def test_rms_load_rollover_rechecks_all_symbols_and_recovers(side, age_min
         return rows
 
     bot = SimpleNamespace(
-        cm=SimpleNamespace(get_candles=candles),
+        cm=_rms_source_fixture(candles),
         get_exchange_time=lambda: now,
         is_approved=lambda side, symbol: True,
         is_pside_enabled=lambda pside: pside == side,
@@ -1272,14 +1318,14 @@ async def test_rms_load_rollover_rechecks_all_symbols_and_recovers(side, age_min
     )
     symbols = ["BTC", "ETH"]
     ages = dict.fromkeys(symbols, age_minutes * 60000)
-    current, ranking, missing = await load(bot, symbols, set(), ages)
+    current, ranking, missing = await read_required(bot, symbols, set(), ages)
     assert len(set(calls)) == 1
     assert current == {symbol: {} for symbol in symbols}
     for symbol in symbols:
         assert bool(ranking[symbol]) == (age_minutes == 2)
         assert missing[symbol] == {"current": [1.0], "forager": [] if age_minutes == 2 else [1.0]}
     roll = False
-    current, ranking, missing = await load(bot, symbols, set(), ages)
+    current, ranking, missing = await read_required(bot, symbols, set(), ages)
     assert not missing
     assert current == ranking
     assert all(current[symbol][1.0] > 0.99 for symbol in symbols)
@@ -1288,7 +1334,7 @@ async def test_rms_load_rollover_rechecks_all_symbols_and_recovers(side, age_min
 @pytest.mark.asyncio
 @pytest.mark.parametrize("side", ["long", "short"])
 async def test_live_rms_replay_cache_reuses_repairs_and_recovers(tmp_path, monkeypatch, side):
-    from live.rms_directionality import load
+    from live.rms_directionality import read_required
     from candlestick_manager import CandlestickManager, CANDLE_DTYPE
     import passivbot_rust as pbr
 
@@ -1330,52 +1376,52 @@ async def test_live_rms_replay_cache_reuses_repairs_and_recovers(tmp_path, monke
             "entry_cooldown_max_duration_minutes": 60.0,
         }[key],
     )
-    first = await load(bot, ["BTC"], set())
+    first = await read_required(bot, ["BTC"], set())
     for _ in range(10):
-        assert await load(bot, ["BTC"], {"BTC"}) == first
+        assert await read_required(bot, ["BTC"], {"BTC"}) == first
     assert len(fetches) == len(replays) == 1
     # Real canonical ingestion invalidates the cached value at the same cutoff.
     repaired = rows[-1:].copy()
     for field in ("o", "h", "l", "c"):
         repaired[field] *= 0.9
     cm._persist_batch("BTC", repaired, skip_memory_retention=True)
-    changed = await load(bot, ["BTC"], set())
+    changed = await read_required(bot, ["BTC"], set())
     assert changed != first
     assert len(fetches) == len(replays) == 2
     # Losing cache is restart-equivalent, including the repaired candle.
     cm._ema_cache.clear()
-    assert await load(bot, ["BTC"], set()) == changed
+    assert await read_required(bot, ["BTC"], set()) == changed
     assert len(replays) == 3
     # Gap invalidation and failed reads never acquire a reusable neutral value.
     cm._invalidate_ema_cache("BTC", timeframe="1m")
     missing = True
     for _ in range(2):
-        current, ranking, unavailable = await load(bot, ["BTC"], set())
+        current, ranking, unavailable = await read_required(bot, ["BTC"], set())
         assert current == ranking == {"BTC": {}}
         assert unavailable == {"BTC": {"current": [span], "forager": [span]}}
     assert len(fetches) == 5 and len(replays) == 3
     missing = False
-    assert await load(bot, ["BTC"], set()) == changed
+    assert await read_required(bot, ["BTC"], set()) == changed
     # A new cutoff is never served by the previous minute's cache.
     now += 60000
-    current, ranking, unavailable = await load(bot, ["BTC"], set())
+    current, ranking, unavailable = await read_required(bot, ["BTC"], set())
     assert current == ranking == {"BTC": {}}
     assert unavailable
     appended = repaired.copy()
     appended["ts"] += 60000
     cm._persist_batch("BTC", appended, skip_memory_retention=True)
-    assert not (await load(bot, ["BTC"], set()))[2]
+    assert not (await read_required(bot, ["BTC"], set()))[2]
     # Config/universe changes bound the namespace; unrelated EMA cache survives.
     cm._ema_cache["BTC"][("close", 3.0, "60000")] = (1.0, 0, 0)
     span = 1.0
-    assert not (await load(bot, ["BTC"], set()))[2]
+    assert not (await read_required(bot, ["BTC"], set()))[2]
     assert [key[1] for key in cm._ema_cache["BTC"] if key[0] == "signed_rms_directionality"] == [1.0]
     enabled = False
-    assert await load(bot, ["BTC"], set()) == ({"BTC": {}}, {"BTC": {}}, {})
+    assert await read_required(bot, ["BTC"], set()) == ({"BTC": {}}, {"BTC": {}}, {})
     assert list(cm._ema_cache["BTC"]) == [("close", 3.0, "60000")]
     enabled = True
-    await load(bot, ["BTC"], set())
-    await load(bot, [], set())
+    await read_required(bot, ["BTC"], set())
+    await read_required(bot, [], set())
     assert list(cm._ema_cache["BTC"]) == [("close", 3.0, "60000")]
 
 
@@ -1405,7 +1451,7 @@ def test_coin_zero_modifier_shadows_positive_fixed_runtime_pin(side, modifier):
 
 @pytest.mark.asyncio
 async def test_stale_rms_ranking_cache_keeps_actual_age_and_refresh_policy():
-    from live.rms_directionality import load
+    from live.rms_directionality import read_required
     from candlestick_manager import CANDLE_DTYPE, CandlestickManager
 
     rows = np.zeros(21, dtype=CANDLE_DTYPE)
@@ -1419,7 +1465,7 @@ async def test_stale_rms_ranking_cache_keeps_actual_age_and_refresh_policy():
         calls += 1
         return rows.copy()
 
-    cm = SimpleNamespace(_ema_cache={}, _ema_inputs={}, get_candles=candles)
+    cm = _rms_source_fixture(candles)
     bot = SimpleNamespace(
         cm=cm, get_exchange_time=lambda: now,
         is_approved=lambda side, symbol: True,
@@ -1431,28 +1477,29 @@ async def test_stale_rms_ranking_cache_keeps_actual_age_and_refresh_policy():
             "entry_cooldown_max_duration_minutes": 60.0,
         }[key],
     )
-    first = await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
+    first = await read_required(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
     assert first[0] == {"BTC": {}} and first[1]["BTC"][1.0] > .99
     assert first[2] == {"BTC": {"current": [1.0], "forager": []}}
     for _ in range(10):
-        assert await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000}) == first
-    assert calls == 1
+        assert await read_required(bot, ["BTC"], {"BTC"}, {"BTC": 120000}) == first
+    # A cached ranking value never suppresses a missing current-window read.
+    assert calls == 11
     # Remote-enabled consumers still get a chance to refresh their stale history.
-    assert await load(bot, ["BTC"], set(), {"BTC": 120000}) == first
-    assert calls == 2
+    assert await read_required(bot, ["BTC"], set(), {"BTC": 120000}) == first
+    assert calls == 12
     CandlestickManager._invalidate_ema_cache(cm, "BTC", timeframe="1m")
     rows["c"][-1] *= .9
-    changed = await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
-    assert changed != first and calls == 3
+    changed = await read_required(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
+    assert changed != first and calls == 13
     now += 60000
-    assert await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000}) == changed
-    assert calls == 3
+    assert await read_required(bot, ["BTC"], {"BTC"}, {"BTC": 120000}) == changed
+    assert calls == 14
     # Both elapsed time and a tightened age budget reject the cached observation.
-    assert (await load(bot, ["BTC"], {"BTC"}, {"BTC": 60000}))[1] == {"BTC": {}}
+    assert (await read_required(bot, ["BTC"], {"BTC"}, {"BTC": 60000}))[1] == {"BTC": {}}
     now += 60000
-    assert (await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000}))[1] == {"BTC": {}}
+    assert (await read_required(bot, ["BTC"], {"BTC"}, {"BTC": 120000}))[1] == {"BTC": {}}
     rows["ts"] += 3 * 60000
-    recovered = await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
+    recovered = await read_required(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
     assert recovered[0] == recovered[1] and not recovered[2]
 
 
@@ -1578,7 +1625,7 @@ def test_explicit_empty_side_only_requires_held_position_cooldowns(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("side", ["long", "short"])
 async def test_live_adverse_rms_respects_side_approval_and_transitions(side):
-    from live.rms_directionality import load, adverse_enabled
+    from live.rms_directionality import read_required, adverse_enabled
     from candlestick_manager import CANDLE_DTYPE
 
     other = "short" if side == "long" else "long"
@@ -1595,7 +1642,7 @@ async def test_live_adverse_rms_respects_side_approval_and_transitions(side):
         return rows.copy()
 
     bot = SimpleNamespace(
-        cm=SimpleNamespace(get_candles=candles, _ema_cache={}),
+        cm=_rms_source_fixture(candles),
         get_exchange_time=lambda: 21 * 60000,
         is_pside_enabled=lambda s: True, is_forager_mode=lambda s: True,
         is_approved=lambda s, symbol: symbol in approved[s],
@@ -1608,17 +1655,17 @@ async def test_live_adverse_rms_respects_side_approval_and_transitions(side):
     )
     assert adverse_enabled(bot, side, "BTC")
     assert not adverse_enabled(bot, other, "BTC")
-    current, _, missing = await load(bot, ["BTC"], set())
+    current, _, missing = await read_required(bot, ["BTC"], set())
     assert requests == [("BTC", 0)] and not missing
     assert current["BTC"][1.0] > .99
     approved[other].add("BTC")
-    _, _, missing = await load(bot, ["BTC"], set())
+    _, _, missing = await read_required(bot, ["BTC"], set())
     assert requests[-1][1] == (20 - 2000000) * 60000
     assert missing["BTC"]["current"] == [100000.0]
     approved[other].remove("BTC")
     # Independent Forager demand must still retain the otherwise ineligible span.
     scoring[other] = 1.0
-    _, _, missing = await load(bot, ["BTC"], set())
+    _, _, missing = await read_required(bot, ["BTC"], set())
     assert missing["BTC"] == {"current": [], "forager": [100000.0]}
 
 
@@ -1627,7 +1674,7 @@ async def test_live_adverse_rms_respects_side_approval_and_transitions(side):
 @pytest.mark.parametrize("available", [False, True])
 async def test_unapproved_held_graceful_stop_keeps_adverse_inputs_and_closes(side, available):
     import passivbot_rust as pbr
-    from live.rms_directionality import load
+    from live.rms_directionality import read_required
     from candlestick_manager import CANDLE_DTYPE
 
     rows = np.zeros(21 if available else 0, dtype=CANDLE_DTYPE)
@@ -1641,14 +1688,14 @@ async def test_unapproved_held_graceful_stop_keeps_adverse_inputs_and_closes(sid
           "entry_cooldown_max_duration_minutes": 30.0, "rms_directionality_ema_span_minutes": 1.0}
     position = {"size": 1.0 if side == "long" else -1.0, "price": 100.0}
     bot = SimpleNamespace(
-        cm=SimpleNamespace(get_candles=candles), get_exchange_time=lambda: 21 * 60000,
+        cm=_rms_source_fixture(candles), get_exchange_time=lambda: 21 * 60000,
         positions={"BTC": {side: position}}, PB_modes={side: {"BTC": "graceful_stop"}},
         is_approved=lambda s, symbol: False, is_pside_enabled=lambda s: s == side,
         is_forager_mode=lambda s: False,
         bot_value=lambda s, key: {"rms_directionality": 0.0} if key == "forager_score_weights" else bp[key],
         bp=lambda s, key, symbol: bp[key],
     )
-    current, _, missing = await load(bot, ["BTC"], set())
+    current, _, missing = await read_required(bot, ["BTC"], set())
     assert current["BTC"] == ({1.0: 0.0} if available else {})
     assert missing == ({} if available else {"BTC": {"current": [1.0], "forager": []}})
     symbol = make_symbol(0, bid=100.0, ask=100.0, **{f"{side}_bp": bp})
@@ -1669,7 +1716,7 @@ async def test_unapproved_held_graceful_stop_keeps_adverse_inputs_and_closes(sid
 @pytest.mark.parametrize("rollover", [False, True])
 async def test_live_rms_uses_latest_complete_pre_gap_window(long_span, age_minutes, rollover):
     import passivbot_rust as pbr
-    from live.rms_directionality import load
+    from live.rms_directionality import read_required
     from candlestick_manager import CANDLE_DTYPE
 
     # The larger span is complete only before the gap; the smaller one is current.
@@ -1687,7 +1734,7 @@ async def test_live_rms_uses_latest_complete_pre_gap_window(long_span, age_minut
         return rows.copy()
     spans = {"long": long_span, "short": 3.5 - long_span}
     bot = SimpleNamespace(
-        cm=SimpleNamespace(get_candles=candles, _ema_cache={}),
+        cm=_rms_source_fixture(candles),
         get_exchange_time=lambda: now,
         is_pside_enabled=lambda side: True, is_forager_mode=lambda side: True,
         is_approved=lambda side, symbol: True,
@@ -1698,7 +1745,7 @@ async def test_live_rms_uses_latest_complete_pre_gap_window(long_span, age_minut
             "entry_cooldown_max_duration_minutes": 60.0,
         }[key],
     )
-    result, rank, missing = await load(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000})
+    result, rank, missing = await read_required(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000})
     assert set(result["BTC"]) == (set() if rollover else {1.0})
     expected = {1.0, 2.5} if age_minutes >= 30 + int(rollover) else {1.0}
     assert set(rank["BTC"]) == expected
@@ -1709,27 +1756,27 @@ async def test_live_rms_uses_latest_complete_pre_gap_window(long_span, age_minut
         assert bot.cm._ema_cache["BTC"][("signed_rms_directionality", 2.5, "60000")][1] == 50 * 60000
     assert bot.cm._ema_cache["BTC"][("signed_rms_directionality", 1.0, "60000")][1] == 80 * 60000
     if not rollover and age_minutes >= 30:
-        assert await load(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000}) == (result, rank, missing)
-        assert calls == 1
-        # The cache path also rechecks each span's own source age on rollover.
+        assert await read_required(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000}) == (result, rank, missing)
+        assert calls == 2  # Current still requires a separate complete window.
+        # Recheck each span's own source age on rollover.
         clock = iter([81 * 60000, 82 * 60000])
         bot.get_exchange_time = lambda: next(clock)
-        cached_rollover = await load(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000})
+        cached_rollover = await read_required(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000})
         assert cached_rollover[0] == {"BTC": {}}
         assert set(cached_rollover[1]["BTC"]) == ({1.0, 2.5} if age_minutes >= 31 else {1.0})
-        assert calls == 1
+        assert calls == 3
         bot.get_exchange_time = lambda: now
         # Losing the memo reconstructs exactly the same bounded-age observation.
         bot.cm._ema_cache.clear()
-        assert await load(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000}) == (result, rank, missing)
-        assert calls == 2
+        assert await read_required(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000}) == (result, rank, missing)
+        assert calls == 4
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("local_case", ["complete", "partial", "corrected", "expired"])
 async def test_live_rms_remote_timeout_uses_local_history_after_promotion(local_case):
     from candlestick_manager import CANDLE_DTYPE, CandlestickManager
-    from live.rms_directionality import load
+    from live.rms_directionality import read_required
 
     minute = 60_000
     rows = np.zeros(22, dtype=CANDLE_DTYPE)
@@ -1749,7 +1796,7 @@ async def test_live_rms_remote_timeout_uses_local_history_after_promotion(local_
             return rows[:-1].copy()
         return rows.copy() if local_case == "complete" else rows[-1:].copy()
 
-    cm = SimpleNamespace(get_candles=candles, _ema_cache={}, _ema_inputs={})
+    cm = _rms_source_fixture(candles)
     bot = SimpleNamespace(
         cm=cm,
         get_exchange_time=lambda: now,
@@ -1766,10 +1813,10 @@ async def test_live_rms_remote_timeout_uses_local_history_after_promotion(local_
             "entry_cooldown_max_duration_minutes": 60.0,
         }[key],
     )
-    initial, _, _ = await load(bot, ["APT"], {"APT"}, {"APT": minute})
+    await read_required(bot, ["APT"], {"APT"}, {"APT": minute})
     promoted = True
     now += 2 * minute if local_case == "expired" else minute
-    current, ranking, missing = await load(bot, ["APT"], set(), {"APT": minute})
+    current, ranking, missing = await read_required(bot, ["APT"], set(), {"APT": minute})
 
     assert calls == [False, True, False]
     if local_case == "complete":
@@ -1778,8 +1825,8 @@ async def test_live_rms_remote_timeout_uses_local_history_after_promotion(local_
         assert not missing
     else:
         assert current == {"APT": {}}
-        assert ranking == (initial if local_case == "partial" else {"APT": {}})
+        assert ranking == {"APT": {}}
         assert missing["APT"] == {
             "current": [1.0],
-            "forager": [] if local_case == "partial" else [1.0],
+            "forager": [1.0],
         }

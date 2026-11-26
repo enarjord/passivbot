@@ -5,8 +5,8 @@ import subprocess
 import sys
 
 import pytest
-from aiohttp import web
-from aiohttp.test_utils import make_mocked_request
+from aiohttp import ClientWSTimeout, WSMsgType, web
+from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 
 import monitor_relay
 from monitor_relay import (
@@ -71,6 +71,14 @@ class FakeWebSocket:
         self.close_after_messages = close_after_messages
         self.closed = False
         self.messages = []
+        self.close_event = asyncio.Event()
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        await self.close_event.wait()
+        raise StopAsyncIteration
 
     async def prepare(self, request):
         return self
@@ -82,6 +90,7 @@ class FakeWebSocket:
 
     async def close(self):
         self.closed = True
+        self.close_event.set()
 
 
 @pytest.mark.asyncio
@@ -303,6 +312,66 @@ async def test_monitor_relay_publishes_first_entries_for_new_current_files_after
         await relay.stop()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("queue_size", [1, 4])
+async def test_monitor_relay_mixed_burst_yields_to_ready_subscriber(tmp_path, queue_size):
+    keys = [("bitget", "user01"), ("bybit", "user02")]
+    monitor_root = _make_monitor_root(tmp_path, *keys[0])
+    _make_monitor_root(tmp_path, *keys[1])
+    relay = create_monitor_relay_app(
+        monitor_root=str(monitor_root), subscriber_queue_size=queue_size
+    )[RELAY_APP_KEY]
+    relay._prime_offsets()
+    relay._initial_prime_completed = True
+    fast = relay.subscribe()
+    stalled = relay.subscribe()
+    expected = []
+    for exchange, user in keys:
+        bot = monitor_root / exchange / user
+        for kind, path in [
+            ("event", bot / "events/current.ndjson"),
+            ("history", bot / "history/price_ticks.current.ndjson"),
+        ]:
+            for number in range(7):
+                _append_json_line(
+                    path,
+                    {
+                        "exchange": exchange,
+                        "user": user,
+                        "seq": number,
+                        "ts": number,
+                        "payload": {"number": number},
+                    },
+                )
+                expected.append((kind, exchange, user, number))
+
+    received = []
+
+    async def consume():
+        while True:
+            received.append(await fast.get())
+
+    consumer = asyncio.create_task(consume())
+    try:
+        await relay.poll_once()
+        await asyncio.sleep(0)
+    finally:
+        consumer.cancel()
+        await asyncio.gather(consumer, return_exceptions=True)
+        relay.unsubscribe(fast)
+        relay.unsubscribe(stalled)
+
+    assert [row["type"] for row in received].count("resync_required") == 0
+    assert [
+        (row["type"], row["exchange"], row["user"], row["payload"]["number"])
+        for row in received
+    ] == expected
+    assert stalled.get_nowait() == {
+        "type": "resync_required",
+        "reason": "subscriber_queue_overflow",
+    }
+
+
 @pytest.mark.parametrize("stream", ["events", "history"])
 @pytest.mark.parametrize("split_at", ["json", "utf8", "newline"])
 def test_monitor_relay_retries_unfinished_current_rows(tmp_path, stream, split_at, caplog):
@@ -437,6 +506,38 @@ def test_monitor_relay_reads_rotation_from_new_file_start(tmp_path, monkeypatch,
     assert [message["seq"] for message in relay._read_updates(path)] == [3, 4]
     assert relay._read_updates(path) == []
     assert not caplog.records
+
+
+@pytest.mark.asyncio
+async def test_monitor_relay_responds_to_ping_and_releases_idle_subscription(tmp_path, monkeypatch):
+    monitor_root = _make_monitor_root(tmp_path)
+    app = create_monitor_relay_app(monitor_root=str(monitor_root))
+    relay = app[RELAY_APP_KEY]
+    unsubscribe = relay.unsubscribe
+    unsubscribed = asyncio.Event()
+
+    def notify_unsubscribed(queue):
+        unsubscribe(queue)
+        unsubscribed.set()
+
+    monkeypatch.setattr(relay, "unsubscribe", notify_unsubscribed)
+    async with TestClient(TestServer(app, shutdown_timeout=0.5)) as client:
+        ws = await client.ws_connect(
+            "/ws",
+            headers={"Host": "localhost:8765"},
+            autoping=False,
+            timeout=ClientWSTimeout(ws_close=0.5),
+        )
+        assert (await ws.receive_json(timeout=1.0))["type"] == "snapshot"
+        await ws.ping(b"probe")
+        pong = await ws.receive(timeout=1.0)
+        assert pong.type is WSMsgType.PONG
+        assert pong.data == b"probe"
+        assert len(relay._subscribers) == 1
+
+        await ws.close()
+        await asyncio.wait_for(unsubscribed.wait(), timeout=1.0)
+        assert not relay._subscribers
 
 
 @pytest.mark.asyncio
