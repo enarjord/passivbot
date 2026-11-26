@@ -279,13 +279,12 @@ def _apply_creation_batch_capacity(bot, orders: list[dict], *, planning_snapshot
         )
     if uncovered and bot._loss_gate_enabled():
         uncovered.clear()
-    prioritized_orders = sorted(
-        orders,
-        key=lambda order: (
-            not _order_is_risk_critical(order),
-            id(order) not in uncovered,
-        ),
-    )
+    def creation_priority(order):
+        if _order_is_risk_critical(order):
+            return 0
+        return 1 if id(order) in uncovered else 2
+
+    prioritized_orders = sorted(orders, key=creation_priority)
     selected = prioritized_orders[:max_batch]
     deferred = prioritized_orders[max_batch:]
     for order in deferred:

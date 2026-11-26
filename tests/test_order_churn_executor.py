@@ -309,6 +309,38 @@ def test_binance_capacity_for_uncovered_two_child_close(state):
     assert admitted == expected[state]
 
 
+
+def test_binance_uncovered_closes_preserve_risk_critical_order():
+    bot = _Bot()
+    bot.exchange = "binance"
+    bot.hedge_mode = bot._config_hedge_mode = True
+    bot._account_invalidation_generation = 1
+    bot.values["max_n_creations_per_batch"] = 3
+    symbol = "ETH/USDT:USDT"
+    bot.positions = {symbol: {"long": {"size": 4.0}}}
+    bot.fetched_open_orders = []
+    snapshot = _stamp_account(bot)
+
+    panic = dict(
+        _order("panic", execution_type="market", priority="risk_critical"),
+        symbol=symbol, side="sell", reduce_only=True, pb_order_type="close_panic_long",
+    )
+    limits = [
+        dict(
+            _order(f"close_{index}", priority="risk_critical"),
+            symbol=symbol, side="sell", reduce_only=True,
+            pb_order_type="close_grid_long", price=101.0 + index,
+        )
+        for index in range(3)
+    ]
+
+    admitted = _apply_creation_batch_capacity(
+        bot, [panic, *limits], planning_snapshot=snapshot
+    )
+
+    assert admitted == [panic, *limits[:2]]
+
+
 def test_capacity_after_admission_does_not_starve_later_admissible_order():
     bot = _Bot()
     bot.values["max_n_creations_per_batch"] = 1
