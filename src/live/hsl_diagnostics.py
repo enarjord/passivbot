@@ -7,7 +7,12 @@ import json
 import logging
 
 from live.diagnostic_safety import bounded_exception_type
-from live.event_bus import EventTags, EventTypes, _hsl_input_console
+from live.event_bus import (
+    EventTags,
+    EventTypes,
+    _hsl_input_console,
+    _hsl_observation_only_expired,
+)
 from live.event_emitters import _safe_emit, _console_sink_error_count
 
 SCOPE_LIMIT = 128
@@ -277,18 +282,20 @@ def _emit_status(bot, data, scope_signature):
     unavailable = bool(counts["unavailable"] or data["observation_status"] != "current")
     data["scopes"] = data["scopes"][:SAMPLE_LIMIT]
     data["omitted_scopes"] = max(0, data["scope_count"] - SAMPLE_LIMIT)
+    level = "warning" if unavailable else "info"
+    status = (
+        "degraded"
+        if unavailable or counts["estimated"] or data["candle_sources"]["failure_count"]
+        else "succeeded"
+    )
     console_errors_before = _console_sink_error_count(bot)
     emitted = _safe_emit(
         bot,
         EventTypes.HSL_STATUS,
         component="risk.hsl",
         tags=(EventTags.RISK, EventTags.SUMMARY),
-        level="warning" if unavailable else "info",
-        status=(
-            "degraded"
-            if unavailable or counts["estimated"] or data["candle_sources"]["failure_count"]
-            else "succeeded"
-        ),
+        level=level,
+        status=status,
         cycle_id=getattr(bot, "_live_event_current_cycle_id", None),
         data=data,
     )
@@ -300,10 +307,13 @@ def _emit_status(bot, data, scope_signature):
     )
     if emitted is None or console_failed:
         _, input_cause = _hsl_input_console(data)
+        replaced_expiry = data.get("console_replaced_observation") is True and (
+            _hsl_observation_only_expired(data, level=level, status=status)
+        )
         logging.log(
             (
                 logging.DEBUG
-                if data.get("console_replaced_observation")
+                if replaced_expiry
                 else logging.WARNING if unavailable else logging.INFO
             ),
             "[risk] HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d%s",

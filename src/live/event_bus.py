@@ -3395,6 +3395,18 @@ def _format_hsl_console(event: LiveEvent) -> str:
         value = _data_int(counts, key)
         return "?" if value is None or value < 0 else str(min(value, 999_999))
 
+    if _hsl_observation_only_expired(data, level=event.level, status=event.status):
+        return " ".join(
+            (
+                "[risk] HSL stale",
+                "mode=" + token(data.get("signal_mode"), 8),
+                "stale_reason=input_expired",
+                f"last_green={count('green')}",
+                f"last_inactive={count('inactive')}",
+                f"estimated={count('estimated')}",
+            )
+        )
+
     parts = [
         "[risk] HSL",
         token(data.get("observation_status"), 22),
@@ -3515,6 +3527,33 @@ def _hsl_console_state(event: LiveEvent) -> tuple | None:
     return (token, observation, tuple(sorted(missing)), event.level, event.status)
 
 
+def _hsl_observation_only_expired(
+    data: Mapping[str, Any],
+    *,
+    level: str,
+    status: str,
+) -> bool:
+    """Recognize an expired diagnostic with no observed input or scope outage."""
+    counts = data.get("counts")
+    sources = data.get("candle_sources")
+    return (
+        level == "warning"
+        and status == "degraded"
+        and data.get("observation_status") == "stale"
+        and data.get("stale_reasons") == ["input_expired"]
+        and data.get("account_unavailable") == []
+        and data.get("unavailable_scope") is None
+        and isinstance(counts, Mapping)
+        and type(counts.get("red")) is int
+        and counts["red"] == 0
+        and type(counts.get("unavailable")) is int
+        and counts["unavailable"] == 0
+        and isinstance(sources, Mapping)
+        and type(sources.get("failure_count")) is int
+        and sources["failure_count"] == 0
+    )
+
+
 class ConsoleSummarySink:
     def __init__(
         self,
@@ -3528,26 +3567,24 @@ class ConsoleSummarySink:
 
     def write(self, event: LiveEvent) -> str | None:
         key = (event.exchange, event.user, event.bot_id, event.event_type)
+        expiry_key = (*key, "hsl_observation_expiry")
         state = _hsl_console_state(event)
-        if state is not None and event.data.get("console_replaced_observation") is True:
-            counts = event.data.get("counts", {})
-            if (
-                event.data.get("observation_status") == "stale"
-                and counts.get("red") == 0
-                and counts.get("unavailable") == 0
-            ):
-                count, age = self._replaced_hsl.get(key, (0, 0))
-                self._replaced_hsl[key] = (
-                    min(count + 1, 999999),
-                    max(age, _data_int(event.data, "age_ms") or 0),
-                )
-                self._replaced_hsl.move_to_end(key)
-                while len(self._replaced_hsl) > 256:
-                    self._replaced_hsl.popitem(last=False)
-                self.logger.log(logging.DEBUG, format_console_event(event))
-                return None
+        expiry_only = state is not None and _hsl_observation_only_expired(
+            event.data, level=event.level, status=event.status
+        )
+        if expiry_only and event.data.get("console_replaced_observation") is True:
+            count, age = self._replaced_hsl.get(key, (0, 0))
+            self._replaced_hsl[key] = (
+                min(count + 1, 999999),
+                max(age, _data_int(event.data, "age_ms") or 0),
+            )
+            self._replaced_hsl.move_to_end(key)
+            while len(self._replaced_hsl) > 256:
+                self._replaced_hsl.popitem(last=False)
+            self.logger.log(logging.DEBUG, format_console_event(event))
+            return None
         message = format_console_event(event)
-        if state is not None and key in self._replaced_hsl:
+        if state is not None and not expiry_only and key in self._replaced_hsl:
             count, age = self._replaced_hsl[key]
             message += f" replaced_samples={count} max_sample_age={age / 1000.:.1f}s"
 
@@ -3560,6 +3597,10 @@ class ConsoleSummarySink:
                     self.logger.log(_logging_level(event.level), line)
                 if separator:
                     self.logger.log(logging.DEBUG, '[risk] prior observations replaced; count=' + detail)
+                if not expiry_only and event.level in {"warning", "error", "critical"}:
+                    # Preserve the next visible transition out of a substantive
+                    # warning even when the plain expiry itself repeats.
+                    self.admission.forget(expiry_key)
             else:
                 if len(text) > 170 and event.level not in ('debug', 'trace'):
                     prefix = text.split(' ', 1)[0]
@@ -3567,8 +3608,21 @@ class ConsoleSummarySink:
                         self.logger.log(_logging_level(event.level), line)
                 else:
                     self.logger.log(_logging_level(event.level), text)
+        if expiry_only:
+            def emit_expiry(text: str) -> None:
+                emit(text)
+                # An operator who saw this expiry still needs the next current
+                # observation. Suppressed expiry repeats leave that state alone.
+                self.admission.forget(key)
+
+            return self.admission.write(
+                expiry_key,
+                state,
+                message,
+                emit_expiry,
+                reminder_seconds=300.0,
+            )
         if state is not None:
-            key = (event.exchange, event.user, event.bot_id, event.event_type)
             written = self.admission.write(
                 key,
                 state,
