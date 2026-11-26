@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from live import executor
 from live.event_bus import EventTypes, ReasonCodes
+from live.freshness import FreshnessLedger
 from live.order_churn_gate import OrderChurnGateState
+from live.planning_snapshot import PlanningSnapshot
 from passivbot import Passivbot
 
 
@@ -418,6 +422,83 @@ async def test_risk_first_capacity_applies_after_exchange_config_writes(
     assert bot.configured == [[critical["symbol"], ordinary["symbol"]]]
     assert bot.created == [critical]
     assert ordinary["_churn_gate_reason"] == "batch_capacity"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case, prefer_close",
+    [
+        ("uncovered", True),
+        ("resting_entry", True),
+        ("covered", False),
+        ("ambiguous_resting_order", False),
+        ("flat", False),
+        ("stale_signature", False),
+        ("pending_confirmation", False),
+        ("position_fill_sync", False),
+        ("loss_gate", False),
+        ("other_exchange", False),
+    ],
+)
+async def test_hyperliquid_creation_capacity_prioritizes_confirmed_uncovered_close(
+    execution_shell, case, prefer_close
+):
+    bot = _PlanBot()
+    bot.exchange = "hyperliquid" if case != "other_exchange" else "bybit"
+    bot.hedge_mode = False
+    bot._order_churn_gate_enabled_for_connector = False
+    bot.live_value = {"max_n_creations_per_batch": 3}.__getitem__
+    bot._live_max_realized_loss_pct = lambda: 0.1 if case == "loss_gate" else 1.0
+    close = dict(
+        _order("uncovered_close"), side="sell", reduce_only=True,
+        pb_order_type="close_grid_long",
+    )
+    size = 0.0 if case == "flat" else 2.0
+    bot.positions = {close["symbol"]: {"long": {"size": size}}}
+    bot.fetched_open_orders = []
+    if case == "covered":
+        bot.fetched_open_orders = [dict(close)]
+    elif case == "resting_entry":
+        bot.fetched_open_orders = [_order("resting_entry")]
+    elif case == "ambiguous_resting_order":
+        bot.fetched_open_orders = [{"symbol": close["symbol"], "side": "sell"}]
+
+    ledger = FreshnessLedger()
+    ledger.begin_epoch()
+    surfaces = ("balance", "positions", "open_orders")
+    for surface in surfaces:
+        ledger.stamp(surface, surface, now_ms=100)
+    bot._ensure_freshness_ledger = lambda: ledger
+    bot._current_planning_snapshot = PlanningSnapshot.capture(
+        ts_ms=100,
+        exchange=bot.exchange,
+        user="test",
+        ledger=ledger,
+        required_surfaces=surfaces,
+        min_epochs=dict.fromkeys(surfaces, 1),
+        symbols=[close["symbol"]],
+        market_snapshots={},
+        market_snapshot_max_age_ms=100,
+    )
+    if case == "stale_signature":
+        ledger.stamp("open_orders", "changed", now_ms=101)
+    if case == "pending_confirmation":
+        bot._authoritative_pending_confirmations = {"open_orders": 2}
+    if case == "position_fill_sync":
+        bot._position_fill_sync = SimpleNamespace(
+            blocked=lambda scope: scope == (close["symbol"], close["position_side"]),
+        )
+
+    entry = dict(_order("entry"), symbol="ETH/USDT:USDT")
+    risk_first = dict(_order("risk_first", panic=True), symbol="LTC/USDT:USDT")
+    risk_second = dict(close, name="risk_second", execution_priority="risk_critical")
+    await executor.execute_order_plan(
+        bot, [], [entry, risk_first, close, risk_second]
+    )
+
+    expected = [risk_first, risk_second, close if prefer_close else entry]
+    assert bot.created == expected
+    assert (entry if prefer_close else close)["_churn_gate_reason"] == "batch_capacity"
 
 
 @pytest.mark.asyncio
