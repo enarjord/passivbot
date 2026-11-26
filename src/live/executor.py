@@ -256,7 +256,7 @@ def _filter_connector_deferred_creations(bot, passivbot_cls, orders, wave) -> li
     return admitted
 
 
-def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
+def _apply_creation_batch_capacity(bot, orders: list[dict], *, planning_snapshot=None) -> list[dict]:
     """Apply stable risk-first capacity after all local creation admission."""
     if not orders:
         return []
@@ -267,16 +267,24 @@ def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
         else len(orders)
     )
     # Keep the Rust close allocation order when the caller applied the loss gate.
-    prefer_uncovered = any(
-        order.get("_churn_gate_reason") == "uncovered_close_exempt" for order in orders
-    ) and not bot._loss_gate_enabled()
-    prioritized_orders = sorted(
-        orders,
-        key=lambda order: (
-            not _order_is_risk_critical(order),
-            not prefer_uncovered or order.get("_churn_gate_reason") != "uncovered_close_exempt",
-        ),
-    )
+    uncovered = {
+        id(order) for order in orders
+        if order.get("_churn_gate_reason") == "uncovered_close_exempt"
+    }
+    if len(orders) > max_batch and getattr(bot, "exchange", None) == "binance":
+        groups = _confirmed_uncovered_close_groups(bot, orders, planning_snapshot)
+        uncovered.update(
+            id(order) for closes in groups.values() for order in closes
+            if order.get("type") == "limit" and _order_scope_is_held(bot, order)
+        )
+    if uncovered and bot._loss_gate_enabled():
+        uncovered.clear()
+    def creation_priority(order):
+        if _order_is_risk_critical(order):
+            return 0
+        return 1 if id(order) in uncovered else 2
+
+    prioritized_orders = sorted(orders, key=creation_priority)
     selected = prioritized_orders[:max_batch]
     deferred = prioritized_orders[max_batch:]
     for order in deferred:
@@ -298,14 +306,12 @@ def _apply_creation_batch_capacity(bot, orders: list[dict]) -> list[dict]:
     return selected
 
 
-def _bitunix_uncovered_close_candidates(bot, orders: list[dict], snapshot) -> set[int]:
-    """Find sole Rust close candidates in confirmed, uncovered Bitunix scopes."""
-    if getattr(bot, "exchange", None) != "bitunix" or not getattr(bot, "hedge_mode", False):
-        return set()
+def _confirmed_uncovered_close_groups(bot, orders: list[dict], snapshot) -> dict:
+    """Group reduce-only orders for held scopes with a confirmed empty close side."""
     if snapshot is None or snapshot.account_invalidation_generation != getattr(
         bot, "_account_invalidation_generation", 0
     ):
-        return set()
+        return {}
 
     surfaces = {"positions", "open_orders"}
     stamps = {stamp.name: stamp for stamp in snapshot.surfaces if stamp.name in surfaces}
@@ -323,7 +329,7 @@ def _bitunix_uncovered_close_candidates(bot, orders: list[dict], snapshot) -> se
             for name, stamp in stamps.items()
         )
     ):
-        return set()
+        return {}
 
     close_sides = {"long": "sell", "short": "buy"}
     by_scope = defaultdict(list)
@@ -337,16 +343,16 @@ def _bitunix_uncovered_close_candidates(bot, orders: list[dict], snapshot) -> se
         ):
             by_scope[scope].append(order)
     if not by_scope:
-        return set()
+        return {}
 
     # Use the committed exchange snapshot rather than the local order list,
     # which can include optimistic changes from recent cancel/create responses.
     resting_orders = getattr(bot, "fetched_open_orders", None)
     if not isinstance(resting_orders, list):
-        return set()
+        return {}
     for order in resting_orders:
         if not isinstance(order, dict) or not order.get("symbol"):
-            return set()
+            return {}
         symbol, pside, side = order["symbol"], order.get("position_side"), order.get("side")
         if pside not in close_sides or side not in {"buy", "sell"}:
             for possible_pside in ("long", "short", ""):
@@ -354,16 +360,26 @@ def _bitunix_uncovered_close_candidates(bot, orders: list[dict], snapshot) -> se
         elif side == close_sides[pside]:
             by_scope.pop(_cancel_first_scope(bot, order), None)
 
-    candidates = set()
-    for closes in by_scope.values():
-        if len(closes) != 1 or closes[0].get("type") != "limit":
-            continue
-        [close] = closes
-        positions = bot.positions.get(close["symbol"], {})
-        size = positions.get(close["position_side"], {}).get("size", 0.0)
-        if math.isfinite(size) and size != 0.0:
-            candidates.add(id(close))
-    return candidates
+    return by_scope
+
+
+def _order_scope_is_held(bot, order: dict) -> bool:
+    position = bot.positions.get(order["symbol"], {}).get(order["position_side"], {})
+    size = position.get("size", 0.0)
+    return math.isfinite(size) and size != 0.0
+
+
+def _bitunix_uncovered_close_candidates(bot, orders: list[dict], snapshot) -> set[int]:
+    """Find sole Rust close candidates in confirmed, uncovered Bitunix scopes."""
+    if getattr(bot, "exchange", None) != "bitunix" or not getattr(bot, "hedge_mode", False):
+        return set()
+    groups = _confirmed_uncovered_close_groups(bot, orders, snapshot)
+    return {
+        id(closes[0]) for closes in groups.values()
+        if len(closes) == 1
+        and closes[0].get("type") == "limit"
+        and _order_scope_is_held(bot, closes[0])
+    }
 
 
 def _apply_order_churn_admission(
@@ -1258,7 +1274,9 @@ async def execute_order_plan(
         if market_panics:
             to_create_mod.sort(key=lambda order: not bot._is_market_execution_order(order))
         to_create_mod = _apply_creation_batch_capacity(
-            bot, realized_close_admission.prioritize(bot, to_create_mod)
+            bot,
+            realized_close_admission.prioritize(bot, to_create_mod),
+            planning_snapshot=snapshot,
         )
         if order_wave is not None:
             order_wave["deferred_create"] += max(

@@ -93,6 +93,27 @@ def test_allowance_blocks_only_far_churn_evidenced_ordinary_orders():
     assert far["_churn_gate_reason"] == "allowance_exhausted"
 
 
+def _stamp_account(bot: _Bot) -> PlanningSnapshot:
+    ledger = FreshnessLedger()
+    bot._ensure_freshness_ledger = lambda: ledger
+    ledger.begin_epoch()
+    surfaces = {"positions", "open_orders"}
+    for surface in surfaces:
+        ledger.stamp(surface, signature=(), now_ms=1000)
+    return PlanningSnapshot.capture(
+        ts_ms=1000,
+        exchange=bot.exchange,
+        user="test",
+        ledger=ledger,
+        required_surfaces=surfaces,
+        min_epochs={surface: ledger.epoch for surface in surfaces},
+        symbols=(),
+        market_snapshots={},
+        market_snapshot_max_age_ms=1000,
+        account_invalidation_generation=bot._account_invalidation_generation,
+    )
+
+
 @pytest.mark.parametrize(
     "state, exempt",
     [
@@ -145,24 +166,8 @@ def test_bitunix_churn_allowance_for_sole_uncovered_close(state, exempt):
                 "qty": 0.25,
             }
         ]
-    ledger = FreshnessLedger()
-    bot._ensure_freshness_ledger = lambda: ledger
-    ledger.begin_epoch()
-    surfaces = {"positions", "open_orders"}
-    for surface in surfaces:
-        ledger.stamp(surface, signature=(), now_ms=1000)
-    snapshot = PlanningSnapshot.capture(
-        ts_ms=1000,
-        exchange=bot.exchange,
-        user="test",
-        ledger=ledger,
-        required_surfaces=surfaces,
-        min_epochs={surface: ledger.epoch for surface in surfaces},
-        symbols=(),
-        market_snapshots={},
-        market_snapshot_max_age_ms=1000,
-        account_invalidation_generation=bot._account_invalidation_generation,
-    )
+    snapshot = _stamp_account(bot)
+    ledger = bot._ensure_freshness_ledger()
     orders = [entry, close]
     if state == "awaiting_confirmation":
         bot._authoritative_pending_confirmations["open_orders"] = ledger.epoch + 1
@@ -259,6 +264,81 @@ def test_capacity_preserves_native_close_priority_when_loss_gate_enabled():
 
     # The caller has already sorted the orders by native close-allocation priority.
     assert _apply_creation_batch_capacity(bot, [preferred, uncovered]) == [preferred]
+
+
+@pytest.mark.parametrize("state", ["uncovered", "resting", "invalidated", "loss_gate"])
+def test_binance_capacity_for_uncovered_two_child_close(state):
+    bot = _Bot()
+    bot.exchange = "binance"
+    bot.hedge_mode = bot._config_hedge_mode = True
+    bot._account_invalidation_generation = 1
+    bot.values["max_n_creations_per_batch"] = 3
+    symbol = "ETH/USDT:USDT"
+    bot.positions = {symbol: {"long": {"size": 2.0}}}
+    bot.fetched_open_orders = []
+    if state == "resting":
+        bot.fetched_open_orders.append({
+            "symbol": symbol, "position_side": "long", "side": "sell", "qty": 0.25,
+        })
+    snapshot = _stamp_account(bot)
+    if state == "invalidated":
+        bot._account_invalidation_generation += 1
+    if state == "loss_gate":
+        bot._loss_gate_enabled = lambda: True
+
+    critical = _order("critical", priority="risk_critical")
+    entries = [_order(f"entry_{index}") for index in range(3)]
+    close_a = dict(
+        _order("close_a"), symbol=symbol, side="sell", reduce_only=True,
+        pb_order_type="close_grid_long", price=101.0,
+    )
+    close_b = dict(close_a, name="close_b", price=102.0)
+    # The caller has already honored native close allocation on the loss-gate path.
+    plan = [close_a, *entries, close_b] if state == "loss_gate" else [*entries, close_a, close_b]
+
+    admitted = _apply_creation_batch_capacity(
+        bot, [*plan, critical], planning_snapshot=snapshot
+    )
+
+    expected = {
+        "uncovered": [critical, close_a, close_b],
+        "resting": [critical, *entries[:2]],
+        "invalidated": [critical, *entries[:2]],
+        "loss_gate": [critical, close_a, entries[0]],
+    }
+    assert admitted == expected[state]
+
+
+
+def test_binance_uncovered_closes_preserve_risk_critical_order():
+    bot = _Bot()
+    bot.exchange = "binance"
+    bot.hedge_mode = bot._config_hedge_mode = True
+    bot._account_invalidation_generation = 1
+    bot.values["max_n_creations_per_batch"] = 3
+    symbol = "ETH/USDT:USDT"
+    bot.positions = {symbol: {"long": {"size": 4.0}}}
+    bot.fetched_open_orders = []
+    snapshot = _stamp_account(bot)
+
+    panic = dict(
+        _order("panic", execution_type="market", priority="risk_critical"),
+        symbol=symbol, side="sell", reduce_only=True, pb_order_type="close_panic_long",
+    )
+    limits = [
+        dict(
+            _order(f"close_{index}", priority="risk_critical"),
+            symbol=symbol, side="sell", reduce_only=True,
+            pb_order_type="close_grid_long", price=101.0 + index,
+        )
+        for index in range(3)
+    ]
+
+    admitted = _apply_creation_batch_capacity(
+        bot, [panic, *limits], planning_snapshot=snapshot
+    )
+
+    assert admitted == [panic, *limits[:2]]
 
 
 def test_capacity_after_admission_does_not_starve_later_admissible_order():
