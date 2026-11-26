@@ -8,6 +8,10 @@ its own version heading. See [release status](docs/releases.md).
 - Fix Bitget UTA fill-history traversal at the 90-day boundary and accept the
   exchange's successful empty-page response with explicit null fills and cursor.
 
+- Seed a cold OKX hourly candle cache with one finalized tail request when its
+  first live history page is empty. Required hourly EMAs still need complete
+  coverage.
+
 - On Hyperliquid, round the derived account balance (equity minus uPnL) to the
   exchange's 8-decimal USDC precision. Floating-point residue from the
   subtraction previously made an unchanged balance differ between reads by about

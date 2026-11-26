@@ -2251,6 +2251,80 @@ async def test_get_latest_ema_close_1h_excludes_current_hour_at_boundary(monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case", ["cold_live", "custom_cap", "strict", "historical", "forced", "cache_only"]
+)
+async def test_okx_cold_hourly_seed_after_empty_historical_page(tmp_path, case):
+    import ccxt.async_support as ccxt
+
+    hour_ms = 60 * ONE_MIN_MS
+    now = 500_000 * hour_ms
+    last_final = now - hour_ms
+    first_trade = last_final - 199 * hour_ms
+    start = last_final - 799 * hour_ms
+    symbol = "TEST/USDT:USDT"
+    market = {"id": "TEST-USDT-SWAP", "symbol": symbol, "type": "swap"}
+    requests = []
+    exchange = ccxt.okx()
+    exchange.milliseconds = lambda: now
+    exchange.markets = {symbol: market}
+    exchange.market = lambda name: exchange.markets[name]
+
+    async def candles(request):
+        requests.append(request)
+        return {
+            "code": "0",
+            "data": [
+                [str(ts), "100", "101", "99", "100", "1", "1", "100", "1"]
+                for ts in range(now, first_trade - hour_ms, -hour_ms)
+                if request["before"] < ts < request["after"]
+            ][:request["limit"]],
+        }
+
+    # Use CCXT's actual request builder against deterministic endpoint data.
+    exchange.publicGetMarketCandles = candles
+    exchange.publicGetMarketHistoryCandles = candles
+    manager = CandlestickManager(exchange=exchange, cache_dir=str(tmp_path))
+    manager._now_ms_callback = lambda: now
+    if case == "custom_cap":
+        manager._ccxt_limit_default = 72
+    try:
+        candles_1h = await manager.get_candles(
+            symbol,
+            start_ts=start,
+            end_ts=last_final - (hour_ms if case == "historical" else 0),
+            max_age_ms=0 if case == "forced" else 1,
+            timeframe="1h",
+            strict=case == "strict",
+            allow_remote_fetch=case != "cache_only",
+        )
+        if case not in ("cold_live", "custom_cap"):
+            assert len(requests) == (0 if case == "cache_only" else 1)
+            assert candles_1h.size == 0
+            return
+
+        page_hours = 72 if case == "custom_cap" else 300
+        tail_since = now - page_hours * hour_ms
+        assert [(item["before"], item["after"]) for item in requests] == [
+            (start - 1, start + page_hours * hour_ms),
+            (tail_since - 1, now),
+        ]
+        assert candles_1h["ts"].tolist() == list(range(max(first_trade, tail_since), now, hour_ms))
+        manager._tf_range_cache.clear()
+        assert manager.get_last_final_ts(symbol, timeframe="1h") == last_final
+
+        # The bounded native tail persists, while the longer strategy EMA
+        # remains unavailable until the entire required span is present.
+        ema = await manager.get_latest_ema_metric_spans(
+            symbol, {"log_range": [400.0]}, timeframe="1h", allow_remote_fetch=False
+        )
+        assert math.isnan(ema["log_range"][400.0])
+        assert len(requests) == 2
+    finally:
+        await exchange.close()
+
+
+@pytest.mark.asyncio
 async def test_tf_loads_from_disk_without_network(tmp_path, monkeypatch):
     class _Ex:
         id = "okx"
