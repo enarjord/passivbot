@@ -30,6 +30,10 @@ round_dynamic_dn = pbr.round_dynamic_dn
 
 assert_correct_ccxt_version(ccxt=ccxt_async)
 
+# Hyperliquid reports USDC wallet totals with up to 8 decimals and perp uPNL with
+# fewer. The derived balance is therefore an exact decimal at this precision.
+_HL_BALANCE_DECIMALS = 8
+
 
 class HyperliquidBot(CCXTBot):
     # HIP-3 stock perps have a max leverage of 10x
@@ -1287,6 +1291,20 @@ class HyperliquidBot(CCXTBot):
             )
         return value
 
+    @staticmethod
+    def _hl_normalize_derived_balance(balance: float) -> float:
+        """Remove binary floating-point residue from the derived balance.
+
+        The balance is equity minus the sum of per-position uPNL, each an exchange
+        decimal with at most ``_HL_BALANCE_DECIMALS`` places. Subtracting them in
+        binary floating point leaves residue near one ULP, so two reads of an
+        unchanged exact decimal balance can differ by about 1e-11. Exact raw-balance
+        admission would treat that residue as an account change. Rounding to the
+        input precision recovers the exact decimal; it never moves a value by more
+        than half of the smallest unit the exchange reports.
+        """
+        return round(balance, _HL_BALANCE_DECIMALS)
+
     async def _fetch_positions_and_balance(self):
         timings_ms = {}
         started = utc_ms()
@@ -1384,6 +1402,7 @@ class HyperliquidBot(CCXTBot):
                             raw_position
                         )
                 balance = unified_total - unified_core_upnl - unified_hip3_upnl
+            balance = self._hl_normalize_derived_balance(balance)
             raw_snapshot = {
                 "balance": deepcopy(info),
                 "positions": {
