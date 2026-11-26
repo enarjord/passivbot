@@ -256,8 +256,14 @@ def _filter_connector_deferred_creations(bot, passivbot_cls, orders, wave) -> li
     return admitted
 
 
-def _apply_creation_batch_capacity(bot, orders: list[dict], *, planning_snapshot=None) -> list[dict]:
-    """Apply stable risk-first capacity after all local creation admission."""
+def _apply_creation_batch_capacity(
+    bot,
+    orders: list[dict],
+    *,
+    planning_snapshot=None,
+    planned_creations: list[dict] | None = None,
+) -> list[dict]:
+    """Order admitted creates by stable execution priority and apply batch capacity."""
     if not orders:
         return []
     live_value = getattr(bot, "live_value", None)
@@ -271,14 +277,34 @@ def _apply_creation_batch_capacity(bot, orders: list[dict], *, planning_snapshot
         id(order) for order in orders
         if order.get("_churn_gate_reason") == "uncovered_close_exempt"
     }
-    if len(orders) > max_batch and getattr(bot, "exchange", None) == "binance":
+    exchange = getattr(bot, "exchange", None)
+    mixed_close_and_entry = (
+        exchange in {"binance", "bitunix"}
+        and any(order.get("reduce_only") is False for order in orders)
+        and any(
+            order.get("reduce_only") is True and order.get("type") == "limit"
+            for order in orders
+        )
+    )
+    # A serial create can request confirmation before its ordinary siblings submit,
+    # so the configured batch cap is not the only limit on useful create slots.
+    if exchange == "binance" and (len(orders) > max_batch or mixed_close_and_entry):
         groups = _confirmed_uncovered_close_groups(bot, orders, planning_snapshot)
         uncovered.update(
             id(order) for closes in groups.values() for order in closes
             if order.get("type") == "limit" and _order_scope_is_held(bot, order)
         )
+    elif exchange == "bitunix" and mixed_close_and_entry:
+        # Keep Bitunix's sole-close requirement over the entire Rust plan.
+        candidates = _bitunix_uncovered_close_candidates(
+            bot,
+            orders if planned_creations is None else planned_creations,
+            planning_snapshot,
+        )
+        uncovered.update(id(order) for order in orders if id(order) in candidates)
     if uncovered and bot._loss_gate_enabled():
         uncovered.clear()
+
     def creation_priority(order):
         if _order_is_risk_critical(order):
             return 0
@@ -1277,6 +1303,7 @@ async def execute_order_plan(
             bot,
             realized_close_admission.prioritize(bot, to_create_mod),
             planning_snapshot=snapshot,
+            planned_creations=planned_creations,
         )
         if order_wave is not None:
             order_wave["deferred_create"] += max(

@@ -5,9 +5,10 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Give admitted Binance limit closes for a confirmed uncovered position priority over
-  ordinary entries at the creation batch limit. Keep risk-critical and native loss-gate
-  allocation priority.
+- On Binance and Bitunix, prioritize eligible limit closes for confirmed
+  uncovered positions ahead of ordinary entries even when the plan fits the
+  creation cap. Bitunix requires a sole close in the original plan. Serial
+  confirmation, risk-critical priority, and native loss allocation still apply.
 
 - Fix Bitget UTA fill-history traversal at the 90-day boundary and accept the
   exchange's successful empty-page response with explicit null fills and cursor.
