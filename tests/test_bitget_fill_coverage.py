@@ -80,6 +80,8 @@ def make_fetcher(uta, pages, limit=2, now=1000):
         {"code": "00000", "data": None},
         {"code": "00000", "data": {}},
         {"code": "00000", "data": []},
+        {"code": "40000", "data": {"list": None, "cursor": None}},
+        {"code": "00000", "data": {"list": None, "cursor": "next"}},
         "null_rows",
         "wrong_rows",
         "error_code",
@@ -114,7 +116,7 @@ async def test_saturated_boundary_preserves_all_executions_at_requested_start(ut
     )
     fills = await fetcher.fetch(1000, 1000, {})
     assert {f["id"] for f in fills} == {"7", "6", "5", "4", "3"}
-    assert all(c["startTime"] == c["endTime"] == 1000 for c in calls)
+    assert all(c["startTime"] == (999 if uta else 1000) and c["endTime"] == 1000 for c in calls)
     assert [c.get("cursor" if uta else "idLessThan") for c in calls] == [None, "6", "4"]
 
 
@@ -146,17 +148,39 @@ async def test_pagination_rejects_stalled_pages(uta, repeated):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("uta,window", [(False, 7 * DAY), (True, 30 * DAY)])
-async def test_empty_window_still_checks_singleton_at_inclusive_start(uta, window):
-    pages = [page(uta, []), page(uta, [fill(uta, 1)])]
-    fetcher, calls = make_fetcher(uta, list(reversed(pages)) if uta else pages)
-    assert [event["id"] for event in await fetcher.fetch(1000, 1000 + window, {})] == [
-        "1"
+async def test_classic_empty_window_still_checks_inclusive_start():
+    fetcher, calls = make_fetcher(False, [page(False, []), page(False, [fill(False, 1)])])
+    assert [event["id"] for event in await fetcher.fetch(1000, 1000 + 7 * DAY, {})] == ["1"]
+    assert [(c["startTime"], c["endTime"]) for c in calls] == [
+        (1001, 1000 + 7 * DAY), (1000, 1000),
     ]
-    expected = [(1001, 1000 + window), (1000, 1000)]
-    assert [(c["startTime"], c["endTime"]) for c in calls] == (
-        list(reversed(expected)) if uta else expected
+
+
+@pytest.mark.asyncio
+async def test_uta_exact_retention_start_preserves_every_timestamp():
+    now = 200 * DAY
+    start = now - 90 * DAY
+    terminal = {"code": "00000", "data": {"list": None, "cursor": None}}
+    pages = [page(True, [fill(True, 1, start)], "next"), terminal, terminal, terminal, terminal]
+    fetcher, calls = make_fetcher(True, pages, now=now)
+    assert [event["id"] for event in await fetcher.fetch(start, now, {})] == ["1"]
+    assert calls[1]["cursor"] == "next"
+    windows = [(c["startTime"], c["endTime"]) for c in calls if "cursor" not in c]
+    assert windows[0][0] == start and windows[-1][1] == now
+    assert all(0 < end - start < 30 * DAY for start, end in windows)
+    assert all(left[1] + 1 == right[0] for left, right in zip(windows, windows[1:]))
+
+
+@pytest.mark.asyncio
+async def test_uta_singleton_query_discards_padding_at_retention_edge():
+    now = 200 * DAY
+    start = now - 90 * DAY
+    fetcher, calls = make_fetcher(
+        True, [page(True, [fill(True, 2, start + 1), fill(True, 1, start)])],
+        limit=3, now=now,
     )
+    assert [event["id"] for event in await fetcher.fetch(start, start, {})] == ["1"]
+    assert [(c["startTime"], c["endTime"]) for c in calls] == [(start, start + 1)]
 
 
 @pytest.mark.asyncio
@@ -302,7 +326,7 @@ async def test_uta_cold_starter_then_restart_bridges_certified_prefix(tmp_path):
     await manager.refresh_for_lookback(start, observed_at_ms=now)
     assert bot._realized_memory_start_ms(now) == start
     assert bot._realized_memory_start_ms(now + DAY) == start
-    assert calls[0]["startTime"] == calls[0]["endTime"] == start
+    assert calls[0]["startTime"] == start < calls[0]["endTime"]
     assert max(call["endTime"] for call in calls) == now
     assert manager.cache.load_metadata()["covered_through_ms"] == now
     fetcher, calls = make_fetcher(
@@ -374,7 +398,7 @@ async def test_uta_incremental_overlap_ignores_retained_execution_before_certifi
     calls.clear()
     await restarted.refresh_for_lookback(start)
     assert calls
-    assert [(c["startTime"], c["endTime"]) for c in calls] == [(now, now)]
+    assert [(c["startTime"], c["endTime"]) for c in calls] == [(now - 1, now)]
     calls.clear()
     restarted.cache.load_metadata()["last_refresh_ms"] = now
     await restarted.refresh_latest(last_refresh_overlap_ms=200 * DAY)

@@ -5,13 +5,16 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
-- Let monitor WebSocket writers drain between live poll batches so a ready client
-  can receive event and history bursts without a spurious resync.
+- Fix Bitget UTA fill-history traversal at the 90-day boundary and accept the
+  exchange's successful empty-page response with explicit null fills and cursor.
 
 - On Hyperliquid, round the derived account balance (equity minus uPnL) to the
   exchange's 8-decimal USDC precision. Floating-point residue from the
   subtraction previously made an unchanged balance differ between reads by about
   1e-11, which discarded otherwise valid ordinary plans as `raw_balance_changed`.
+
+- Let monitor WebSocket writers drain between live poll batches so a ready client
+  can receive event and history bursts without a spurious resync.
 
 - Preserve `CloseAutoReduceWelLong` and `CloseAutoReduceWelShort` order types when
   a Trailing Martingale grid close merges at the same price as a WEL auto-reduce
@@ -126,6 +129,9 @@ its own version heading. See [release status](docs/releases.md).
 
 - Verify KuCoin Futures hedge mode with a read before changing it. Skip the
   configuration write when hedge mode is already active and verify any switch.
+
+- Answer WebSocket heartbeats while monitor streams are idle and release subscriptions
+  when their clients disconnect.
 
 - Buffer live monitor messages during connection replay so events published while
   initial data is being sent reach the connected client.
