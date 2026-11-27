@@ -2,7 +2,7 @@
 
 The implemented boundary is documented in the
 [user guide](../exchanges/binance_portfolio_margin.md) and the
-[exchange contract](../ai/features/exchange_integrations.md#binance-portfolio-margin).
+[exchange contract](../ai/features/exchanges/binance.md#portfolio-margin).
 
 `BinancePortfolioBot` subclasses `BinanceBot`. An explicit account-level PM selector
 keeps the ordinary Binance path unchanged. CCXT's `portfolioMargin` option routes

@@ -107,7 +107,7 @@ authoritative account cohort may adopt an exact working order. Exact terminal or
 requires subsequent account and fill confirmation, with explicit cumulative executed quantity
 accounted for. Recovery can defer ordinary creates across restart. It has no time-based release
 and does not block stale-order cancellation or dedicated protection dispatch. Rust still owns
-the next ordinary plan. See [Bitunix Futures](features/exchange_integrations.md#bitunix-futures).
+the next ordinary plan. See [Bitunix Futures](features/exchanges/bitunix.md).
 
 Bitunix may submit two leading ordinary post-only, reduce-only limit closes serially from one
 current Rust plan. Require distinct positions on different symbols, sufficient account order

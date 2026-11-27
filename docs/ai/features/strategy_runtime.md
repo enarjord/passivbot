@@ -487,30 +487,6 @@ allocation diagnostics carry proposed and admitted quantities, route, loss and h
 Live execution also reserves outstanding exchange orders and unresolved transport attempts
 using native loss projections. Conflicting replacements wait for confirmation and a fresh plan.
 
-## Source Of Truth
-
-Rust owns strategy dispatch and order behavior. If Python docs, adapters, or tests imply old
-`trailing_grid` behavior, update those surfaces to match Rust rather than adding Python-side
-behavior patches.
-
-## Validation
-
-- Rust unit tests cover strategy dispatch, entries, closes, recursion, risk, and unstuck behavior.
-- Python tests use the verified real extension when asserting Rust output.
-- Live/backtest parity tests compare optimized behavior with a simple reference contract.
-- Config schema tests reject removed fields and strategy kinds before hydration; released-v8
-  conversion tests cover explicit transformations, conflicts and file/inline precedence.
-- Behaviorally relevant changes include a bounded real backtest smoke.
-
-## Key Code And Tests
-
-- `passivbot-rust/src/orchestrator.rs`
-- `passivbot-rust/src/entries.rs`
-- `passivbot-rust/src/closes.rs`
-- `tests/test_orchestrator_json_api.py`
-- `tests/test_orchestrator_integration.py`
-- `tests/test_auto_unstuck_allowance.py`
-
 ## Adaptive entry timing and RMS directionality
 
 Rust owns signed RMS directionality, its use as a lower-is-better Forager component,
@@ -613,3 +589,27 @@ GPU RMS uses a finite exponential recurrence, reads the expiring return from imm
 candles, and periodically rebuilds to bound float32 subtraction error. Replay checkpoints
 preserve each candidate/coin/side accumulator; exact Rust validation remains authoritative.
 The GPU parameter-layout revision invalidates older optimizer checkpoints.
+
+## Source Of Truth
+
+Rust owns strategy dispatch and order behavior. If Python docs, adapters, or tests imply old
+`trailing_grid` behavior, update those surfaces to match Rust rather than adding Python-side
+behavior patches.
+
+## Validation
+
+- Rust unit tests cover strategy dispatch, entries, closes, recursion, risk, and unstuck behavior.
+- Python tests use the verified real extension when asserting Rust output.
+- Live/backtest parity tests compare optimized behavior with a simple reference contract.
+- Config schema tests reject removed fields and strategy kinds before hydration; released-v8
+  conversion tests cover explicit transformations, conflicts and file/inline precedence.
+- Behaviorally relevant changes include a bounded real backtest smoke.
+
+## Key Code And Tests
+
+- `passivbot-rust/src/orchestrator.rs`
+- `passivbot-rust/src/entries.rs`
+- `passivbot-rust/src/closes.rs`
+- `tests/test_orchestrator_json_api.py`
+- `tests/test_orchestrator_integration.py`
+- `tests/test_auto_unstuck_allowance.py`

@@ -1,5 +1,0 @@
-# Compatibility route for external automations that still require this path.
-# The canonical principles are maintained in Markdown to avoid duplicate normative prose.
-canonical_document: docs/ai/principles.md
-required_action: Read and follow docs/ai/principles.md in full.
-removal_gate: Remove only after all scheduled consumers load the Markdown path successfully.
