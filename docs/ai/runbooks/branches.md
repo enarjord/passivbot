@@ -17,7 +17,7 @@ The lines differ in config schema, risk model, and contracts. Each branch's `AGE
 ## Choosing A Base
 
 - Use the base the task names. A branch name, issue, or PR that names a line selects it.
-- Otherwise, new features, refactors, and documentation target `v9`.
+- Otherwise target `v9`, the current focus, for new features, refactors, fixes, and documentation.
 - A fix for behavior that runs in released v8 deployments targets `master`. When the defect also
   exists on `v9`, deliver a separate `v9` change unless the task says the v9 line is out of scope.
 - Resolve the base from the PR metadata of the current task, not from the repository default.
@@ -46,7 +46,8 @@ The lines differ in config schema, risk model, and contracts. Each branch's `AGE
 
 ## Cutover
 
-The v9 cutover (making v9 the released line) follows the rollback-reference and qualification
-checklist in [release status](../../releases.md#v8-rollback-reference) and the
-[release runbook](release.md). After the cutover, update this runbook, the release runbook, and
-any scheduled automation that filters by base branch.
+`v9` is merged into `master` once the maintainer judges it stable enough; that merge is the
+cutover and makes v9 the released line. Do not propose or prepare it unprompted. When asked, follow
+the rollback-reference and qualification checklist in
+[release status](../../releases.md#v8-rollback-reference) and the [release runbook](release.md).
+After the cutover, update this runbook and the release runbook to describe the single line.
