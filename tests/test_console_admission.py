@@ -1,6 +1,7 @@
 """Offline console replay: scope transitions survive while detail churn stays durable."""
 
 from dataclasses import replace
+import logging
 
 import pytest
 
@@ -40,6 +41,7 @@ def event(**overrides):
         account_unavailable=[],
         console_state="a" * 64,
         counts=dict(green=2, red=0, inactive=0, unavailable=0, estimated=2),
+        candle_sources=dict(failure_count=0),
         scopes=[
             dict(symbol="BTC/USDT:USDT", pside="long", estimates=["snapshot_skew"])
         ],
@@ -223,17 +225,11 @@ def test_repeat_is_admitted_exactly_at_boundary():
     assert "repeats=2 over=300s" in sink.write(event())
 
 
-@pytest.mark.parametrize("unavailable", [0, 1])
-def test_replaced_observation_is_durable_and_does_not_fake_current_outage(unavailable):
+def test_replaced_observation_is_durable_and_does_not_fake_current_outage():
     clock, logger, durable = Clock(), Logger(), ListEventSink()
     sink = ConsoleSummarySink(logger, admission=ConsoleAdmission(clock=clock))
     pipeline = LiveEventPipeline(console_sink=sink, structured_sinks=[durable])
-    counts = dict(
-        green=2 - unavailable, red=0, inactive=0,
-        unavailable=unavailable, estimated=2 - unavailable,
-    )
-    level = "warning" if unavailable else "info"
-    current = event(level=level, data=dict(counts=counts))
+    current = event(level="info")
     try:
         pipeline.emit(current)
         for n in range(1, 101):
@@ -244,8 +240,7 @@ def test_replaced_observation_is_durable_and_does_not_fake_current_outage(unavai
                     data=dict(
                         observation_status="stale",
                         console_replaced_observation=True,
-                        stale_reasons=["input_expired", "account_generation_changed"],
-                        counts=counts,
+                        stale_reasons=["input_expired"],
                         age_ms=12000,
                     ),
                 )
@@ -254,16 +249,20 @@ def test_replaced_observation_is_durable_and_does_not_fake_current_outage(unavai
             assert pipeline.flush()
         visible = [line for level, line in logger.lines if level >= 20]
         assert len(durable.events) == 201
+        assert all(
+            prior.level == "warning" and prior.status == "degraded"
+            for prior in durable.events[1::2]
+        )
         assert len(visible) == 2
         assert all("observation=current" in line for line in visible)
-        assert all(f"unavailable_scopes={unavailable}" in line for line in visible)
+        assert all("unavailable_scopes=0" in line for line in visible)
         assert any("count=100 max_sample_age=12.0s" in line for _, line in logger.lines)
         # Current staleness and recovery are still immediate.
         pipeline.emit(
             event(
                 level="warning",
                 data=dict(
-                    observation_status="stale", stale_reasons=["input_expired"], counts=counts
+                    observation_status="stale", stale_reasons=["input_expired"]
                 ),
             )
         )
@@ -277,14 +276,21 @@ def test_replaced_observation_is_durable_and_does_not_fake_current_outage(unavai
 
 
 @pytest.mark.parametrize(
-    "change",
+    "change, expected_level",
     [
-        dict(counts=dict(red=1, unavailable=0)),
-        dict(account_unavailable=["positions"]),
-        dict(stale_reasons=["clock_before_capture"]),
+        ({}, logging.DEBUG),
+        (dict(counts=dict(red=1, unavailable=0)), logging.WARNING),
+        (dict(account_unavailable=["positions"]), logging.WARNING),
+        (dict(stale_reasons=["clock_before_capture"]), logging.WARNING),
+        (
+            dict(stale_reasons=["input_expired", "account_generation_changed"]),
+            logging.WARNING,
+        ),
+        (dict(counts=dict(red=0, unavailable=1)), logging.WARNING),
+        (dict(candle_sources=dict(failure_count=1)), logging.WARNING),
     ],
 )
-def test_replacement_marker_cannot_hide_red_account_outage_or_bad_clock(change):
+def test_replacement_marker_only_compacts_pure_expiry(change, expected_level):
     logger = Logger()
     data = dict(
         observation_status="stale",
@@ -293,7 +299,7 @@ def test_replacement_marker_cannot_hide_red_account_outage_or_bad_clock(change):
     )
     data.update(change)
     ConsoleSummarySink(logger).write(event(level="warning", data=data))
-    assert logger.lines[0][0] == 30
+    assert logger.lines[0][0] == expected_level
 
 
 def test_routine_refresh_summary_moves_only_console_to_debug():
