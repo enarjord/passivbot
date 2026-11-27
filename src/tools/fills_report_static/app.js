@@ -53,6 +53,9 @@
   const shortDate = (t) => { const d = new Date(t); return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`; };
   const dur = (ms) => { const h = ms / HOUR; return h < 1 ? Math.round(h * 60) + "m" : h < 48 ? h.toFixed(1) + "h" : (h / 24).toFixed(1) + "d"; };
   const intervalLabel = (ms) => (ms >= DAY && ms % DAY === 0 ? ms / DAY + "d" : ms >= HOUR && ms % HOUR === 0 ? ms / HOUR + "h" : ms / 60e3 + " min");
+  // Iterative extrema: spreading large arrays into Math.min/max overflows the argument limit.
+  const minOf = (arr, init = Infinity) => { let m = init; for (const v of arr) if (v < m) m = v; return m; };
+  const maxOf = (arr, init = -Infinity) => { let m = init; for (const v of arr) if (v > m) m = v; return m; };
   const sideColor = (s) => (s === "long" ? "var(--long)" : "var(--short)");
   const pnlColor = (v) => (v >= 0 ? "var(--win)" : "var(--loss)");
   function niceTicks(lo, hi, n) {
@@ -165,7 +168,7 @@
     if (t.length < 2) { el("text", { x: 0, y: 20 }, svg).textContent = "No equity observations."; return; }
     const w = width(svg), h = +svg.getAttribute("height"), L = 54, R = 8, T = 8, B = 18;
     const finite = v.filter((a) => a !== null);
-    const mn = Math.min(...finite), mx = Math.max(...finite), log = mn > 0 && mx / mn > 10;
+    const mn = minOf(finite), mx = maxOf(finite), log = mn > 0 && mx / mn > 10;
     const f = log ? Math.log10 : (a) => a;
     const lo = log ? f(mn) : mn - (mx - mn) * 0.05, hi = log ? f(mx) : mx + (mx - mn) * 0.05;
     const t0 = t[0], t1 = t[t.length - 1];
@@ -195,7 +198,7 @@
     if (!episodes.length) { el("text", { x: 0, y: 20 }, svg).textContent = "No position episodes."; return; }
     const w = width(svg), h = +svg.getAttribute("height"), L = 52, R = 8, T = 6, B = 18;
     const holds = episodes.map((e) => Math.max(e.t1 - e.t0, 60e3) / HOUR);
-    const xmin = Math.min(0.05, Math.min(...holds)), xmax = Math.max(24 * 30, Math.max(...holds) * 1.2);
+    const xmin = Math.min(0.05, minOf(holds)), xmax = Math.max(24 * 30, maxOf(holds) * 1.2);
     const ys = episodes.map((e) => e.pf).sort((a, b) => a - b), q = (p) => ys[Math.floor(p * (ys.length - 1))];
     const m = Math.max(Math.abs(q(0.003)), Math.abs(q(0.997)), 1e-4) * 1.08;
     const x = (hh) => L + ((Math.log10(hh) - Math.log10(xmin)) / (Math.log10(xmax) - Math.log10(xmin))) * (w - L - R);
@@ -237,7 +240,7 @@
     if (!rows.length) { box.innerHTML = '<div class="empty">No closes.</div>'; return; }
     const rh = 28, svg = el("svg", { height: rows.length * rh + 22 }, box), w = width(svg);
     const L = Math.min(170, w * 0.36), R = 112, span = w - L - R;
-    const ml = Math.max(...rows.map((r) => -r.loss), 0), mg = Math.max(...rows.map((r) => r.gain), 0), tot = ml + mg || 1;
+    const ml = maxOf(rows.map((r) => -r.loss), 0), mg = maxOf(rows.map((r) => r.gain), 0), tot = ml + mg || 1;
     const z = L + (span * ml) / tot, sc = (v) => (v / tot) * span;
     rows.forEach((r, i) => {
       const yc = i * rh + rh / 2;
@@ -269,9 +272,9 @@
     const lanes = Object.keys(laneTotals).sort((a, b) => laneTotals[b] - laneTotals[a]);
     const rowH = glyphMode ? (lanes.length > 12 ? 22 : 30) : lanes.length > 12 ? 14 : 26, T = 2, B = 18, PW = 86;
     const h = T + rowH * lanes.length + B; svg.setAttribute("height", h);
-    const L = Math.min(64, Math.max(36, Math.max(...lanes.map((l) => l.length)) * 7 + 10)), right = w - PW - 10;
+    const L = Math.min(64, Math.max(36, maxOf(lanes.map((l) => l.length)) * 7 + 10)), right = w - PW - 10;
     const x = (t) => L + ((t - t0) / (t1 - t0)) * (right - L);
-    const maxTotal = Math.max(...lanes.map((l) => Math.abs(laneTotals[l])), 1e-12), z = right + 10 + PW * 0.2, bx = (v) => (v / maxTotal) * PW * 0.42;
+    const maxTotal = maxOf(lanes.map((l) => Math.abs(laneTotals[l])), 1e-12), z = right + 10 + PW * 0.2, bx = (v) => (v / maxTotal) * PW * 0.42;
     const g = el("g", { class: "clickable" }, svg);
     const tips = {};
     lanes.forEach((lane, li) => {
@@ -361,7 +364,7 @@
       const k = Math.ceil(bars.length / MAX_VISIBLE_BARS), merged = [];
       for (let i = 0; i < bars.length; i += k) {
         const chunk = bars.slice(i, i + k);
-        merged.push([chunk[0][0], chunk[0][1], Math.max(...chunk.map((c) => c[2])), Math.min(...chunk.map((c) => c[3])), chunk[chunk.length - 1][4]]);
+        merged.push([chunk[0][0], chunk[0][1], maxOf(chunk.map((c) => c[2])), minOf(chunk.map((c) => c[3])), chunk[chunk.length - 1][4]]);
       }
       bars = merged; interval *= k;
     }
@@ -391,7 +394,7 @@
     if (tooCoarse) bars.length = 0;
     const prices = bars.flatMap((c) => [c[2], c[3]]).concat(inView.map((f) => f.price));
     if (!prices.length) { el("text", { x: L, y: 30 }, priceSvg).textContent = "No candles or fills in this range."; return; }
-    let lo = Math.min(...prices), hi = Math.max(...prices); const padY = (hi - lo || hi * 0.01) * 0.06; lo -= padY; hi += padY;
+    let lo = minOf(prices), hi = maxOf(prices); const padY = (hi - lo || hi * 0.01) * 0.06; lo -= padY; hi += padY;
     const y = (v) => T + (1 - (v - lo) / (hi - lo)) * (h - T - B);
     niceTicks(lo, hi, 5).forEach((v) => { el("line", { class: "gl", x1: L, x2: w - R, y1: y(v), y2: y(v) }, priceSvg); el("text", { x: L - 6, y: y(v) + 3, "text-anchor": "end" }, priceSvg).textContent = num(v); });
     if (state.episode !== null) { const e = episodes[state.episode]; if (e.coin === coin) el("rect", { x: x(e.t0), y: T, width: Math.max(1, x(e.t1) - x(e.t0)), height: h - T - B, fill: "var(--hover)" }, priceSvg); }
@@ -409,7 +412,8 @@
     const ov = el("rect", { x: L, y: T, width: w - L - R, height: h - T - B, fill: "transparent", style: "cursor:crosshair" }, priceSvg);
     // position price per side, clipped to the range
     ["long", "short"].filter((s) => state.sides[s]).forEach((s) => {
-      let open = null, d = "";
+      const sd = ((DATA.seed || {})[coin] || {})[s];
+      let open = sd ? { t: DATA.start_ms, p: sd[1] } : null, d = "";
       const seg = (t0s, t1s, p) => { const s0 = Math.max(t0s, a), s1 = Math.min(t1s, b); if (s1 > s0 && p > lo && p < hi) d += `M${x(s0).toFixed(1)},${y(p).toFixed(1)}H${x(s1).toFixed(1)}`; };
       (fillsByCoin[coin] || []).filter((f) => f.side === s).forEach((f) => { if (open) seg(open.t, f.t, open.p); open = Math.abs(f.psize) > 0 ? { t: f.t, p: f.pprice } : null; });
       if (open) seg(open.t, b, open.p);
@@ -435,13 +439,13 @@
     flowSvg.style.display = dense.size ? "" : "none";
     if (dense.size) {
       const fh = +flowSvg.getAttribute("height"), FT = 14, FB = 3, mid = FT + (fh - FT - FB) / 2;
-      const bins = {};
+      const bins = {}, cMult = (DATA.c_mult || {})[coin] || 1;
       inView.filter((f) => dense.has(f.kind.action + ":" + f.kind.family)).forEach((f) => {
         const k = Math.floor((f.t - a) / interval);
         const o = (bins[k] = bins[k] || { entry: 0, close: 0, n: 0, pnl: 0 });
-        o[f.kind.action] += Math.abs(f.qty * f.price); o.n++; o.pnl += f.pnl;
+        o[f.kind.action] += Math.abs(f.qty * f.price) * cMult; o.n++; o.pnl += f.pnl;
       });
-      const mx = Math.max(...Object.values(bins).map((o) => Math.max(o.entry, o.close)), 1e-12);
+      const mx = maxOf(Object.values(bins).map((o) => Math.max(o.entry, o.close)), 1e-12);
       const hasEntry = Object.values(bins).some((o) => o.entry > 0), hasClose = Object.values(bins).some((o) => o.close > 0);
       const base = hasEntry && hasClose ? mid : hasEntry ? fh - FB : FT;
       const scale = (hasEntry && hasClose ? (fh - FT - FB) / 2 : fh - FT - FB) / mx;
@@ -463,7 +467,8 @@
     const series = {};
     ["long", "short"].filter((s) => state.sides[s] && sidesTraded.includes(s)).forEach((s) => {
       const sf = (fillsByCoin[coin] || []).filter((f) => f.side === s);
-      let cur = 0; const pts = [];
+      const sd = ((DATA.seed || {})[coin] || {})[s];
+      let cur = sd ? sd[2] : 0; const pts = [];
       sf.forEach((f) => { if (f.t < a) cur = f.we; });
       pts.push([a, cur]);
       sf.filter((f) => f.t >= a && f.t <= b).forEach((f) => { pts.push([f.t, cur]); cur = f.we; pts.push([f.t, cur]); });
@@ -471,7 +476,7 @@
       series[s] = pts;
     });
     const vals = Object.values(series).flat().map((p) => p[1]);
-    const ymax = Math.max(0.01, ...vals.map(Math.abs)) * 1.12;
+    const ymax = maxOf(vals.map(Math.abs), 0.01) * 1.12;
     const two = Object.keys(series).length > 1 || vals.some((v) => v < 0) && vals.some((v) => v > 0);
     const wlo = series.short || vals.some((v) => v < 0) ? -ymax : 0, whi = series.long || vals.some((v) => v > 0) ? ymax : 0;
     const wy = (v) => WT + (1 - (v - wlo) / (whi - wlo || 1)) * (wh - WT - WB);
@@ -540,7 +545,7 @@
       groups.slice(0, LIMIT).map((g) => {
         const f0 = g.f[0], f1 = g.f[g.f.length - 1], n = g.f.length;
         const pnl = g.f.reduce((s, f) => s + f.pnl, 0), pf = g.f.reduce((s, f) => s + f.pf, 0), qty = g.f.reduce((s, f) => s + Math.abs(f.qty), 0);
-        const prices = g.f.map((f) => f.price), p0 = Math.min(...prices), p1 = Math.max(...prices);
+        const prices = g.f.map((f) => f.price), p0 = minOf(prices), p1 = maxOf(prices);
         const k = f0.kind;
         return `<tr><td>${timeStr(f0.t)}${n > 1 ? " → " + timeStr(f1.t).slice(11) + (dateStr(f1.t) !== dateStr(f0.t) ? " (" + shortDate(f1.t) + ")" : "") : ""}</td><td>${k.action === "entry" ? (k.side === "long" ? G.longEntry : G.shortEntry) : k.intent === "risk" ? (pnl >= 0 ? G.riskWin : G.riskLoss) : pnl >= 0 ? G.tpWin : G.tpLoss} <span class="mono">${esc(k.type)}</span></td><td class="n">${n}</td><td class="n">${n > 1 && p0 !== p1 ? num(p0) + "–" + num(p1) : num(p0)}</td><td class="n">${num(qty)}</td><td class="n">${num(f1.psize)}</td><td class="n">${num(f1.pprice)}</td><td class="n">${f1.we.toFixed(4)}</td><td class="n ${pnl > 0 ? "pos" : pnl < 0 ? "neg" : ""}">${k.action === "close" ? usd(pnl) : "–"}</td><td class="n">${k.action === "close" ? pct(pf, 3) : "–"}</td></tr>`;
       }).join("") + "</tbody>";

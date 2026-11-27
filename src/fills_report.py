@@ -213,11 +213,17 @@ def prepare_fills(fills: pd.DataFrame) -> pd.DataFrame:
     return frame.sort_values("timestamp_ms", kind="mergesort").reset_index(drop=True)
 
 
-def position_episodes(fills: pd.DataFrame, min_qty: dict[str, float] | None = None) -> pd.DataFrame:
+def position_episodes(
+    fills: pd.DataFrame,
+    min_qty: dict[str, float] | None = None,
+    final_ms: int | None = None,
+) -> pd.DataFrame:
     """Group each coin/side's fills from the first entry until the position is flat.
 
-    Flat means ``|psize|`` below the coin's minimum quantity (exactly zero when
-    unknown). A position still open at the end has ``finished`` False.
+    Flat means ``|psize|`` strictly below the coin's minimum quantity (exactly zero
+    when unknown); a position of exactly the minimum is still tradable and open. A
+    position still open at the end has ``finished`` False and ends at ``final_ms``,
+    the run's last observation clock, when given.
     """
     min_qty = min_qty or {}
     columns = [
@@ -262,12 +268,15 @@ def position_episodes(fills: pd.DataFrame, min_qty: dict[str, float] | None = No
             else:
                 current["closes"] += 1
                 current["exits"][row.family] = current["exits"].get(row.family, 0) + 1
-            flat = abs(float(row.psize)) <= threshold if threshold > 0 else float(row.psize) == 0.0
+            flat = abs(float(row.psize)) < threshold if threshold > 0 else float(row.psize) == 0.0
             if flat:
                 records.append(_finish_episode(current, row, True))
                 current = None
         if current is not None:
-            records.append(_finish_episode(current, row, False))
+            record = _finish_episode(current, row, False)
+            if final_ms is not None:
+                record["end_ms"] = max(int(record["end_ms"]), int(final_ms))
+            records.append(record)
     frame = pd.DataFrame.from_records(records, columns=columns)
     return frame.sort_values(["start_ms", "coin", "pside"], kind="mergesort").reset_index(drop=True)
 
@@ -356,6 +365,19 @@ def encode_bars(bars: np.ndarray, interval_ms: int) -> dict[str, Any]:
     }
 
 
+def candles_cover(entry: dict[str, Any], interval_ms: int, start_ms: int, end_ms: int) -> bool:
+    """Whether a coin's tiers already hold candles this fine for the whole window.
+
+    The overview spans the entire view; each detail tier only its own window.
+    """
+    if entry["overview"]["interval_ms"] <= interval_ms:
+        return True
+    return any(
+        d["interval_ms"] <= interval_ms and d["start_ms"] <= start_ms and d["end_ms"] >= end_ms
+        for d in entry["details"]
+    )
+
+
 def build_payload(
     store,
     *,
@@ -386,14 +408,18 @@ def build_payload(
         logging.warning(
             "[fills report] market settings unavailable; positions count as flat only at exactly zero size"
         )
-    min_qty = {
-        coin: float(settings.get("min_qty") or 0.0)
+    coin_settings = {
+        coin: settings
         for coin, settings in market.items()
         if isinstance(settings, dict) and not coin.startswith("__")
     }
+    min_qty = {coin: float(s.get("min_qty") or 0.0) for coin, s in coin_settings.items()}
+    c_mult = {coin: float(s.get("c_mult") or 1.0) for coin, s in coin_settings.items()}
+    equity_clock = store.equity(columns=["strategy_equity"]).index
+    final_ms = int(equity_clock.as_unit("ms").asi8[-1]) if len(equity_clock) else None
     # Episodes come from the whole ledger so a focused window never truncates the
     # history of a position that opened before it.
-    episodes = position_episodes(fills, min_qty)
+    episodes = position_episodes(fills, min_qty, final_ms)
     in_window = np.ones(len(fills), dtype=bool)
     if start_ms is not None:
         in_window &= fills["timestamp_ms"].to_numpy() >= start_ms
@@ -410,6 +436,17 @@ def build_payload(
         last = episodes["last_row"].to_numpy()[mask]
         keep[mask] = np.searchsorted(rows, last, "right") > np.searchsorted(rows, first, "left")
     episodes = episodes.loc[keep]
+    # Position state just before the window, so the page can draw positions that
+    # were already open when the focused window starts.
+    seed: dict[str, dict[str, list[float]]] = {}
+    if start_ms is not None:
+        before = fills.loc[fills["timestamp_ms"].to_numpy() < start_ms]
+        for (coin, pside), group in before.groupby(["coin", "pside"], sort=True):
+            last = group.iloc[-1]
+            if float(last["psize"]) != 0.0:
+                seed.setdefault(coin, {})[pside] = _significant(
+                    [last["psize"], last["pprice"], last["wallet_exposure"]], 10
+                )
     kept_rows = np.flatnonzero(in_window)
     fills = fills.loc[in_window].reset_index(drop=True)
     # Re-point episode rows at the windowed ledger (the nearest rows inside it).
@@ -470,9 +507,7 @@ def build_payload(
             w0, w1 = episode_window(int(ep.start_ms), int(ep.end_ms))
             interval = choose_interval_ms(w1 - w0, DETAIL_MAX_BARS, native)
             entry = candle_payload[ep.coin]
-            if interval >= min(
-                [entry["overview"]["interval_ms"]] + [d["interval_ms"] for d in entry["details"]]
-            ):
+            if candles_cover(entry, interval, w0, w1):
                 continue
             entry["details"].append(
                 {
@@ -494,6 +529,8 @@ def build_payload(
         "end_ms": view_end,
         "filters": {"coins": list(coins), "start_ms": start_ms, "end_ms": end_ms},
         "hsl_enabled": hsl_enabled,
+        "c_mult": {coin: c_mult.get(coin, 1.0) for coin in traded},
+        "seed": {coin: seed[coin] for coin in traded if coin in seed},
         "analysis": {
             key: analysis.get(key)
             for key in (

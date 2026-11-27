@@ -22,6 +22,7 @@ from fills_report import (
     MINUTE_MS,
     CandleSource,
     build_payload,
+    candles_cover,
     choose_interval_ms,
     classify_fill_type,
     encode_bars,
@@ -177,6 +178,33 @@ def test_episodes_follow_each_side_until_flat_and_keep_open_positions():
     assert not long_bbb.finished and long_bbb.end_ms == T0 + 7 * MINUTE_MS
 
 
+def test_a_position_of_exactly_min_qty_stays_open():
+    fills = prepare_fills(
+        pd.DataFrame(
+            [
+                _fill(0, "AAA", "entry_initial_normal_long", price=10, qty=1, psize=1),
+                _fill(1, "AAA", "entry_grid_normal_long", price=9, qty=2, psize=3, pprice=9.33),
+                _fill(2, "AAA", "close_grid_long", price=11, qty=-2, psize=1, pnl=3.0),
+                _fill(3, "AAA", "close_grid_long", price=12, qty=-1, psize=0, pnl=2.0),
+            ]
+        )
+    )
+    episodes = position_episodes(fills, {"AAA": 1.0})
+    assert len(episodes) == 1
+    ep = episodes.iloc[0]
+    assert (ep.entries, ep.closes, ep.finished) == (2, 2, True)
+    assert ep.pnl == pytest.approx(5.0)
+
+
+def test_open_positions_end_at_the_final_observation_clock():
+    fills = prepare_fills(_ledger())
+    final = T0 + 60 * MINUTE_MS
+    episodes = position_episodes(fills, {"AAA": 0.001}, final_ms=final)
+    long_bbb = episodes.loc[episodes.coin == "BBB"].iloc[0]
+    assert not long_bbb.finished and long_bbb.end_ms == final
+    assert (episodes.loc[episodes.finished, "end_ms"] < final).all()
+
+
 def test_pnl_fraction_uses_the_balance_before_each_fill_and_keeps_saved_order():
     raw = _ledger()
     fills = prepare_fills(raw)
@@ -209,6 +237,20 @@ def test_detail_selection_is_bounded_and_unique():
     assert select_detail_episodes(episodes.iloc[:0]) == []
 
 
+def test_detail_candles_are_skipped_only_when_a_tier_covers_the_window():
+    hour = 60 * MINUTE_MS
+    entry = {
+        "overview": {"interval_ms": 720 * MINUTE_MS},
+        "details": [{"interval_ms": MINUTE_MS, "start_ms": 0, "end_ms": 10 * hour}],
+    }
+    assert candles_cover(entry, MINUTE_MS, 2 * hour, 3 * hour)
+    assert candles_cover(entry, 5 * MINUTE_MS, 0, 10 * hour)
+    # A distant episode of the same coin still gets its own fine window.
+    assert not candles_cover(entry, MINUTE_MS, 1000 * hour, 1001 * hour)
+    assert not candles_cover(entry, MINUTE_MS, 9 * hour, 11 * hour)
+    assert candles_cover(entry, 720 * MINUTE_MS, 1000 * hour, 1001 * hour)
+
+
 def _result(tmp_path, *, coin_label="AAA"):
     ledger = _ledger()
     if coin_label != "AAA":
@@ -230,7 +272,17 @@ def _result(tmp_path, *, coin_label="AAA"):
     (tmp_path / "analysis.json").write_text(
         json.dumps({"drawdown_max_fraction_strategy_equity": 0.1})
     )
-    (tmp_path / "dataset.json").write_text(json.dumps({"coins": [coin_label, "BBB"]}))
+    (tmp_path / "market_specific_settings.json").write_text(
+        json.dumps({coin_label: {"min_qty": 0.001, "c_mult": 1.0}, "BBB": {"c_mult": 0.01}})
+    )
+    (tmp_path / "dataset.json").write_text(
+        json.dumps(
+            {
+                "coins": [coin_label, "BBB"],
+                "market_specific_settings_file": "market_specific_settings.json",
+            }
+        )
+    )
     ts = T0 - 5 * MINUTE_MS + np.arange(20) * MINUTE_MS
     hlcvs = np.zeros((20, 2, 4))
     hlcvs[:, 0, :3] = np.column_stack([np.full(20, 13.0), np.full(20, 8.0), np.linspace(9, 12, 20)])
@@ -253,6 +305,21 @@ def test_payload_round_trips_through_html_and_cannot_close_the_script(tmp_path):
     assert payload["coins"] == ["A</script><b>", "BBB"]
     assert len(payload["fills"]["t"]) == 9
     assert sorted(payload["episodes"]["pside"]) == ["long", "long", "short"]
+    # Flow notionals need the contract multiplier; BBB is still open at the last
+    # equity observation.
+    assert payload["c_mult"] == {"A</script><b>": 1.0, "BBB": 0.01}
+    bbb = payload["coins"].index("BBB")
+    open_end = [
+        end
+        for coin, end, done in zip(
+            payload["episodes"]["coin"],
+            payload["episodes"]["end_ms"],
+            payload["episodes"]["finished"],
+        )
+        if coin == bbb and not done
+    ]
+    assert open_end == [T0 + 9 * MINUTE_MS]
+    assert payload["seed"] == {}
     overview = payload["candles"]["BBB"]["overview"]
     assert overview["interval_ms"] == MINUTE_MS and overview["bars"]["c"][0] is not None
 
@@ -275,6 +342,8 @@ def test_focused_payload_filters_coins_and_window(tmp_path):
     assert episodes["pside"] == ["long"] and episodes["entries"] == [2]
     assert episodes["start_ms"] == [T0 + MINUTE_MS]
     assert (episodes["first_row"], episodes["last_row"]) == ([0], [2])
+    # Positions already open at the window start seed the price and exposure lines.
+    assert payload["seed"] == {"AAA": {"long": [2.0, 10.0, 0.02], "short": [-3.0, 10.0, -0.03]}}
     with pytest.raises(ValueError, match="Unknown coins"):
         build_payload(store, candles=candles, coins=("ZZZ",))
 
