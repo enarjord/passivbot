@@ -66,20 +66,13 @@ Pareto/results and checkpoints; the CUDA service owns simulation, packing and re
 No CPU simulation validates native optimizer fitness during a run. Independent parity tools
 remain required for changes to backtest behavior, and native evaluation identities prevent
 reuse of CPU or screening/validation fitness. See `docs/gpu_backtest_service.md` for current
-limitations and `docs/plans/gpu_optimizer_contract.md` for the acceptance checklist.
+limitations and the active development contract in `docs/plans/gpu_optimizer_contract.md` for
+the acceptance checklist.
 
 Live may annotate a known missing symbol EMA bundle so Rust can scope only consumers that actually
 need it. The annotation is not a fallback value: backtest and unannotated inputs stay strict, Rust
 still owns the resulting ideal-order set, and reconciliation cancels resting orders absent from
 that set.
-
-## Configuration Surfaces
-
-Shared trading policy belongs in `config.bot`: account-wide controls under `bot.portfolio`,
-shared directional defaults under `bot.global`, and directional policy under `bot.long` or
-`bot.short`. Use `config.live` for operational account, process and exchange-I/O controls.
-Simulation-only settings belong in `config.backtest`; optimizer-only settings belong in
-`config.optimize`. See `principles.md` for the canonical ownership rule.
 
 ## Exchange-Write Safety
 
@@ -89,7 +82,6 @@ should establish the outcome before a retry could duplicate or reverse an exchan
 
 Shutdown and task cancellation must not strand partially classified exchange writes. Exact
 exchange-specific behavior belongs in `features/exchange_integrations.md` and focused tests.
-
 
 ## Configuration Ownership
 

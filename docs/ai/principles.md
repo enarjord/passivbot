@@ -55,8 +55,7 @@ Canonical repository-wide invariants; task documents link here instead of restat
 Preserve broker attribution at the exchange request boundary. Changes require explicit approval
 and signed-request or CCXT boundary tests. See [exchange integrations](features/exchange_integrations.md).
 
-Put shared trading policy in `bot` and operational controls in the consuming `live`, `backtest`,
-or `optimize` section. Resolve defaults in canonical config loading. See
+Config section ownership and default resolution follow
 [configuration ownership](architecture.md#configuration-ownership).
 
 ## Failure Handling
@@ -80,7 +79,6 @@ Use streamlined JSON for human-authored or human-edited configs and normal JSON 
 - Add targeted tests for changed behavior, edge cases, and regressions.
 - Compatibility code is for supported released-version boundaries, not intermediate development
   iterations, unless the user explicitly requests it or a documented compatibility contract exists.
-- Add user-facing behavior changes to `../../CHANGELOG.md` under `Unreleased`.
 
 ## Release Hygiene
 

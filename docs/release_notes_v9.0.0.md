@@ -65,7 +65,7 @@ configuration, launch command, and environment. The [v8 cutover reference](relea
 identifies the master snapshot used for this upgrade review. Resolve outstanding Bitunix create
 attempts before returning to a build that cannot read the journal, and verify positions, resting
 orders, and protection readiness during rollback.
-[Bitunix recovery](ai/features/exchange_integrations.md#recovery-of-ordinary-creations)
+[Bitunix recovery](ai/features/exchanges/bitunix.md#recovery-of-ordinary-creations)
 
 ## GPU optimization
 

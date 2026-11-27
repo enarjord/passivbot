@@ -15,13 +15,23 @@ condition is true:
 
 Prompt only when no version-bump or release PR is already active and the changes make a coherent,
 supportable release. Consider user-visible features, exchange support, config changes, trading or
-risk corrections, operator tooling, migration needs, and whether current `master` has a validated
+risk corrections, operator tooling, migration needs, and whether the release branch has a validated
 head suitable for a release cut. Defer the prompt during incident response or active live-safety
 work and mention it at handoff.
 
 The prompt should state the tag date, entry count, major themes, proposed semantic version, and why
 that level fits. Ask the maintainer for permission; do not edit, branch, tag, publish, deploy, or
 control live processes merely because the threshold was crossed.
+
+## Release Lines
+
+The advisory trigger applies to the released line on `master`. On `v9`, `Unreleased` holds the
+whole v9 development history, so its entry count does not indicate release readiness; do not
+prompt for a release from `v9` on that basis. The v9.0.0 release is the cutover: follow
+[branches](branches.md#cutover) and the qualification checklist in
+[release status](../../releases.md#v8-rollback-reference), and prompt only when the maintainer
+asks about cutover readiness. Its curated summary is the `###` subsections at the end of v9's
+`Unreleased` section.
 
 ## Choose The Version
 
@@ -36,7 +46,7 @@ release notes or migration examples to the new version.
 
 ## Prepare The Candidate
 
-1. Refresh the default branch and record the exact release base SHA.
+1. Refresh the release branch and record the exact release base SHA.
 2. Work in a clean branch or worktree, preserving private configs, logs, credentials, and local
    artifacts outside the release diff.
 3. Update the package version, current-schema constant when applicable, maintained public examples,

@@ -154,4 +154,4 @@ leave durable evidence available for that recovery.
 If recovery stays pending, inspect venue orders and fills for the journaled client order
 ID and any known venue order ID. Preserve the journal and establish the original order
 outcome before authorizing further creates or rolling back to a version that cannot read
-the journal. [Recovery details](ai/features/exchange_integrations.md#recovery-of-ordinary-creations)
+the journal. [Recovery details](ai/features/exchanges/bitunix.md#recovery-of-ordinary-creations)

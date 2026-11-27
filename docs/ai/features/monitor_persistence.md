@@ -106,7 +106,7 @@ request URLs, responses, and tracebacks. Use an explicitly sanitized event or pr
 path for more detail. Keep persistence behavior and caller control flow independent.
 
 Private monitor history may retain the sanitized
-[`error.bot.detail` incident record](live_events.md#execution-loop-incidents), correlated to
+[`error.bot.detail` incident record](live_events/lifecycle_and_health.md#execution-loop-incidents), correlated to
 `error.bot` at normal logging levels. Its frame projection excludes credentials. Rotation and
 retention bound that diagnostic data.
 

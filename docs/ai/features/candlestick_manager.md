@@ -470,49 +470,6 @@ this acquisition optimization does not relax full-coverage EMA readiness or fabr
 Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers such as
 `binanceusdm` or `kucoinfutures`.
 
-## Failure Semantics And Risks
-
-1. Cache path mismatch by exchange naming.
-2. Pagination edge behavior causing boundary gaps.
-3. Persistent lock or stale data artifacts.
-4. Stale known-gap metadata should guide retries but must expire; the current default retry horizon is 7 days.
-   Recently missing bounded Hyperliquid tail rows use a shorter, time-spaced live
-   retry policy because the venue may publish an authoritative no-trade row later.
-5. Forager ranking drift if projected open-tail EMA values are accidentally cached or reused after
-   late real candles arrive.
-6. Forager ranking bias if unknown stale candidate tails are converted into zero quote-volume or
-   zero log-range instead of carrying forward the latest known ranking EMA within policy.
-
-## Validation
-
-1. Gap fill behavior and continuity.
-2. Replacement/invalidation behavior when real data arrives.
-3. Pagination boundary correctness per exchange.
-   WEEX validation must cover both 1m and 1h ranges that cross the recent/history boundary and
-   assert that every historical request spans no more than 100 aligned candles.
-4. Backtest/live parity for live tail-gap EMA projection behavior.
-5. Binance archive threshold, publication-lag, checksum, source-order, non-overwrite, and CCXT
-   fallback behavior, including public unauthenticated download smokes.
-6. Hostile remote-fetch diagnostics are redacted at the manager callback boundary and remain
-   redacted after repeated sanitization by direct consumers. Concurrent archive requests preserve
-   correlation through URL hashes rather than raw URLs.
-7. Hostile local-storage failures retain bounded exception classification without exception values
-   while preserving the original cache, migration, lock, and fallback outcomes.
-8. Hostile live lifecycle failures retain bounded exception classification without exception values
-   or traceback text while preserving completed-close fallback, warmup, cancellation, lock retry,
-   refresh scheduling, readiness, and return behavior.
-9. Hostile live health and trailing failures retain bounded exception classification without
-   exception values while preserving fallback values, affected symbol/position-side unavailability,
-   trailing deferral, readiness results, and unaffected consumers.
-
-## Key Code
-
-- `src/candlestick_manager.py`
-- `src/binance_ohlcv_archive.py`
-- `src/hlcv_preparation.py`
-- `src/tools/verify_hlcvs_data.py`
-- `exchange_integrations.md`
-
 ## Source-resolution reads for HSL
 
 `get_candles(standardize=False)` retains normal source acquisition and caching but
@@ -557,7 +514,7 @@ The copy contains no projected window or trading permission: every projection
 reapplies its exact lookback bounds and current exchange/UTC observation offset,
 and every risk evaluation still consumes current account and mark facts.
 
-### Physical gap evidence and cache health
+## Physical gap evidence and cache health
 
 An internal hole in canonical candle rows is unknown even when gap metadata is
 absent. Only an explicit `no_trades` record proves omitted trading activity;
@@ -573,7 +530,7 @@ that tracking count does not assert that those rows were persisted. Periodic
 including background candidates. They are distinct from current account/order
 readiness, active-position trailing availability, and action blockers.
 
-### Live acquisition deadlines
+## Live acquisition deadlines
 
 Ordinary live EMA preparation shares a ten-second remote acquisition budget across
 all symbols and metric families. Warmup shares ten seconds per timeframe pass,
@@ -614,13 +571,13 @@ minute wait can be intrinsic to the completed-bar contract. Missing that reset
 boundary must not be bridged by a projected candle; retrieval delay after finalization
 is a separate availability problem.
 
-### Live EMA preparation pacing
+## Live EMA preparation pacing
 
 Live EMA preparation keeps serial symbol loading when candle fetch pacing is positive and parallel
 loading when it is zero. Position symbols remain first in the ordered list. It does not add a sleep
 after preparing each symbol, but yields to other tasks without delay. The candle manager enforces the configured process-local spacing at
 actual CCXT OHLCV requests, so cache-only preparation incurs no artificial per-symbol pause.
-See [EMA preparation timings](live_events.md#ema-preparation-timings) for structured attribution.
+See [EMA preparation timings](live_events/market_data.md#ema-preparation-timings) for structured attribution.
 
 An optional one-minute log-range EMA read for a cache-only symbol can serve forager
 ranking when its strict primary batch produced every ranking span. Both consumers
@@ -628,7 +585,7 @@ then request the same finalized window and policy. The strategy's required read 
 independent. Overlapping required spans, incomplete batches, and projected or
 fallback results continue through their existing consumer paths.
 
-### Parsed disk-row reuse
+## Parsed disk-row reuse
 
 A manager may retain immutable parsed source rows for up to 256 shard selections and
 8 MiB of row arrays. Requests selecting the same ordered whole shards with the same
@@ -668,7 +625,7 @@ the merge can replace that slice in a detached copy. Both retain the existing
 last-write-wins behavior. Projections, synthetic gaps, EMA values and trading
 permissions are not part of this cache.
 
-### Historical gap range views
+## Historical gap range views
 
 JSON-loaded and newly persisted gap lists own a single lazily built interval view.
 The view indexes only factual interval bounds, preserves source record order,
@@ -718,7 +675,7 @@ the strided structured-array timestamp field. The index is never retained across
 calls: corrections, RAM eviction/replacement and synthetic-set changes remain
 visible immediately. Full outage widths and candle/EMA policies are unchanged.
 
-### Ordinary market EMA initialization and continuation
+## Ordinary market EMA initialization and continuation
 
 Ordinary price, quote/base volume and log-range indicators use floating sample spans. For a new
 indicator, normalize exponential weights over at most `ceil(2 * span)` available completed samples:
@@ -754,3 +711,46 @@ For example, span `3` and completed values `[2, 4]` initialize to `10/3`; the ne
 `8` advances to `17/3`. Continuing normalized weights would instead produce `6`, which is a distinct
 formula. This policy does not change deliberate HSL zero initialization, realized-loss memory,
 risk-history/refold contracts or the existing exposure RMS model.
+
+## Failure Semantics And Risks
+
+1. Cache path mismatch by exchange naming.
+2. Pagination edge behavior causing boundary gaps.
+3. Persistent lock or stale data artifacts.
+4. Stale known-gap metadata should guide retries but must expire; the current default retry horizon is 7 days.
+   Recently missing bounded Hyperliquid tail rows use a shorter, time-spaced live
+   retry policy because the venue may publish an authoritative no-trade row later.
+5. Forager ranking drift if projected open-tail EMA values are accidentally cached or reused after
+   late real candles arrive.
+6. Forager ranking bias if unknown stale candidate tails are converted into zero quote-volume or
+   zero log-range instead of carrying forward the latest known ranking EMA within policy.
+
+## Validation
+
+1. Gap fill behavior and continuity.
+2. Replacement/invalidation behavior when real data arrives.
+3. Pagination boundary correctness per exchange.
+   WEEX validation must cover both 1m and 1h ranges that cross the recent/history boundary and
+   assert that every historical request spans no more than 100 aligned candles.
+4. Backtest/live parity for live tail-gap EMA projection behavior.
+5. Binance archive threshold, publication-lag, checksum, source-order, non-overwrite, and CCXT
+   fallback behavior, including public unauthenticated download smokes.
+6. Hostile remote-fetch diagnostics are redacted at the manager callback boundary and remain
+   redacted after repeated sanitization by direct consumers. Concurrent archive requests preserve
+   correlation through URL hashes rather than raw URLs.
+7. Hostile local-storage failures retain bounded exception classification without exception values
+   while preserving the original cache, migration, lock, and fallback outcomes.
+8. Hostile live lifecycle failures retain bounded exception classification without exception values
+   or traceback text while preserving completed-close fallback, warmup, cancellation, lock retry,
+   refresh scheduling, readiness, and return behavior.
+9. Hostile live health and trailing failures retain bounded exception classification without
+   exception values while preserving fallback values, affected symbol/position-side unavailability,
+   trailing deferral, readiness results, and unaffected consumers.
+
+## Key Code
+
+- `src/candlestick_manager.py`
+- `src/binance_ohlcv_archive.py`
+- `src/hlcv_preparation.py`
+- `src/tools/verify_hlcvs_data.py`
+- `exchange_integrations.md`

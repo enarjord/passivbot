@@ -28,6 +28,8 @@ source fingerprint, and distinguish stub-compatible tests from tests requiring t
 
 ## Exchange And Network Tiers
 
+These tiers are canonical; other documents link here.
+
 1. **Offline deterministic:** unit tests, fixtures, cached data, Rust backtests without downloads,
    and `src/tools/run_fake_live.py` using the local `fake` exchange. Safe by default.
 2. **Public unauthenticated network:** public candles, market metadata, and explicitly
@@ -51,6 +53,20 @@ account mutations are involved.
   style-only commentary.
 - Findings include exact locations, evidence, impact, and the narrowest credible fix.
 
+## Documentation Classes
+
+- Canonical contracts state current normative behavior.
+- Feature contracts add subsystem-specific invariants, failure semantics, validation, and code maps.
+- Runbooks describe procedures and may contain commands.
+- Generated references mirror code-owned registries.
+- Case studies and plans explain history or in-progress work; they do not override current
+  contracts. A contract may link an active plan for unfinished work. When the work lands, move its
+  durable rules into the contract and delete the plan or mark it historical.
+
+Keep canonical documents timeless, compact, and free of progress ledgers. Put each durable rule in
+one canonical location and link to it elsewhere. Feature contracts end with `Validation` and
+`Key Code`; add new sections before them.
+
 ## Documentation Checks
 
 Run documentation checks with:
@@ -59,10 +75,11 @@ Run documentation checks with:
 PYTHONPATH=src python src/tools/check_ai_docs.py
 PYTHONPATH=src python src/tools/generate_live_event_registry.py --check
 PYTHONPATH=src python src/tools/generate_config_field_reference.py --check
+PYTHONPATH=src python src/tools/generate_metric_reference.py --check
 PYTHONPATH=src python src/tools/config_schema.py --check
 pytest tests/test_ai_docs.py tests/test_live_event_registry_docs.py
 pytest tests/test_config_field_registry.py
-pytest tests/test_config_json_schema.py
+pytest tests/test_config_json_schema.py tests/test_metric_definitions.py
 ```
 
 The mandatory-context ceiling is 1,500 words and is warning-only. Missing routed files and stale

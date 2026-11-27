@@ -20,13 +20,14 @@ current task.
 
 | Task | Read |
 |---|---|
-| Exchange/API integration, pagination, broker attribution | `features/exchange_integrations.md` |
+| Base branch, porting between v8 and v9, integrating `master` | `runbooks/branches.md` |
+| Exchange/API integration, pagination, broker attribution | `features/exchange_integrations.md`, `features/exchanges/<venue>.md` |
 | CCXT dependency upgrade | `runbooks/ccxt_upgrade.md` |
 | Rust/PyO3 build, extension loading, Rust tests | `runbooks/rust_extension.md` |
-| Strategy schema, order logic, risk, unstuck | `architecture.md`, `error_contract.md`, `features/strategy_runtime.md` |
+| Strategy schema, order logic, risk, unstuck, forager | `architecture.md`, `error_contract.md`, `features/strategy_runtime.md` |
 | Equity Hard Stop Loss episodes, replay, flattening, cooldown | `error_contract.md`, `features/equity_hard_stop_loss.md`, `features/fill_events_manager.md` |
-| Candles, OHLCV coverage, gaps, projections | `error_contract.md`, `features/candlestick_manager.md`; add `features/exchange_integrations.md` for remote fetch behavior |
-| Fill/PnL ingestion, fees, coverage | `error_contract.md`, `features/fill_events_manager.md`, relevant exchange contract |
+| Candles, OHLCV coverage, gaps, projections | `error_contract.md`, `features/candlestick_manager.md`; venue file for remote fetches |
+| Fill/PnL ingestion, fees, coverage | `error_contract.md`, `features/fill_events_manager.md`, relevant venue contract |
 | Historical runtime/fill attribution | `features/runtime_attribution.md`, `features/fill_events_manager.md`, `features/live_events.md` |
 | Commands, tests, backtests, optimizer, execution safety | `runbooks/commands.md` |
 | Planning, running, monitoring, or qualifying an optimization campaign | `runbooks/optimization_campaign.md` |
@@ -34,34 +35,10 @@ current task.
 | Version selection, release trigger, release preparation, or publication | `runbooks/release.md` |
 | Autonomous PR review | `runbooks/pr_review.md` |
 | Crash discovery and stress-suite generation | `runbooks/crash_discovery.md` |
-| Structured live events | `features/live_events.md`, `generated/live_event_registry.md` |
+| Structured live events | `features/live_events.md`, `features/live_events/<family>.md`, `generated/live_event_registry.md` |
 | Monitor persistence, recovery, rotation, retention | `features/monitor_persistence.md` |
-| Feature-specific change | `features/README.md` and the relevant feature contract |
+| Feature-specific change, or a subsystem without a contract | `features/README.md` and the relevant feature contract or guide |
 | Historical incident rationale | relevant file under `case_studies/` |
 
-Logging-overhaul implementation work should additionally read
-`../plans/live_logging_overhaul_current_status.md` and
-`../plans/live_logging_overhaul_pr_loop_workflow.md`. Those files are temporary project state, not
-canonical engineering policy.
-
-## Document Classes
-
-- Canonical contracts state current normative behavior.
-- Feature contracts add subsystem-specific invariants, failure semantics, validation, and code maps.
-- Runbooks describe procedures and may contain commands.
-- Generated references mirror code-owned registries.
-- Case studies and plans explain history; they do not override current contracts.
-
-Keep canonical documents timeless, compact, and free of progress ledgers. Put each durable rule in
-one canonical location and link to it elsewhere.
-
-See [documentation validation](validation.md#documentation-checks).
-
-## Temporary Compatibility Paths
-
-`principles.yaml`, `commands.md`, `pr_auto_review_loop.md`, and `code_review_prompt.md` remain as
-narrow routes for active external automations. Their canonical content lives in `principles.md`,
-`runbooks/commands.md`, `runbooks/pr_review.md`, and `validation.md`. Remove the routes only after
-every scheduled consumer has migrated and a changed-head wake proves the new reads succeed. Review
-schedulers must also migrate base-branch filters and compact state after a default-branch cutover;
-the proving wake must discover a PR against the new target rather than merely load the new path.
+Document classes, authoring rules, and checks are in
+[documentation validation](validation.md#documentation-classes).

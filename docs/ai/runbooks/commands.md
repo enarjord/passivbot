@@ -2,10 +2,11 @@
 
 Use from repo root unless noted.
 
-Commands are grouped by authority tier. Local tests, local fake-live scenarios, and backtests with
-already cached data are offline. Downloads and public probes contact unauthenticated network
-endpoints. Live commands and account probes may use credentials and require explicit approval under
-`AGENTS.md`.
+Authority tiers are defined in [validation](../validation.md#exchange-and-network-tiers). Local
+tests, local fake-live scenarios, and backtests with already cached data are offline. Backtest,
+optimize, and download commands fetch public candles when the cache does not cover the request;
+announce that network access first. Live commands and account probes may use credentials and
+require explicit approval under `AGENTS.md`.
 
 ## Setup
 
@@ -20,10 +21,12 @@ python3 -m pip install -e .              # live-only
 ## Tests
 
 ```bash
-pytest
-pytest tests/test_specific.py
 pytest tests/test_specific.py::test_name
+pytest tests/test_specific.py
+pytest            # full default suite; excludes fake_live_slow
 ```
+
+Choose scope with [validation](../validation.md); the full suite is not a universal minimum.
 
 ## Live Bot (Explicit Approval Required)
 
