@@ -401,6 +401,12 @@ payloads. The legacy warning remains only when the event emitter or structured c
 unavailable. Event or sink failure must not change refresh attempts, entry-block attribution, the
 returned create list, or any planning, execution, order, and risk decision.
 
+On Hyperliquid, an `execution.create_deferred` event with reason `batch_capacity` includes
+`uncovered_close_priority` when the cap defers an ordinary limit close. It reports the first
+blocking account-proof condition, including one overdue surface when confirmation is pending.
+With valid account proof, it reports each sampled close's coverage and eligibility outcome. The
+payload includes selected priority-tier counts and up to eight deferred close scopes.
+
 ## Connector Call Boundary
 
 The console create-candidate summary lists orders selected before final write admission.
