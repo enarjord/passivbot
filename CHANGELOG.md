@@ -5,6 +5,9 @@ its own version heading. See [release status](docs/releases.md).
 
 ## Unreleased
 
+- Keep HSL account-generation changes and concurrent input warnings visible in
+  the console and its fallback. Compact replaced observations only for pure expiry.
+
 - On Binance, Bitunix, and OKX, prioritize eligible limit closes for confirmed
   uncovered positions ahead of ordinary entries even when the plan fits the
   creation cap. Bitunix requires a sole close in the original plan. Serial

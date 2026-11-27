@@ -246,9 +246,8 @@ def record(bot, wave):
         bot._hsl_diagnostic_failed = False
         replacement = snapshot(bot, now_ms=int(utc_ms()))
         if prior is not None and "captured_at_ms" in prior:
-            # Only suppress the obsolete console observation after an equivalent
-            # current one exists. An unavailable scope remains visible on its current
-            # observation; both events retain their original durable severity.
+            # Only compact pure expiry after an equivalent current observation
+            # exists. Both events retain their original durable severity.
             if (
                 hsl_observation_can_be_superseded(prior)
                 and replacement["observation_status"] == "current"
@@ -306,7 +305,10 @@ def _emit_status(bot, data, scope_signature):
     if emitted is None or console_failed:
         level = (
             logging.DEBUG
-            if data.get("console_replaced_observation")
+            if (
+                data.get("console_replaced_observation") is True
+                and hsl_observation_can_be_superseded(data)
+            )
             else logging.WARNING if unavailable else logging.INFO
         )
         for line in split_health_console(format_hsl_status_console(data), "[risk]"):
