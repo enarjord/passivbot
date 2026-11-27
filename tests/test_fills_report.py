@@ -240,7 +240,7 @@ def test_detail_selection_is_bounded_and_unique():
 def test_detail_candles_are_skipped_only_when_a_tier_covers_the_window():
     hour = 60 * MINUTE_MS
     entry = {
-        "overview": {"interval_ms": 720 * MINUTE_MS},
+        "overview": {"interval_ms": 720 * MINUTE_MS, "start_ms": 0, "end_ms": 2000 * hour},
         "details": [{"interval_ms": MINUTE_MS, "start_ms": 0, "end_ms": 10 * hour}],
     }
     assert candles_cover(entry, MINUTE_MS, 2 * hour, 3 * hour)
@@ -249,6 +249,10 @@ def test_detail_candles_are_skipped_only_when_a_tier_covers_the_window():
     assert not candles_cover(entry, MINUTE_MS, 1000 * hour, 1001 * hour)
     assert not candles_cover(entry, MINUTE_MS, 9 * hour, 11 * hour)
     assert candles_cover(entry, 720 * MINUTE_MS, 1000 * hour, 1001 * hour)
+    # The overview counts only within its own bounds, e.g. an open position held
+    # past the last fill or an episode that began before a focused window.
+    assert not candles_cover(entry, 720 * MINUTE_MS, 1999 * hour, 2001 * hour)
+    assert not candles_cover(entry, 720 * MINUTE_MS, -hour, hour)
 
 
 def _result(tmp_path, *, coin_label="AAA"):
@@ -319,6 +323,13 @@ def test_payload_round_trips_through_html_and_cannot_close_the_script(tmp_path):
         if coin == bbb and not done
     ]
     assert open_end == [T0 + 9 * MINUTE_MS]
+    # The default window is the observation span, not just the fill span (last fill
+    # at minute 7), so the open BBB position keeps its candles.
+    assert (payload["start_ms"], payload["end_ms"]) == (T0, T0 + 9 * MINUTE_MS)
+    overview = payload["candles"]["BBB"]["overview"]
+    assert overview["end_ms"] >= T0 + 9 * MINUTE_MS
+    clocks = overview["bars"]["t0"] + np.cumsum(overview["bars"]["dt"]) * overview["interval_ms"]
+    assert clocks[-1] >= T0 + 9 * MINUTE_MS
     assert payload["seed"] == {}
     overview = payload["candles"]["BBB"]["overview"]
     assert overview["interval_ms"] == MINUTE_MS and overview["bars"]["c"][0] is not None

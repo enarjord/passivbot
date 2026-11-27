@@ -368,13 +368,13 @@ def encode_bars(bars: np.ndarray, interval_ms: int) -> dict[str, Any]:
 def candles_cover(entry: dict[str, Any], interval_ms: int, start_ms: int, end_ms: int) -> bool:
     """Whether a coin's tiers already hold candles this fine for the whole window.
 
-    The overview spans the entire view; each detail tier only its own window.
+    Every tier, the overview included, counts only within its own time bounds.
     """
-    if entry["overview"]["interval_ms"] <= interval_ms:
-        return True
     return any(
-        d["interval_ms"] <= interval_ms and d["start_ms"] <= start_ms and d["end_ms"] >= end_ms
-        for d in entry["details"]
+        tier["interval_ms"] <= interval_ms
+        and tier["start_ms"] <= start_ms
+        and tier["end_ms"] >= end_ms
+        for tier in [entry["overview"], *entry["details"]]
     )
 
 
@@ -415,8 +415,9 @@ def build_payload(
     }
     min_qty = {coin: float(s.get("min_qty") or 0.0) for coin, s in coin_settings.items()}
     c_mult = {coin: float(s.get("c_mult") or 1.0) for coin, s in coin_settings.items()}
-    equity_clock = store.equity(columns=["strategy_equity"]).index
-    final_ms = int(equity_clock.as_unit("ms").asi8[-1]) if len(equity_clock) else None
+    equity_clock = store.equity(columns=["strategy_equity"]).index.as_unit("ms").asi8
+    first_obs_ms = int(equity_clock[0]) if len(equity_clock) else None
+    final_ms = int(equity_clock[-1]) if len(equity_clock) else None
     # Episodes come from the whole ledger so a focused window never truncates the
     # history of a position that opened before it.
     episodes = position_episodes(fills, min_qty, final_ms)
@@ -462,8 +463,14 @@ def build_payload(
     types = sorted(fills["type"].unique())
     type_index = {t: i for i, t in enumerate(types)}
     coin_order = {c: i for i, c in enumerate(traded)}
-    span_start = int(fills["timestamp_ms"].min()) if len(fills) else start_ms or 0
-    span_end = int(fills["timestamp_ms"].max()) if len(fills) else end_ms or 0
+    # The default window is the run's observation span, so positions held after the
+    # last fill keep their candles. The fill span is the fallback without equity.
+    bounds = (
+        [int(fills["timestamp_ms"].min()), int(fills["timestamp_ms"].max())] if len(fills) else []
+    )
+    if first_obs_ms is not None:
+        bounds += [first_obs_ms, final_ms]
+    span_start, span_end = (min(bounds), max(bounds)) if bounds else (0, 0)
     view_start = start_ms if start_ms is not None else span_start
     view_end = end_ms if end_ms is not None else span_end
 
@@ -480,6 +487,8 @@ def build_payload(
             candle_payload[coin] = {
                 "overview": {
                     "interval_ms": overview_interval,
+                    "start_ms": view_start - pad,
+                    "end_ms": view_end + pad,
                     "bars": encode_bars(
                         candles.bars(coin, view_start - pad, view_end + pad, overview_interval),
                         overview_interval,

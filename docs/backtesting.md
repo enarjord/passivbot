@@ -360,8 +360,10 @@ works offline. It reads saved fills, equity and the cached 1m candles referenced
   episode table that opens any episode in the coin view.
 
 Fill marks use shape for intent: triangles are entries (colored by side), circles are
-grid, trailing and EMA-anchor closes, and diamonds are unstuck, auto-reduce and HSL
-panic closes. Closes are colored by PnL sign.
+grid, trailing and EMA-anchor closes, and diamonds are unstuck, auto-reduce and panic
+closes. Closes are colored by PnL sign. A panic close can be an HSL stop or a forced
+close of a delisted market; the saved order type does not distinguish them, so the
+report labels both "panic".
 
 Candles are embedded at three resolutions: an overview of at most 4,000 bars per coin,
 a full-span tier bounded across all coins, and fine windows around the largest-PnL,

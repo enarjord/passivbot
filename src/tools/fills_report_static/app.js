@@ -8,7 +8,7 @@
   const MAX_VISIBLE_BARS = 900;
   const RISK = new Set(["unstuck", "auto_reduce", "panic"]);
   const TAKE_PROFIT = new Set(["grid", "trailing", "ema_anchor"]);
-  const FAMILY_LABEL = { initial: "initial", grid: "grid", trailing: "trailing", ema_anchor: "EMA anchor", unstuck: "unstuck", auto_reduce: "auto-reduce", panic: "HSL panic" };
+  const FAMILY_LABEL = { initial: "initial", grid: "grid", trailing: "trailing", ema_anchor: "EMA anchor", unstuck: "unstuck", auto_reduce: "auto-reduce", panic: "panic" };
   const $ = (id) => document.getElementById(id);
 
   // ---------- data model
@@ -28,7 +28,9 @@
   });
   const E = DATA.episodes;
   const episodes = E.start_ms.map((t0, i) => ({ i, coin: coins[E.coin[i]], side: E.pside[i], t0, t1: E.end_ms[i], entries: E.entries[i], closes: E.closes[i], pnl: E.pnl[i] || 0, pf: E.pnl_fraction[i] || 0, maxWe: E.max_we[i], exit: E.exit_family[i], finished: E.finished[i], first: E.first_row[i], last: E.last_row[i] }));
-  const sidesTraded = [...new Set(fills.map((f) => f.side))];
+  const SEED = DATA.seed || {};
+  // A side counts if it trades in the window or is already open at its start.
+  const sidesTraded = [...new Set([...fills.map((f) => f.side), ...Object.values(SEED).flatMap(Object.keys)])].sort();
   const fillsByCoin = {};
   fills.forEach((f) => (fillsByCoin[f.coin] = fillsByCoin[f.coin] || []).push(f));
 
@@ -131,7 +133,7 @@
     if (sidesTraded.includes("long")) items.push([G.longEntry, "long entry"]);
     if (sidesTraded.includes("short")) items.push([G.shortEntry, "short entry"]);
     items.push([G.tpWin + G.tpLoss, "take-profit close (gain / loss)"]);
-    if (kinds.some((k) => k.intent === "risk")) items.push([G.riskWin + G.riskLoss, "risk close: unstuck, auto-reduce, HSL panic"]);
+    if (kinds.some((k) => k.intent === "risk")) items.push([G.riskWin + G.riskLoss, "risk close: unstuck, auto-reduce, panic"]);
     return items.map(([g, l]) => `<span>${g}${l}</span>`).join("");
   }
   function fillTip(f) {
@@ -276,7 +278,7 @@
     const x = (t) => L + ((t - t0) / (t1 - t0)) * (right - L);
     const maxTotal = maxOf(lanes.map((l) => Math.abs(laneTotals[l])), 1e-12), z = right + 10 + PW * 0.2, bx = (v) => (v / maxTotal) * PW * 0.42;
     const g = el("g", { class: "clickable" }, svg);
-    const tips = {};
+    const tips = {}, cellTargets = [];
     lanes.forEach((lane, li) => {
       const y0 = T + li * rowH, yc = y0 + rowH / 2;
       const coin = bySide ? coins[0] : lane;
@@ -302,7 +304,7 @@
           el("rect", { x: L, y: yy, width: right - L, height: hh, fill: "var(--hover)", opacity: 0.6 }, svg);
           const cells = {};
           laneFills.filter((f) => side === null || f.side === side).forEach((f) => { const b = Math.floor((f.t - t0) / bin); const c = (cells[b] = cells[b] || { pf: 0, n: 0 }); c.pf += f.pf; c.n++; });
-          Object.entries(cells).forEach(([b, c]) => { const key = `c:${lane}:${side}:${b}`; tips[key] = `<b>${esc(lane)}${side ? " " + side : ""} · ${bin === WEEK ? "week of " : ""}${dateStr(t0 + b * bin)}</b><br>${c.n} fills<br>realized ${pct(c.pf, 3)} of balance`; cells[b].key = key; });
+          Object.entries(cells).forEach(([b, c]) => { const key = "c:" + cellTargets.length; cellTargets.push({ coin: bySide ? coins[0] : lane, b: +b }); tips[key] = `<b>${esc(lane)}${side ? " " + side : ""} · ${bin === WEEK ? "week of " : ""}${dateStr(t0 + b * bin)}</b><br>${c.n} fills<br>realized ${pct(c.pf, 3)} of balance`; cells[b].key = key; });
           const mags = Object.values(cells).map((c) => Math.abs(c.pf)).sort((a, b) => a - b);
           const cap = mags[Math.floor(mags.length * 0.95)] || 1e-12;
           const cw = Math.max(1, ((right - L) * bin) / (t1 - t0));
@@ -316,7 +318,7 @@
     delegate(g, (k) => (k.startsWith("f:") ? fillTip(fills[+k.slice(2)]) : tips[k]), (k) => {
       if (k.startsWith("f:")) { const f = fills[+k.slice(2)]; selectCoin(f.coin, [f.t - 3 * DAY, f.t + 3 * DAY]); }
       else if (k.startsWith("lane:")) selectCoin(k.slice(5), null);
-      else if (k.startsWith("c:")) { const [, lane, side, b] = k.split(":"); const bin = t1 - t0 > 120 * DAY ? WEEK : DAY; selectCoin(bySide ? coins[0] : lane, [t0 + b * bin, t0 + (+b + 1) * bin]); }
+      else if (k.startsWith("c:")) { const { coin, b } = cellTargets[+k.slice(2)]; const bin = t1 - t0 > 120 * DAY ? WEEK : DAY; selectCoin(coin, [t0 + b * bin, t0 + (b + 1) * bin]); }
     });
     $("lanes-sub").textContent = glyphMode
       ? `${bySide ? "One lane per side." : "One lane per coin, sorted by realized PnL."} Every fill is a mark. Click a mark or a lane to open it in the coin view.`
@@ -328,9 +330,11 @@
   const state = { coin: null, range: null, sides: { long: true, short: true }, allMarks: false, episode: null };
   function coinSpan(coin) {
     const cf = fillsByCoin[coin] || [];
-    const a = cf.length ? cf[0].t : DATA.start_ms, b = cf.length ? cf[cf.length - 1].t : DATA.end_ms;
+    const openAtEnd = episodes.some((e) => e.coin === coin && !e.finished);
+    const a = cf.length && !SEED[coin] ? cf[0].t : DATA.start_ms, b = cf.length && !openAtEnd ? cf[cf.length - 1].t : DATA.end_ms;
     const pad = Math.max((b - a) * 0.02, 6 * HOUR);
-    return [Math.max(a - pad, DATA.start_ms - 6 * HOUR), Math.min(b + pad, DATA.end_ms + 6 * HOUR)];
+    const edge = Math.min(6 * HOUR, Math.max((DATA.end_ms - DATA.start_ms) * 0.02, 60e3));
+    return [Math.max(a - pad, DATA.start_ms - edge), Math.min(b + pad, DATA.end_ms + edge)];
   }
   function selectCoin(coin, range) {
     state.coin = coin; state.range = range; state.episode = null;
@@ -412,7 +416,7 @@
     const ov = el("rect", { x: L, y: T, width: w - L - R, height: h - T - B, fill: "transparent", style: "cursor:crosshair" }, priceSvg);
     // position price per side, clipped to the range
     ["long", "short"].filter((s) => state.sides[s]).forEach((s) => {
-      const sd = ((DATA.seed || {})[coin] || {})[s];
+      const sd = (SEED[coin] || {})[s];
       let open = sd ? { t: DATA.start_ms, p: sd[1] } : null, d = "";
       const seg = (t0s, t1s, p) => { const s0 = Math.max(t0s, a), s1 = Math.min(t1s, b); if (s1 > s0 && p > lo && p < hi) d += `M${x(s0).toFixed(1)},${y(p).toFixed(1)}H${x(s1).toFixed(1)}`; };
       (fillsByCoin[coin] || []).filter((f) => f.side === s).forEach((f) => { if (open) seg(open.t, f.t, open.p); open = Math.abs(f.psize) > 0 ? { t: f.t, p: f.pprice } : null; });
@@ -467,7 +471,7 @@
     const series = {};
     ["long", "short"].filter((s) => state.sides[s] && sidesTraded.includes(s)).forEach((s) => {
       const sf = (fillsByCoin[coin] || []).filter((f) => f.side === s);
-      const sd = ((DATA.seed || {})[coin] || {})[s];
+      const sd = (SEED[coin] || {})[s];
       let cur = sd ? sd[2] : 0; const pts = [];
       sf.forEach((f) => { if (f.t < a) cur = f.we; });
       pts.push([a, cur]);
@@ -493,7 +497,7 @@
 
     let legend = glyphLegend();
     ["long", "short"].filter((s) => sidesTraded.includes(s)).forEach((s) => (legend += `<span><svg width="18" height="8"><line x1="0" x2="18" y1="4" y2="4" stroke="${sideColor(s)}" stroke-width="2" stroke-dasharray="5 3"/></svg>${s} position price</span>`));
-    if (kinds.some((k) => k.family === "panic")) legend += `<span><svg width="8" height="12"><line x1="4" x2="4" y1="0" y2="12" stroke="var(--loss)" stroke-dasharray="2 3"/></svg>HSL panic close</span>`;
+    if (kinds.some((k) => k.family === "panic")) legend += `<span><svg width="8" height="12"><line x1="4" x2="4" y1="0" y2="12" stroke="var(--loss)" stroke-dasharray="2 3"/></svg>panic close</span>`;
     $("glyph-legend").innerHTML = legend;
     const note = $("episode-note");
     if (state.episode !== null) {
