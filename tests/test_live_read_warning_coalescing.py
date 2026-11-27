@@ -91,6 +91,7 @@ def test_hsl_actual_expiry_stays_visible_in_a_single_record():
         "stale_reasons": ["input_expired"],
         "account_unavailable": [],
         "counts": {"green": 1, "inactive": 0, "red": 0, "unavailable": 0, "estimated": 1},
+        "candle_sources": {"failure_count": 0},
         "scopes": [{"symbol": "AAA/USDT:USDT", "pside": "long", "estimates": ["basis_estimated"]}],
     }
     expiry = format_hsl_status_console(row)
@@ -102,6 +103,42 @@ def test_hsl_actual_expiry_stays_visible_in_a_single_record():
     row["counts"]["unavailable"] = 1
     row["scopes"][0]["unavailable_reason"] = "current_mark_unavailable"
     assert "unavailable_reason=current_mark_unavailable" in format_hsl_status_console(row)
+
+
+def test_hsl_generation_change_stays_visible_after_pure_expiry(caplog):
+    from live.event_bus import EventTypes, LiveEvent
+
+    sink = ConsoleSummarySink()
+    data = {
+        "engine": "hsl",
+        "console_state": "a" * 64,
+        "observation_status": "stale",
+        "stale_reasons": ["input_expired"],
+        "account_unavailable": [],
+        "counts": {"red": 0, "unavailable": 0},
+        "candle_sources": {"failure_count": 0},
+    }
+    with caplog.at_level(logging.DEBUG):
+        sink.write(LiveEvent(EventTypes.HSL_STATUS, level="warning", status="degraded", data=data))
+        sink.write(LiveEvent(
+            EventTypes.HSL_STATUS, level="warning", status="degraded",
+            data={**data, "console_replaced_observation": True},
+        ))
+        sink.write(LiveEvent(
+            EventTypes.HSL_STATUS, level="warning", status="degraded",
+            data={
+                **data, "console_replaced_observation": True,
+                "stale_reasons": ["input_expired", "account_generation_changed"],
+            },
+        ))
+    warnings = [record.message for record in caplog.records if record.levelno == logging.WARNING]
+    assert any("stale_reason=input_expired" in message for message in warnings)
+    assert any("stale_reason=account_generation_changed" in message for message in warnings)
+    assert any(
+        record.levelno == logging.DEBUG and "stale_reason=input_expired" in record.message
+        for record in caplog.records
+    )
+
 
 def test_rms_failure_has_one_structured_console_projection(caplog):
     durable = ListEventSink()
