@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from live import executor
+from live import executor, reconciler
 from live.event_bus import EventTypes, ReasonCodes
 from live.freshness import FreshnessLedger
 from live.order_churn_gate import OrderChurnGateState
@@ -433,6 +433,7 @@ async def test_risk_first_capacity_applies_after_exchange_config_writes(
         ("covered", False),
         ("ambiguous_resting_order", False),
         ("flat", False),
+        ("position_size_unavailable", False),
         ("stale_signature", False),
         ("pending_confirmation", False),
         ("position_fill_sync", False),
@@ -443,6 +444,7 @@ async def test_risk_first_capacity_applies_after_exchange_config_writes(
 async def test_hyperliquid_creation_capacity_prioritizes_confirmed_uncovered_close(
     execution_shell, case, prefer_close
 ):
+    _, events = execution_shell
     bot = _PlanBot()
     bot.exchange = "hyperliquid" if case != "other_exchange" else "bybit"
     bot.hedge_mode = False
@@ -453,7 +455,10 @@ async def test_hyperliquid_creation_capacity_prioritizes_confirmed_uncovered_clo
         _order("uncovered_close"), side="sell", reduce_only=True,
         pb_order_type="close_grid_long",
     )
-    size = 0.0 if case == "flat" else 2.0
+    size = {
+        "flat": 0.0,
+        "position_size_unavailable": None,
+    }.get(case, 2.0)
     bot.positions = {close["symbol"]: {"long": {"size": size}}}
     bot.fetched_open_orders = []
     if case == "covered":
@@ -483,7 +488,7 @@ async def test_hyperliquid_creation_capacity_prioritizes_confirmed_uncovered_clo
     if case == "stale_signature":
         ledger.stamp("open_orders", "changed", now_ms=101)
     if case == "pending_confirmation":
-        bot._authoritative_pending_confirmations = {"open_orders": 2}
+        bot._authoritative_pending_confirmations = {"fills": 2}
     if case == "position_fill_sync":
         bot._position_fill_sync = SimpleNamespace(
             blocked=lambda scope: scope == (close["symbol"], close["position_side"]),
@@ -499,6 +504,135 @@ async def test_hyperliquid_creation_capacity_prioritizes_confirmed_uncovered_clo
     expected = [risk_first, risk_second, close if prefer_close else entry]
     assert bot.created == expected
     assert (entry if prefer_close else close)["_churn_gate_reason"] == "batch_capacity"
+    (capacity,) = [
+        event for event in events if event["reason_code"] == ReasonCodes.BATCH_CAPACITY
+    ]
+    diagnostic = capacity["data"].get("uncovered_close_priority")
+    if prefer_close or case == "other_exchange":
+        assert diagnostic is None
+        return
+    expected_reason = {
+        "covered": "resting_close_present",
+        "ambiguous_resting_order": "ambiguous_resting_order",
+        "flat": "position_not_held",
+        "position_size_unavailable": "position_size_unavailable",
+        "stale_signature": "surface_signature_changed",
+        "pending_confirmation": "authoritative_confirmation_pending",
+        "position_fill_sync": "position_fill_settling",
+        "loss_gate": "realized_loss_order_preserved",
+    }[case]
+    assert diagnostic["deferred_sample"] == [{
+        "symbol": close["symbol"], "position_side": "long", "eligibility": expected_reason,
+    }]
+    assert diagnostic["selected_risk_critical"] == 2
+    assert diagnostic["selected_uncovered"] == 0
+    if case in {"pending_confirmation", "stale_signature"}:
+        assert diagnostic["proof"]["surface"] == (
+            "fills" if case == "pending_confirmation" else "open_orders"
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalidate_generation", [False, True])
+async def test_unrelated_cancel_delays_uncovered_close_priority(
+    execution_shell, invalidate_generation
+):
+    _, events = execution_shell
+    bot = _PlanBot()
+    bot.exchange = "hyperliquid"
+    bot._order_churn_gate_enabled_for_connector = True
+    bot._account_invalidation_generation = 0
+    bot.live_value = {"max_n_creations_per_batch": 3}.__getitem__
+    bot._live_max_realized_loss_pct = lambda: 1.0
+    entries = [
+        dict(_order(f"entry_{i}"), symbol=f"{coin}/USDT:USDT")
+        for i, coin in enumerate(("DOGE", "LTC", "LINK"))
+    ]
+    closes = [
+        dict(
+            _order(f"close_{i}"),
+            price=100.0 + i,
+            side="sell",
+            reduce_only=True,
+            pb_order_type="close_grid_long",
+        )
+        for i in range(2)
+    ]
+    symbol = closes[0]["symbol"]
+    bot.positions = {symbol: {"long": {"size": 2.0}}}
+    stale = dict(closes[0], name="stale", symbol="ETH/USDT:USDT")
+    replacement = dict(stale, name="replacement", price=102.0)
+    bot.fetched_open_orders = [stale]
+    ledger = FreshnessLedger()
+    bot._ensure_freshness_ledger = lambda: ledger
+    bot._request_authoritative_confirmation = (
+        Passivbot._request_authoritative_confirmation.__get__(bot)
+    )
+
+    def confirm_account():
+        epoch = ledger.begin_epoch()
+        surfaces = ("balance", "positions", "open_orders", "fills")
+        for name in surfaces:
+            ledger.stamp(name, name, now_ms=epoch * 100)
+        bot._current_planning_snapshot = PlanningSnapshot.capture(
+            ts_ms=epoch * 100,
+            exchange=bot.exchange,
+            user="test",
+            ledger=ledger,
+            required_surfaces=surfaces,
+            min_epochs=dict.fromkeys(surfaces, epoch),
+            symbols=[symbol, stale["symbol"], *(order["symbol"] for order in entries)],
+            market_snapshots={},
+            market_snapshot_max_age_ms=100,
+            account_invalidation_generation=bot._account_invalidation_generation,
+        )
+
+    cancel = bot.execute_cancellations_parent
+
+    async def cancel_and_maybe_invalidate(orders):
+        result = await cancel(orders)
+        if result and invalidate_generation:
+            reconciler.mark_account_critical_state_dirty(
+                bot, reason="test_order_update", symbols=[stale["symbol"]]
+            )
+        return result
+
+    bot.execute_cancellations_parent = cancel_and_maybe_invalidate
+    confirm_account()
+    await executor.execute_order_plan(bot, [stale], [*entries, *closes, replacement])
+
+    assert bot.cancelled == [stale]
+    assert bot._authoritative_pending_confirmations == dict.fromkeys(
+        bot._authoritative_full_confirmation_surfaces(), 2
+    )
+    barrier, capacity, *skipped = events
+    assert barrier["reason_code"] == ReasonCodes.ACCOUNT_CANCEL_FIRST_BARRIER
+    assert barrier["symbols"] == [stale["symbol"]]
+    assert capacity["reason_code"] == ReasonCodes.BATCH_CAPACITY
+    blocked = capacity["data"]["uncovered_close_priority"]
+    assert blocked["deferred_ordinary_closes"] == 2
+    if invalidate_generation:
+        assert blocked["proof"] == {"reason": "account_generation_changed"}
+        assert bot.created == []
+        (state_change,) = skipped
+        assert state_change["reason_code"] == ReasonCodes.STATE_CHANGE_DETECTED
+        assert state_change["order_count"] == 3
+    else:
+        assert blocked["proof"]["reason"] == "authoritative_confirmation_pending"
+        assert blocked["proof"]["surface"] in bot._authoritative_pending_confirmations
+        assert bot.created == entries
+        assert not skipped
+
+    events.clear()
+    bot.fetched_open_orders = []
+    confirm_account()
+    bot.state_change_detected_by_symbol.clear()
+    await executor.execute_order_plan(bot, [], [*entries, *closes])
+
+    assert bot.created == [*closes, entries[0]]
+    (capacity,) = events
+    assert capacity["reason_code"] == ReasonCodes.BATCH_CAPACITY
+    assert "uncovered_close_priority" not in capacity["data"]
 
 
 @pytest.mark.asyncio

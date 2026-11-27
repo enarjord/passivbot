@@ -17,6 +17,9 @@ from pure_funcs import shorten_custom_id
 from utils import utc_ms as _utils_utc_ms
 
 
+_CLOSE_SIDES = {"long": "sell", "short": "buy"}
+
+
 class DeferredOrderCreation:
     """An order deliberately withheld before exchange submission."""
 
@@ -191,67 +194,98 @@ def _orders_removed_by_identity(before: list[dict], after: list[dict]) -> list[d
     return removed
 
 
-def _confirmed_hyperliquid_uncovered_closes(bot, orders, snapshot) -> set[int]:
+def _is_ordinary_limit_close(order: dict) -> bool:
+    pside = order.get("position_side")
+    return (
+        order.get("reduce_only") is True
+        and order.get("type") == "limit"
+        and not _order_is_risk_critical(order)
+        and isinstance(pside, str)
+        and pside in _CLOSE_SIDES
+        and order.get("side") == _CLOSE_SIDES[pside]
+    )
+
+
+def _confirmed_hyperliquid_uncovered_closes(
+    bot, orders, snapshot, proof: dict, close_reasons: dict[int, str]
+) -> set[int]:
     """Find admitted limit closes without resting coverage in committed account state."""
-    if snapshot is None or snapshot.account_invalidation_generation != getattr(
+    if snapshot.account_invalidation_generation != getattr(
         bot, "_account_invalidation_generation", 0
     ):
+        proof["reason"] = "account_generation_changed"
         return set()
 
     surfaces = {"positions", "open_orders"}
     stamps = {stamp.name: stamp for stamp in snapshot.surfaces if stamp.name in surfaces}
     ledger = bot._ensure_freshness_ledger()
     pending = getattr(bot, "_authoritative_pending_confirmations", {})
-    if (
-        stamps.keys() != surfaces
-        or ledger.epoch != snapshot.epoch
-        or any(ledger.surface_epoch(name) < epoch for name, epoch in pending.items())
-        or any(
-            stamp.updated_ms <= 0
-            or stamp.epoch < max(1, stamp.min_epoch)
-            or ledger.surface_epoch(name) != stamp.epoch
-            or ledger.surface_signature(name) != stamp.signature
-            for name, stamp in stamps.items()
-        )
-    ):
+    if stamps.keys() != surfaces:
+        proof["reason"] = "missing_snapshot_surfaces"
         return set()
+    if ledger.epoch != snapshot.epoch:
+        proof["reason"] = "account_epoch_changed"
+        return set()
+    for name, epoch in pending.items():
+        if ledger.surface_epoch(name) < epoch:
+            proof.update(
+                reason="authoritative_confirmation_pending",
+                surface=(
+                    name if name in {"balance", "positions", "open_orders", "fills"}
+                    else "other"
+                ),
+            )
+            return set()
+    for name, stamp in stamps.items():
+        if stamp.updated_ms <= 0 or stamp.epoch < max(1, stamp.min_epoch):
+            proof.update(reason="snapshot_surface_unconfirmed", surface=name)
+            return set()
+        if ledger.surface_epoch(name) != stamp.epoch:
+            proof.update(reason="surface_epoch_changed", surface=name)
+            return set()
+        if ledger.surface_signature(name) != stamp.signature:
+            proof.update(reason="surface_signature_changed", surface=name)
+            return set()
 
     # Optimistic cancel/create responses may already have changed bot.open_orders.
     resting_orders = getattr(bot, "fetched_open_orders", None)
     if not isinstance(resting_orders, list):
+        proof["reason"] = "committed_open_orders_unavailable"
         return set()
-    close_sides = {"long": "sell", "short": "buy"}
     covered = set()
     ambiguous = set()
     for order in resting_orders:
         if not isinstance(order, dict) or not (symbol := order.get("symbol")):
+            proof["reason"] = "committed_open_order_malformed"
             return set()
         pside, side = order.get("position_side"), order.get("side")
-        if pside not in close_sides or side not in {"buy", "sell"}:
+        if pside not in _CLOSE_SIDES or side not in {"buy", "sell"}:
             ambiguous.add(symbol)
-        elif side == close_sides[pside]:
+        elif side == _CLOSE_SIDES[pside]:
             covered.add((symbol, pside))
 
     uncovered = set()
+    proof["reason"] = "account_snapshot_confirmed"
     for order in orders:
         pside, symbol = order["position_side"], order["symbol"]
-        if (
-            order.get("reduce_only") is True
-            and order.get("type") == "limit"
-            and not _order_is_risk_critical(order)
-            and pside in close_sides
-            and order["side"] == close_sides[pside]
-            and symbol not in ambiguous
-            and (symbol, pside) not in covered
-        ):
+        if not _is_ordinary_limit_close(order):
+            continue
+        if symbol in ambiguous:
+            reason = "ambiguous_resting_order"
+        elif (symbol, pside) in covered:
+            reason = "resting_close_present"
+        else:
             size = bot.positions.get(symbol, {}).get(pside, {}).get("size")
-            if (
-                size is not None
-                and math.isfinite(size)
-                and size != 0.0
-                and position_fill_sync.permits(bot, order)
-            ):
+            if size is None or not math.isfinite(size):
+                reason = "position_size_unavailable"
+            elif size == 0.0:
+                reason = "position_not_held"
+            elif not position_fill_sync.permits(bot, order):
+                reason = "position_fill_settling"
+            else:
                 uncovered.add(id(order))
+                reason = "eligible_for_priority"
+        close_reasons[id(order)] = reason
     return uncovered
 
 
@@ -268,16 +302,18 @@ def _apply_creation_batch_capacity(
         else len(orders)
     )
     uncovered = set()
-    if (
-        len(orders) > max_batch
-        and getattr(bot, "exchange", None) == "hyperliquid"
-        and planning_snapshot is not None
-        # Keep the Rust close order when it allocated the realized-loss budget.
-        and bot._live_max_realized_loss_pct() >= 1.0
-    ):
-        uncovered = _confirmed_hyperliquid_uncovered_closes(
-            bot, orders, planning_snapshot
-        )
+    proof = {}
+    close_reasons = {}
+    if len(orders) > max_batch and getattr(bot, "exchange", None) == "hyperliquid":
+        if planning_snapshot is None:
+            proof["reason"] = "planning_snapshot_missing"
+        elif bot._live_max_realized_loss_pct() >= 1.0:
+            uncovered = _confirmed_hyperliquid_uncovered_closes(
+                bot, orders, planning_snapshot, proof, close_reasons
+            )
+        else:
+            # Keep the Rust close order when it allocated the realized-loss budget.
+            proof["reason"] = "realized_loss_order_preserved"
 
     def priority(order):
         if _order_is_risk_critical(order):
@@ -293,6 +329,30 @@ def _apply_creation_batch_capacity(
         _record_fresh_entry_orders(
             bot, "record_blocked_orders", deferred, "batch_capacity"
         )
+        data = {"max_n_creations_per_batch": max_batch}
+        if proof:
+            missed_closes = [
+                order
+                for order in deferred
+                if order.get("symbol") and _is_ordinary_limit_close(order)
+            ]
+            if missed_closes:
+                data["uncovered_close_priority"] = {
+                    "proof": proof,
+                    "selected_risk_critical": sum(
+                        _order_is_risk_critical(order) for order in selected
+                    ),
+                    "selected_uncovered": sum(id(order) in uncovered for order in selected),
+                    "deferred_ordinary_closes": len(missed_closes),
+                    "deferred_sample": [
+                        {
+                            "symbol": order["symbol"],
+                            "position_side": order["position_side"],
+                            "eligibility": close_reasons.get(id(order), proof["reason"]),
+                        }
+                        for order in missed_closes[:8]
+                    ],
+                }
         _pb_attr("Passivbot")._emit_execution_create_filter_event(
             bot,
             event_type=EventTypes.EXECUTION_CREATE_DEFERRED,
@@ -301,7 +361,7 @@ def _apply_creation_batch_capacity(
             order_count=len(deferred),
             symbols=_symbols_from_orders(deferred),
             wave=getattr(bot, "_order_wave_in_progress", None),
-            data={"max_n_creations_per_batch": max_batch},
+            data=data,
         )
     return selected
 
