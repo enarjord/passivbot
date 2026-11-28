@@ -804,7 +804,8 @@ async def test_failed_refresh_then_recovery_reports_expired_prior_wave(
 
 
 @pytest.mark.parametrize(
-    "replacement_case", ["same", "changed_scope", "red", "sink_delay"]
+    "replacement_case",
+    ["same", "changed_scope", "unavailable", "red", "generation_change", "sink_delay"],
 )
 def test_obsolete_scope_observation_only_marked_for_equivalent_replacement(
     observed, monkeypatch, replacement_case
@@ -812,17 +813,18 @@ def test_obsolete_scope_observation_only_marked_for_equivalent_replacement(
     import utils
     from live.hsl_runtime import Unavailable
 
-    bot, _, wave, events = observed()
+    bot, _, wave, events = observed(flat=replacement_case != "red")
     clock = [NOW]
     monkeypatch.setattr(utils, "utc_ms", lambda: clock[0])
-    if replacement_case != "red":
-        unavailable = Unavailable(Scope("coin", "long", SYMBOL), "current_mark_unavailable")
+    unavailable = Unavailable(Scope("coin", "long", SYMBOL), "current_mark_unavailable")
+    if replacement_case == "unavailable":
         wave = replace(wave, decisions=(), unavailable=(unavailable,))
         diagnostics.record(bot, wave)
     events.clear()
 
     clock[0] += 20_000
-    bot._account_invalidation_generation = wave.generation + 1
+    generation = wave.generation + 1 if replacement_case == "generation_change" else wave.generation
+    bot._account_invalidation_generation = generation
     for surface in ("balance", "positions", "open_orders"):
         bot.freshness_ledger.stamp(surface, now_ms=clock[0])
     replacement = replace(
@@ -830,11 +832,12 @@ def test_obsolete_scope_observation_only_marked_for_equivalent_replacement(
         captured_ms=clock[0],
         position_observed_ms=clock[0],
         mark_observed_ms=(clock[0],),
-        generation=bot._account_invalidation_generation,
+        generation=generation,
     )
     if replacement_case == "changed_scope":
         replacement = replace(
             replacement,
+            decisions=(),
             unavailable=(replace(unavailable, scope=Scope("coin", "short", SYMBOL)),),
         )
     if replacement_case == "sink_delay":
@@ -853,7 +856,11 @@ def test_obsolete_scope_observation_only_marked_for_equivalent_replacement(
     diagnostics.record(bot, replacement)
     prior, latest = (item[1]["data"] for item in events)
     assert prior["observation_status"] == "stale"
-    assert set(prior["stale_reasons"]) == {"input_expired", "account_generation_changed"}
+    assert prior["stale_reasons"] == (
+        ["input_expired", "account_generation_changed"]
+        if replacement_case == "generation_change"
+        else ["input_expired"]
+    )
     assert bool(prior.get("console_replaced_observation")) == (
         replacement_case in {"same", "sink_delay"}
     )
@@ -861,6 +868,40 @@ def test_obsolete_scope_observation_only_marked_for_equivalent_replacement(
         "stale" if replacement_case == "sink_delay" else "current"
     )
     assert "console_replaced_observation" not in latest
+
+
+@pytest.mark.parametrize("generation_changed", [False, True])
+def test_hsl_replaced_observation_fallback_preserves_generation_warning(
+    observed, monkeypatch, caplog, generation_changed
+):
+    import logging
+
+    bot, _, _, events = observed(flat=True)
+    data = diagnostics.snapshot(bot, now_ms=NOW)
+    reasons = ["input_expired"]
+    if generation_changed:
+        reasons.append("account_generation_changed")
+    data.update(
+        observation_status="stale",
+        stale_reasons=reasons,
+        console_replaced_observation=True,
+    )
+    errors = iter((0, 1))
+    monkeypatch.setattr(diagnostics, "_console_sink_error_count", lambda _: next(errors))
+
+    with caplog.at_level(logging.DEBUG):
+        diagnostics._emit_status(bot, data, "replacement")
+
+    event = events[-1][1]
+    assert event["level"] == "warning"
+    assert event["status"] == "degraded"
+    assert event["data"]["stale_reasons"] == reasons
+    records = [record for record in caplog.records if "[risk] HSL" in record.message]
+    assert records
+    assert {record.levelno for record in records} == {
+        logging.WARNING if generation_changed else logging.DEBUG
+    }
+    assert f"stale_reason={reasons[-1]}" in " ".join(record.message for record in records)
 
 
 @pytest.mark.asyncio

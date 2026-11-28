@@ -3452,7 +3452,12 @@ def format_hsl_status_console(data: Mapping) -> str:
         optional("account=" + ",".join(token(value, 12) for value in missing[:3]))
     stale_reasons = data.get("stale_reasons")
     if isinstance(stale_reasons, list) and stale_reasons:
-        optional("stale_reason=" + token(stale_reasons[0], 64))
+        cause = (
+            "account_generation_changed"
+            if "account_generation_changed" in stale_reasons
+            else stale_reasons[0]
+        )
+        optional("stale_reason=" + token(cause, 64))
     if row is not None:
         optional(
             "scope=" + token(row.get("symbol"), 24) + "/" + token(row.get("pside"), 5)
@@ -3548,21 +3553,22 @@ def format_console_event(event: LiveEvent) -> str:
 
 
 def hsl_observation_can_be_superseded(data: Mapping) -> bool:
-    """Only replace historical freshness changes without RED or an account outage."""
+    """Recognize expiry without a concurrent account, candle, or scope warning."""
     counts = data.get("counts")
-    stale_reasons = data.get("stale_reasons")
+    sources = data.get("candle_sources")
     return (
         data.get("observation_status") == "stale"
+        and data.get("stale_reasons") == ["input_expired"]
         and data.get("account_unavailable") == []
+        and data.get("unavailable_scope") is None
         and isinstance(counts, Mapping)
         and type(counts.get("red")) is int
         and counts["red"] == 0
-        and isinstance(stale_reasons, list)
-        and bool(stale_reasons)
-        and all(
-            reason in ("input_expired", "account_generation_changed")
-            for reason in stale_reasons
-        )
+        and type(counts.get("unavailable")) is int
+        and counts["unavailable"] == 0
+        and isinstance(sources, Mapping)
+        and type(sources.get("failure_count")) is int
+        and sources["failure_count"] == 0
     )
 
 
@@ -3587,7 +3593,14 @@ def _hsl_console_state(event: LiveEvent) -> tuple | None:
         )
     ):
         return None
-    return (token, observation, tuple(sorted(missing)), event.level, event.status)
+    return (
+        token,
+        observation,
+        tuple(sorted(missing)),
+        event.level,
+        event.status,
+        hsl_observation_can_be_superseded(data),
+    )
 
 
 class ConsoleSummarySink:
