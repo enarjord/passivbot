@@ -124,7 +124,15 @@ setup(
     setup_requires=["setuptools-rust>=1.9.0", "wheel"],
     entry_points={"console_scripts": ["passivbot=passivbot_cli.main:console_main"]},
     include_package_data=True,
-    package_data={"tools": ["backtest_dashboard_static/*.html", "backtest_dashboard_static/*.css", "backtest_dashboard_static/*.js"]},
+    package_data={
+        "tools": [
+            "backtest_dashboard_static/*.html",
+            "backtest_dashboard_static/*.css",
+            "backtest_dashboard_static/*.js",
+            "fills_report_static/*.html",
+            "fills_report_static/*.js",
+        ]
+    },
     cmdclass={
         "build_py": BuildPyWithResources,
         "build_rust": BuildRustWithSourceFingerprint,

@@ -3,3 +3,4 @@ include requirements-live.txt requirements-full.txt requirements-dev.txt require
 include rust-toolchain.toml passivbot-rust/Cargo.toml passivbot-rust/Cargo.lock passivbot-rust/build.rs
 recursive-include passivbot-rust/src *.rs *.metal
 recursive-include src/tools/backtest_dashboard_static *.html *.css *.js
+recursive-include src/tools/fills_report_static *.html *.js
